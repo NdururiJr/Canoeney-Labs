@@ -35,7 +35,7 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
      - Bind it to the sandbox's network origin where the proxy allows that.
    - **Accepted residual risk:** an agent can read its own secret and could give it to another agent (collusion). This is tested in the red-team set (§6), and the rotation, revocation and origin binding limit it.
    - Every permission check in M1 depends on this.
-3. **Company data model** (see §4): agents (with department, reporting line, human owner, autonomy), roles, permissions, owner charter, decision requests, human users, audit events, budgets and spend. Client and project entities must be defined now, even though they are only used from M3, so M1 code does not need reshaping later. **(advisor)**
+3. **Company data model**: agents (with department, reporting line, human owner, autonomy), roles, permissions, owner charter, decision requests, human users, audit events, budgets and spend. Client and project entities must be defined now, even though they are only used from M3, so M1 code does not need reshaping later. **(advisor)**
 4. **Durable storage.** HQ currently stores state in JSON files. M1 needs transactions and an append-only audit log, so move company state to an embedded database. SQLite is the suggestion **(advisor)**; the builder may choose an equivalent **(builder)**.
 5. **Pluggable "slots"**, each with a simple local implementation now, so a product such as Redis Iris (memory, context gateway, intent routing, decision record, stream persistence) or an alternative can be tried in M6 without rewrites **(advisor)**:
    - `Memory`: per-agent and per-client long-term memory
