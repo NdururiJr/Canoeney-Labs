@@ -29,7 +29,10 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
 2. **Unforgeable agent identity on every agent-authenticated endpoint.**
    - **The problem:** today all agents share one project token (`server/paths.ts` `agentToken`). There are two impersonation paths. `/mcp` takes the agent id from a self-declared `X-HQ-Agent` header, and `/hook/<agentId>/<event>` takes it from the URL (`server/http.ts`). A forged Stop hook for agent B, for example, takes B's queued messages and changes B's state.
    - **The fix:** **one secret per agent** for **both** endpoints and any future one. HQ derives the agent's identity from the secret alone and never from a header or URL.
-   - **Secret handling:** rotate the secret on every session start, revoke it when an agent is retired or paused, and bind it to the sandbox's network origin where the proxy allows that.
+   - **Secret handling:**
+     - Rotate the secret at the start of every **agent session**, not every HQ restart. On Linux, agents live in tmux and outlive HQ, so a secret regenerated when HQ restarts would strand every running agent and fail the M0 restart gate. **Secrets persist in the company store.**
+     - Revoke the secret when an agent is retired or paused.
+     - Bind it to the sandbox's network origin where the proxy allows that.
    - **Accepted residual risk:** an agent can read its own secret and could give it to another agent (collusion). This is tested in the red-team set (§6), and the rotation, revocation and origin binding limit it.
    - Every permission check in M1 depends on this.
 3. **Company data model** (see §4): agents (with department, reporting line, human owner, autonomy), roles, permissions, owner charter, decision requests, human users, audit events, budgets and spend. Client and project entities must be defined now, even though they are only used from M3, so M1 code does not need reshaping later. **(advisor)**
@@ -41,8 +44,14 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
    - `AuditSink`: where audit events are written
    - `Channel`: outbound alerts and inbound replies (see M1)
 6. **Always-on hosting.** On Windows, HQ runs agents in-process and **agents stop when HQ stops** (`docs/how-it-works.md`), so a company cannot run from the owner's laptop. Choose and stand up an always-on Linux host (Docker Sandboxes needs Ubuntu 24.04+). **Before committing, verify that the host supports the virtualisation Docker Sandboxes needs**; many VPS plans do not. The owner keeps using the dashboard remotely. **(advisor; host choice and budget open, owner)**
-7. **Owner authentication.** The owner will open the dashboard from a phone via links in alerts, so the current per-start browser token is not enough. Add a real login (password plus a second factor or passkey) and a separate **approval PIN** (or equivalent step-up check) for high-stakes approvals. **(advisor)**
-8. **Threat model and security baseline**, written down, covering at least: prompt injection through any text an agent reads; agent impersonation; the CEO trying to widen its own powers; secrets leaking into sandboxes (keep HQ's existing rule that key values never enter a VM); a compromised alert channel (a hijacked WhatsApp, Telegram or email account); and denial of service through approval spam.
+7. **Owner authentication and a safe dashboard.**
+   - The owner will open the dashboard from a phone via links in alerts, so the current per-start browser token is not enough. Add a real login (password plus a second factor or passkey) and a separate **approval PIN** (or equivalent step-up check) for high-stakes approvals. **(advisor)**
+   - The dashboard is the approval device, so **all agent-written text is strictly escaped, the Owner Briefing's markdown is sanitised, and a Content Security Policy is enforced** (surface S10).
+8. **Threat model and security baseline.**
+   - **Method:** the owner runs the security-scanning skills (STRIDE patterns, attack trees, security requirement extraction, threat-to-mitigation mapping) in their own session, over surfaces S1–S12. HQ's source is off-limits to agents.
+   - **Every red-team test in §6 must trace back to a threat** in this model.
+   - At **M0 exit**, the owner also runs `/security-audit` in full mode on the HQ fork. The code that enforces the limits deserves the same review as client code, and the independent assessment in M6 is a long way off.
+   - The written model covers at least: prompt injection through any text an agent reads; agent impersonation; the CEO trying to widen its own powers; secrets leaking into sandboxes (keep HQ's existing rule that key values never enter a VM); a compromised alert channel (a hijacked WhatsApp, Telegram or email account); and denial of service through approval spam.
 9. **Architecture decisions recorded** as short ADRs in `docs/adr/`.
 10. **Least-privilege credentials for every agent (found in builder review; advisor).** Today the README has the owner store their full GitHub token as a *global* sandbox secret (`sbx secret set github …`, `globalKeys` in `server/sbx.ts`). Every sandbox can therefore merge, delete branches or change repo settings, so "HQ never merges" is only a convention. Local mode also runs an agent on the host, where it can read HQ state and other agents' secrets. M0 must:
     - give each agent its **own scoped GitHub identity** (a GitHub App installation or a fine-grained token: push to its own branches and open PRs, but not merge or administer the repo);
@@ -58,22 +67,32 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
     - **One GitHub App:** short-lived tokens per repo, but every commit shows the same author.
     - **One bot account per agent:** clear attribution, but each account costs, and GitHub's machine-user rules apply.
     - Check whether branch protection on **private** repos needs a paid GitHub plan. If it does, that's a spend decision for the owner.
+
+    **GitHub Actions hardening (surface S9):** on managed repos, the default workflow token is read-only, Actions are disabled or limited to approved workflows, and deploy secrets are never stored as repo secrets.
 11. **Permissions, company configuration and task state move out of the repo.** Per-agent permissions (`sandbox.allow`, `mcp`, `isLead`, `roleMd`, secret names), everything company-level, **and `plan.json`** (task status) currently live in the committed `.jsmhq/` folder, which agents can change through a PR. Move them into HQ's company store. Only the owner, or an approved decision request, can change them. The repo may keep a non-authoritative export for readability.
 12. **The company sits above projects (advisor).** One HQ "company" instance manages **many project repos**. In M3 each client gets its own repo. Company state (charter, agents, approvals, audit, users, clients) lives at company level. Project state (boards, tasks, PRs) lives per project. The CEO, CIO and Security & Audit agents get company-level workspaces, not repo clones. **HQ's own source code is off-limits to company agents**: they can never open PRs against the code that enforces their limits. Improving HQ is the owner's job, done outside the company. M1 runs one project: **the company's own website repo**, which M2 then takes to production.
 13. **Test harness first.** The repo has no test runner, test script or test files, but M0 and M1 are gated on tests and an injectable clock. **Standing up the test harness is the first M0 task.** Enforcement tests run at the code level (see §6).
 14. **Role-based tool sets and company workspaces.**
     - Replace the `isLead` boolean with **roles that map to tool sets** (see §2a).
     - Add a **company-level workspace kind** for the CEO, CIO and Security & Audit agents. Every session today is a repo clone.
-    - Dashboard commands (`server/commands.ts`: add agent, attach MCP server, set secret, change merge-by, and so on) currently run for anyone with the browser token. Add a **per-command permission check by human role** (Owner versus Supervisor). Owner-only commands that change permissions also go through the decision engine with the PIN.
+    - Dashboard commands (`server/commands.ts`: add agent, attach MCP server, set secret, change merge-by, and so on) currently run for anyone with the browser token. Add a **per-command permission check by human role** (Owner versus Supervisor).
+    - **A permission change the owner starts** is a direct action, confirmed with the PIN and audited. Only changes **an agent starts** become decision requests, so the owner never raises a request to themselves.
 15. **Watchdog and heartbeat (M0, not M6).** If the host or HQ dies, no Critical alert can fire. Add:
-    - an **external uptime check** (any free uptime service) that alerts the owner directly, without going through HQ;
+    - an **external uptime check** (any free uptime service) that alerts the owner directly, without going through HQ. The dashboard is private on Tailscale, so the check hits a **public health path next to the webhook endpoint**;
     - a **daily heartbeat message** to the owner, so a missing heartbeat is itself an alarm.
 16. **Backups and audit anchoring.**
-    - Back up the company database **off-host every night**.
+    - Back up the company database **off-host every night**, **encrypted with a key the owner holds, not the host**. The backups contain the charter, the audit trail and owner data.
     - Every day, **publish the audit chain's latest hash** to a channel the owner keeps, such as email, so tampering on the host can be detected.
     - Test a restore before M0 exits.
 17. **Rename scope.** The identity also lives in `~/.jsmhq`, the repo folder `.jsmhq/`, the bin name and the `X-HQ-Agent` header. Rename all of them. Whether existing installs migrate is left to the builder (there are none in production).
-
+18. **Skill sets per role, held in the company store (surface S12).**
+    - Today HQ installs **one skill set per project stack, the same for every agent** (`stackSkills`, `server/sessions.ts`). The per-agent `skills` field is saved but never used to install anything. Per-role skill sets are new work.
+    - Skills are **copied into company-owned forks and pinned by hash**, following the `skills-lock.json` pattern, instead of being fetched live from upstream at session start.
+    - A skill change is a **category 2 decision**.
+    - **Policy lives in the `Knowledge` slot, never in a skill.**
+    - Adopted superpowers skills are forked and edited so "your human partner" becomes "your manager, via `send_message`". Anything that needs a person goes through the decision engine, because several of these skills stop and wait for a human answer.
+    - Choose **one skill family per concern.** The repo already includes jsm-skills-workflow (debug, plan, review, honest), which overlaps with superpowers. Agents must never hold two procedures for the same job.
+    - The starting sets are in §2a.
 ### M1: Company layer
 1. **Owner charter (the CEO's rulebook).** A versioned document holding mission, current goals, limits (spending thresholds, autonomy levels per decision area) and standing instructions. **Only the owner can change it**, through the authenticated dashboard. Agents get it read-only through an MCP tool. Every version is kept and every change is audited. It must live **outside any repo or folder an agent can write to or open a PR against**. The current `.jsmhq/config.json` is committed to the managed repo, so it is not a safe home for the charter. **(owner: #7; advisor: mechanism)**
 2. **Owner decision rights, enforced in code.** These always need owner approval **(owner, all eight)**:
@@ -91,13 +110,17 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
 4. **Approval engine.**
    - A decision request carries: category, requester, summary, details, options, the requester's recommendation, cost impact, urgency, deadline, status, decider, channel used, verification method, and links to related audit events.
    - **Urgency → channel (advisor; channels are the owner's):** Critical → WhatsApp **voice call** plus a WhatsApp message with details. High → WhatsApp message. Normal → email. For your information → dashboard only. The owner can remap urgencies to channels in settings.
-   - **Escalation:** if there is no answer within [X] hours, re-send at the next level up. **Silence is never approval. A request that expires counts as "no".** **(advisor; owner agreed)**
+   - **HQ sets the urgency, not the agent (review 2).**
+     - Urgency is worked out from category, cost and deadline. The urgency an agent asks for is a capped suggestion.
+     - **Only Security's emergency-pause request and triggers the owner defines can reach Critical**, and there is a **daily cap on Critical alerts**.
+     - Without this, a CEO could mark everything Critical. That would bypass away mode and batching, and four unanswered WhatsApp calls would get calling permission revoked.
+   - **Escalation:** if there is no answer within [X] hours, re-send at the next level up. **A failed send is not the same as no answer:** if a provider rejects a send, HQ moves to the next channel straight away. **Silence is never approval. A request that expires counts as "no".** **(advisor; owner agreed)**
    - **Verification:** a channel reply ("yes") may approve low-risk items. Spending, permissions, contracts and charter changes need confirmation in the dashboard with the approval PIN. **(advisor; owner agreed)**
    - Every request also appears in the dashboard, which is the record of what was asked and decided. **(advisor; owner agreed)**
    - Generalise the existing **Action items** (`server/actionItems.ts`, the `ask_user` tool) **and network access requests** (`server/access.ts`, `request_access`, the "N blocked → Allow" flow, which today grants without a PIN and without audit) into this engine, rather than building parallel systems **(advisor)**.
    - **Binding replies to requests.** Each outbound alert carries **one request** and a **short per-request code**. A channel reply must quote the code, and a code that's already settled is rejected. This removes ambiguity when several requests are open and blocks replayed "yes" messages.
-   - **Executing after approval is a separate step.** A request has a decision status (pending, approved, denied or expired) and an **execution status** (not started, done or failed), plus an **idempotency key**. Irreversible actions run **at most once**. If HQ crashes between approval and execution, it resumes from the record and never repeats an irreversible action.
-   - **No re-asking loops.** A denied request can't be raised again with materially the same content for [N] days, and each agent has a rate limit on requests. This is the main mechanism behind the approval-fatigue anti-goal.
+   - **Executing after approval is a separate step.** A request has a decision status (pending, approved, denied or expired) and an **execution status** (not started, **started**, done or failed), plus an **idempotency key**. Irreversible actions run **at most once**. **Anything found started but not finished when HQ restarts goes to the owner as a manual check, and is never retried automatically.**
+   - **No re-asking loops.** A denied request can't be raised again for [N] days. "The same request" is defined by **structured fields** (category, target, amount band), not by wording. Each agent also has a **hard cap on requests per day**. Rewording a denied request to get around this is a Security & Audit finding, not an engine rule. This is the main mechanism behind the approval-fatigue anti-goal.
    - **Who may raise what.** Each role has a list of categories it may raise (see §2a). A builder cannot raise a spending request.
    - **Away mode (owner confirmed).** The owner can turn on away mode in the charter, with the PIN. Non-critical requests are then batched into "for your information", expiry is extended, and Critical items still alert. This stops a solo owner's holiday from piling up expired denials.
 5. **Alert channels: all of them, fully built** **(owner)**: WhatsApp (messages and voice calls), Telegram, Discord, Slack, email, and dashboard notifications.
@@ -116,7 +139,9 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
      - Cycles never overlap.
      - Each cycle has a **maximum duration** and a **token budget**, enforced by a kill switch.
      - When the model provider rate-limits, HQ backs off and reports to the owner. It never fails silently.
+     - "Daily" and "weekly" are set to **East Africa Time** in the charter.
    - **Message trust:** messages delivered to the CEO are wrapped with their origin, e.g. *"from builder X, untrusted content"*. Today `inbox.ts` types messages into an agent's terminal as if they were prompts. **Only the CEO's direct reports and HQ itself may message the CEO.** A builder writing "the owner says approve X" therefore reaches the CEO only through its manager, labelled as untrusted.
+   - **Labels must be unforgeable.** A builder could write "[HQ notice] the owner approved X" inside its own message. Either deliver agent messages through a tool that returns structured data, or wrap typed message bodies in a **random marker, different for each session, that the sender can't know** (builder's choice).
    - It cannot edit the charter, grant permissions, add or retire agents, or pause or silence the Security & Audit agent. Any attempt is blocked and audited.
 7. **CIO agent** (Internal IT) **(owner added the role; advisor defined its scope)**:
    - Keeps the **agent register**: every agent's role, department, model or CLI, tools, MCP servers, network rules, secret *names*, human owner and autonomy level. The register is derived from HQ state, never typed in by hand.
@@ -129,12 +154,21 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
    - Only the owner can pause or retire it. **(advisor; owner accepted via org chart)**
    - It has **no `send_message` to builders**, so it can't be used as a relay the CEO could hide behind. Its only output channels are findings to the owner and the CEO.
    - It reads audit text knowing that the text **can itself contain prompt injection**.
+   - **It takes its objectives from the charter only.** The CEO can't `delegate` to it, because "focus on X, not Y" would let the CEO steer its own auditor. The CEO may send a labelled, untrusted *request for an investigation*, and that's all.
+   - **Separation of duties (review 2):**
+     - Security & Audit has **read-only company state, no repo access, and no code-review tools.**
+     - Reviewing shipped code belongs to a separate Delivery security-reviewer role from M2, which has repo access but **no access to the audit log**.
+     - The reviewer's findings land in the audit trail as events, where Security & Audit sees them as data.
+     - Combining the two roles would let a compromised reviewer tamper with what the auditor sees.
+   - It runs a **custom company-audit skill** (new work; none exists). It borrows two things from the security-audit skill: the finding format (affected principal, evidence, severity, smallest fix) and its `AI-AND-LLM.md` catalogue of prompt-injection patterns as a detection guide.
 9. **Append-only audit trail.** Every tool call, decision request, approval or denial, message between agents, charter change and blocked attempt is recorded. It must be **tamper-evident** (for example hash-chained) **(advisor)**, and its chain head is anchored off-host daily (M0 goal 16). Agents cannot write to it except through HQ recording their actions. **It is written from the tool handlers at the moment of the action, never built from the in-memory snapshot**, which drops old entries (activity is capped at 50). The owner and the Security & Audit agent can search it.
 10. **Emergency brake.** The owner can pause one agent or the whole company.
-    - **Pause means the sandbox is stopped and the agent's credentials are revoked**, not "HQ stops talking to it". On Linux, agents run in tmux and keep running even when HQ is down (`server/sessions.ts`), so an agent paused mid-turn would otherwise keep working with the credentials it holds.
+    - **Pause means the sandbox is stopped and the agent's credentials are revoked**, not "HQ stops talking to it". **Revoke means an explicit revoke call**, not "stop issuing new tokens": GitHub App installation tokens, for example, stay valid for up to an hour unless revoked. On Linux, agents run in tmux and keep running even when HQ is down (`server/sessions.ts`), so an agent paused mid-turn would otherwise keep working with the credentials it holds.
     - While paused, scheduled cycles do not run.
     - Pause works from any channel; resuming needs the dashboard plus the PIN (§9 item 2).
 11. **Human supervisor roster.** Human users have roles: **Owner** (all powers) and **Supervisor**, who receives "human touch" items such as client escalations but **does not** hold owner decision rights unless the owner delegates a specific one. In M1 only the owner exists, but the roles, the routing ("send to the supervisors list", not "send to the owner") and the permission checks are built and tested. **(owner: future support team; advisor: model)**
+    - **Supervisors may pause.** This is intended: pause is the safe direction and works from any registered channel.
+    - **Delegating any owner right to a supervisor is itself a change confirmed with the PIN** and audited.
 12. **Owner Briefing dashboard (layout A, chosen by the owner).** A dedicated page, separate from the pixel office, which stays one click away.
     - **"Needs you"** is pinned at the top and sorted by urgency, with tags: Critical, Approve, Human touch.
     - A KPI row: revenue this month, active projects, leads in the pipeline, AI spend this month **(AI spend: advisor)**.
@@ -145,15 +179,17 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
 
 ## 2a. M1 tool sets by role (advisor)
 
-These are HQ MCP tools. Anything not listed is not available to the role. "Raises" lists the decision categories (§M1.2) the role may raise. Every tool call is audited.
+These are HQ MCP tools. Anything not listed is not available to the role. "Raises" lists the decision categories (§M1.2) the role may raise. Every tool call is audited. **Every role has `get_charter` (read-only)**, at least for the standing instructions, so the honesty and confidentiality policy reaches everyone. "Skills" lists the starting per-role skill sets (M0.18). Adopted superpowers skills are forked so that "your human partner" means "your manager, via `send_message`".
 
-| Role | Tools | Raises |
-|---|---|---|
-| **CEO** | `get_charter` (read-only) · `get_company_status` · `get_agent_register` (read) · `delegate` (assign objectives to **direct reports only**: CTO, CIO, Security & Audit) · `send_message` (direct reports only) · `raise_decision` · `get_decision` / `list_my_decisions` · `write_briefing` · `set_my_status` | 1, 3, 4, 5, 6, 8, plus voluntary escalations. Not 2 or 7 directly: the CEO asks the CIO to propose permissions, and the owner alone edits the charter |
-| **CIO** | `get_agent_register` · `propose_permission_change` (raises category 2) · `grant_preapproved` (only items on the owner's pre-approved list, only to builder agents, reported automatically) · `get_spend` · `report_spend_alert` · `send_message` (to the CEO) · `set_my_status` | 1 (tools and vendors), 2, 5, 6 |
-| **Security & Audit** | `query_audit` · `get_agent_register` · `get_permissions` · `report_finding` (severity-tagged; goes to the owner and the CEO; the CEO can't suppress it) · `request_emergency_pause` (raises a Critical item for the owner; doesn't pause anything itself) · `set_my_status` | None. Findings are a separate channel |
-| **CTO** (today's lead) | Existing lead tools (`create_board`, `create_task`, `update_task`, `assign_task`, `list_workers`, `get_status`, `list_tasks`) · `send_message` (to the CEO and its builders) · `raise_decision` · `set_my_status` | 4 (from M2), voluntary escalations |
-| **Builder** | Existing worker tools (`get_my_task`, `set_my_status`, `send_message` to the CTO and other builders, `request_access`, `ask_user`) | None. `request_access` and `ask_user` become owner-task requests in the engine, not decisions |
+| Role | Tools | Raises | Skills |
+|---|---|---|---|
+| **CEO** | `get_charter` · `get_company_status` · `get_agent_register` (read) · `delegate` (objectives to **CTO and CIO only**) · `request_investigation` (a labelled, untrusted request to Security & Audit; no objectives) · `send_message` (direct reports only) · `raise_decision` · `get_decision` / `list_my_decisions` · `write_briefing` · `set_my_status` | 1, 3, 4, 5, 6, 8, plus voluntary escalations. Not 2 or 7 directly: the CEO asks the CIO to propose permissions, and the owner alone edits the charter | verification-before-completion (honest briefings); **humanizer** for the Owner Briefing (edits for the reader, never to hide AI involvement); a **custom charter-first planning skill** (new work) |
+| **CIO** | `get_charter` · `get_agent_register` · `propose_permission_change` (raises category 2) · `grant_preapproved` (only items on the owner's pre-approved list, only to builder agents, reported automatically) · `get_spend` · `report_spend_alert` · `send_message` (to the CEO) · `set_my_status` | 1 (tools and vendors), 2, 5, 6 | verification-before-completion |
+| **Security & Audit** | `get_charter` · `query_audit` · `get_agent_register` · `get_permissions` · `report_finding` (severity-tagged; goes to the owner and the CEO; the CEO can't suppress it) · `request_emergency_pause` (raises a Critical item for the owner; doesn't pause anything itself) · `set_my_status`. **No repo access, no code-review tools, no `send_message` to builders** | None. Findings are a separate channel | **Custom company-audit skill** (new work, M1.8). Nothing from superpowers |
+| **CTO** (today's lead) | `get_charter` · existing lead tools (`create_board`, `create_task`, `update_task`, `assign_task`, `list_workers`, `get_status`, `list_tasks`) · `send_message` (to the CEO and its builders) · `raise_decision` · `set_my_status` | 4 (from M2), voluntary escalations | writing-plans, requesting-code-review, a trimmed brainstorming. Not dispatching-parallel-agents (HQ assigns work) |
+| **Builder** | `get_charter` · existing worker tools (`get_my_task`, `set_my_status`, `send_message` to the CTO and other builders, `request_access`, `ask_user`) | None. `request_access` and `ask_user` become owner-task requests in the engine, not decisions | test-driven-development, systematic-debugging, verification-before-completion, executing-plans. Not using-git-worktrees or subagent-driven-development (HQ owns orchestration and repo layout) |
+
+**One family per concern:** where jsm-skills-workflow (debug, plan, review, honest) overlaps with the superpowers skills above, the builder chooses one and removes the other from that role.
 
 ## 2b. Enforcement surfaces (every path from agent text to action)
 
@@ -165,10 +201,16 @@ The design's value is that **code** enforces the rules. These are all the ways a
 | S2 | **Hook endpoint** `/hook/<agent>/<event>` | Agent identity comes from the URL; forged hooks can take another agent's messages or state | The same per-agent secret; identity from the secret, never from the URL (M0.2) |
 | S3 | **Credentials inside the sandbox** | The owner's full GitHub token is global; Local mode runs on the host | Scoped per-agent GitHub identity, branch protection, no global consequential secrets, no Local mode for company agents (M0.10) |
 | S4 | **Network access grants** | `request_access` and "Allow" grant without a PIN or audit | Through the decision engine; pre-approved list for builders via the CIO; everything else needs the owner and the PIN (M1.4, §9 item 4) |
-| S5 | **Dashboard commands** (WebSocket) | Any holder of the browser token can add agents, set secrets, attach MCP servers, change who merges | Owner login, per-command human-role check, permission commands through the engine with the PIN (M0.7, M0.14) |
+| S5 | **Dashboard commands** (WebSocket) | Any holder of the browser token can add agents, set secrets, attach MCP servers, change who merges | Owner login; per-command human-role check; owner-started permission changes are direct, confirmed with the PIN and audited; agent-started ones go through the engine (M0.7, M0.14) |
 | S6 | **Messages between agents** | Delivered as typed prompts; anyone can message anyone | Origin labels; CEO reachable only by direct reports and HQ; Security can't message builders (M1.6, M1.8) |
 | S7 | **Committed repo state** (`.jsmhq/config.json`, `plan.json`) | Agents can change permissions or task status through a PR | Moved to the company store (M0.11); HQ's own source is off-limits (M0.12) |
 | S8 | **Inbound channel replies** | Spoofed or replayed "yes" | Registered senders only; per-request codes; approve or resume needs the dashboard plus the PIN (M1.4, §9 item 2) |
+| S9 | **GitHub Actions on agent branches** | A builder adds a workflow file to its PR branch. Workflows triggered by a push run with the repo token and repo secrets, outside every HQ gate, and branch protection doesn't stop this | The default workflow token is read-only; Actions are disabled, or limited to approved workflows, on managed repos; no deploy secrets as repo secrets (from M2, use environments with required reviewers) (M0.10) |
+| S10 | **Dashboard showing text written by agents** | Task titles, messages and the Owner Briefing are agent-written and shown in the owner's browser, which is also the approval device. A script hidden in a briefing could capture the PIN. React escapes plain text today, but the briefing will render markdown | Strict escaping of all agent text, sanitised markdown for the briefing, and a Content Security Policy (M0.7) |
+| S11 | **Third-party MCP servers** | Once granted, a server's actions (deploy, delete) run in the sandbox with no per-action gate | M1 needs none. From M2, any granted MCP server is read-only or wrapped by an HQ tool |
+| S12 | **Skill supply chain** | HQ fetches skills from GitHub with `npx skills add` (`server/skills.ts`). Whoever controls an upstream skill repo can change every agent's instructions overnight, and agents can edit the skill copies in their own folders | Skills are copied into company-owned forks and pinned by hash; a skill change is a category 2 decision; policy lives in the read-only `Knowledge` slot, never in a skill (M0.18) |
+
+**Skills are competence, not control.** Everything in this table is enforcement. Skills improve the quality of work within those limits but never count as a control, because an agent can read and edit its own skill files.
 
 **Owner-side risks accepted:**
 - The PIN has brute-force lockout and can be rotated.
@@ -197,7 +239,7 @@ The design's value is that **code** enforces the rules. These are all the ways a
 ## 5. Constraints
 
 - **Jurisdiction: Kenya.** Data Protection Act 2019 (ODPC registration, privacy notices, cross-border transfer rules), consumer protection law, KRA. Personal data in the audit trail and channels must be minimised. Verify obligations with a Kenyan lawyer before M3; M1 stores mostly operational data.
-- **Honesty policy (owner + advisor):** agents never reveal how the company or its systems are structured ("confidential how") and never claim to be human ("honest what"). The company's terms will state that it uses AI-assisted delivery under human oversight. This is mostly enforced from M3, but the charter's standing instructions and the `Knowledge` slot must carry it from M1.
+- **Honesty policy (owner + advisor):** agents never reveal how the company or its systems are structured ("confidential how") and never claim to be human ("honest what"). The company's terms will state that it uses AI-assisted delivery under human oversight. This is mostly enforced from M3, but the charter's standing instructions and the `Knowledge` slot must carry it from M1. One standing instruction states that **no agent uses the humanizer skill, or any writing tool, to deny AI involvement when a client asks directly**.
 - **Licence and trademark:** MIT code may be modified freely. The JSM HQ name and logo must not be used for the fork (M0 goal 1).
 - **Budget:** self-funded, with possible investors later. Prefer providers with free or low entry tiers. Every recurring cost goes to the owner as a spend decision.
 - **WhatsApp:** sending from software requires the official WhatsApp Business Platform (Meta business verification has lead time). Automated **voice calls** may need a separate voice provider. **Confirm current feasibility and cost before building** (builder researches; owner approves the cost).
@@ -216,7 +258,7 @@ The design's value is that **code** enforces the rules. These are all the ways a
     - an edit to the charter by any agent;
     - a permission granted without approval (via MCP, a network grant, a dashboard command or a PR to config);
     - agent A acting as agent B via `/mcp` or `/hook`;
-    - **collusion**: B using A's handed-over secret after rotation or revocation;
+    - **collusion**: B using A's handed-over secret after rotation or revocation. This test proves that rotation **limits the window**. Collusion *before* rotation is the accepted residual risk (M0.2);
     - a gated action reworded or relayed through another agent;
     - a forged, replayed or ambiguous channel approval;
     - an expired request (it must resolve to "no");
@@ -316,10 +358,10 @@ The design's value is that **code** enforces the rules. These are all the ways a
 |---|---|---|
 | M0 | Foundations | Above |
 | M1 | Company layer | Above |
-| M2 | Delivery to production (CTO, Solutions engineer, Builders, QA, security review, owner go-live approval, monitoring, rollback) | The company's own website goes live through the pipeline |
-| M3 | Client front office (intake channels, discovery interview, paid prototype preview and unlock, proposal and contract for owner signature, supervisor handoff, client memory, confidentiality guardrails) | A real client from the owner's contacts goes from first message to live in production |
+| M2 | Delivery to production: CTO, Solutions engineer, Builders, QA, owner go-live approval, monitoring, rollback. **A Delivery security-reviewer role** runs `/security-review` on every PR and `/security-audit` (full mode, with a token cap) at go-live. **CodeRabbit** stays as the independent reviewer: it's a different vendor and model, so its errors don't correlate with the builders'. Private repos need a paid plan (a spend decision), and branch protection stays authoritative over its "passed" state. Granted MCP servers are read-only or wrapped by HQ (S11); deploy secrets live in environments with required reviewers (S9) | The company's own website goes live through the pipeline |
+| M3 | Client front office: intake channels, discovery interview, paid prototype preview and unlock, proposal and contract for owner signature, supervisor handoff, client memory, confidentiality guardrails. **Humanizer** for client-facing writers (proposals, client email). **REA** (reverse-engineering MCP server) for **recovering legacy apps** whose source code is lost, **only for targets the client owns or has written permission for**; anything else is category 8. It's a category 2 grant under S11. CodeRabbit reading client code is category 5 and needs a data processing agreement per client | A real client from the owner's contacts goes from first message to live in production |
 | M4 | Back office (Accountant: books, invoices, eTIMS, M-Pesa reconciliation, KRA preparation; Customer service; revenue and selling dashboards) | A full month closed, with books verified by a human |
-| M5 | Growth & strategy (Sales, Marketing, Research agents) | A lead found by an agent becomes a paying client |
+| M5 | Growth & strategy (Sales, Marketing, Research agents). Humanizer for Marketing and customer-facing writing. Research may use REA on competitor features under the same legal guardrail as M3 | A lead found by an agent becomes a paying client |
 | M6 | Scale & harden (memory/context product trial such as Redis Iris, human support staff, wider autonomy, independent security assessment, disaster recovery) | Ongoing, reviewed quarterly |
 
 From M2 onward, the owner covers missing departments by hand (sales through contacts, manual invoicing) so revenue can start before M3–M5 are complete.
