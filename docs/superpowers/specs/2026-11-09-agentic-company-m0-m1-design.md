@@ -99,7 +99,7 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
    - **Executing after approval is a separate step.** A request has a decision status (pending, approved, denied or expired) and an **execution status** (not started, done or failed), plus an **idempotency key**. Irreversible actions run **at most once**. If HQ crashes between approval and execution, it resumes from the record and never repeats an irreversible action.
    - **No re-asking loops.** A denied request can't be raised again with materially the same content for [N] days, and each agent has a rate limit on requests. This is the main mechanism behind the approval-fatigue anti-goal.
    - **Who may raise what.** Each role has a list of categories it may raise (see §2a). A builder cannot raise a spending request.
-   - **Away mode (advisor; owner to confirm).** The owner can turn on away mode in the charter, with the PIN. Non-critical requests are then batched into "for your information", expiry is extended, and Critical items still alert. This stops a solo owner's holiday from piling up expired denials.
+   - **Away mode (owner confirmed).** The owner can turn on away mode in the charter, with the PIN. Non-critical requests are then batched into "for your information", expiry is extended, and Critical items still alert. This stops a solo owner's holiday from piling up expired denials.
 5. **Alert channels: all of them, fully built** **(owner)**: WhatsApp (messages and voice calls), Telegram, Discord, Slack, email, and dashboard notifications.
    - Each one implements the `Channel` slot: send an alert, receive a reply, and link the reply to a decision request by its code.
    - Inbound replies are only accepted from the owner's (or supervisors') registered accounts. They're treated as untrusted input to be parsed, never as instructions to agents.
@@ -226,6 +226,10 @@ The design's value is that **code** enforces the rules. These are all the ways a
     - a paused agent still acting (its credentials must be revoked).
   - Approved-action execution is shown to be at-most-once across a simulated HQ crash.
 - The owner receives, and answers, at least one decision request through **each** channel: WhatsApp message, WhatsApp call, Telegram, Discord, Slack, email and dashboard. High-stakes approvals require the PIN.
+- **If WhatsApp is not ready (owner decision):** if Meta verification or the messaging tier is still pending when everything else passes, M1 can exit with **Telegram standing in for WhatsApp**.
+  - The Critical and High routes that would use WhatsApp messages go to Telegram instead.
+  - Telegram bots cannot place voice calls, so a **Critical alert call** temporarily uses a **regular phone call with text-to-speech** from the voice provider, alongside the Telegram message.
+  - WhatsApp messaging and calling are switched on and tested as soon as Meta approves. The routing is a setting, so no code changes are needed.
 - The emergency brake pauses and resumes a single agent and the whole company.
 - A Supervisor test user receives a "human touch" item and is refused an owner-only approval.
 - The Security & Audit agent detects and reports a planted anomaly directly to the owner.
