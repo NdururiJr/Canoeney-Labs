@@ -41,7 +41,11 @@ export function schemaVersion(db: CompanyDb): number {
   return row?.v ?? 0;
 }
 
-/** Apply every migration above the stored version, each in its own transaction. */
+/**
+ * Apply every migration above the stored version, each in its own transaction.
+ * The version is read again inside each BEGIN IMMEDIATE, so when two HQs start
+ * together a migration the other one has just applied is skipped, not re-run.
+ */
 export function migrate(db: CompanyDb, migrations: readonly Migration[]): { applied: number[] } {
   for (let i = 0; i < migrations.length; i++) {
     const prev = i === 0 ? 0 : migrations[i - 1].version;
@@ -56,15 +60,17 @@ export function migrate(db: CompanyDb, migrations: readonly Migration[]): { appl
   const applied: number[] = [];
   for (const m of migrations) {
     if (m.version <= stored) continue;
-    db.transaction(() => {
+    const ran = db.transaction(() => {
+      if (schemaVersion(db) >= m.version) return false; // another process got here first
       db.exec(m.up);
       db.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
         m.version,
         m.name,
         new Date().toISOString(),
       );
+      return true;
     }, "immediate");
-    applied.push(m.version);
+    if (ran) applied.push(m.version);
   }
   return { applied };
 }

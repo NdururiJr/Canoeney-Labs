@@ -178,3 +178,33 @@ test("an async transaction fn is refused and its writes are rolled back", async 
   db.transaction(() => db.prepare("INSERT INTO a(x) VALUES (?)").run(2), "immediate");
   assert.equal(db.prepare("SELECT count(*) AS n FROM a").get<{ n: number }>()?.n, 1);
 });
+
+test("migrate skips a migration another handle applied after it read the version", (t) => {
+  const { open } = tmpStore(t);
+  const a = open([]); // both handles start on an empty store
+  const b = open([]);
+  assert.equal(schemaVersion(b), 0);
+  // b reads version 0 up front; just before b's first migration transaction,
+  // a (another HQ starting at the same time) applies both migrations.
+  let raced = false;
+  const racing: CompanyDb = {
+    file: b.file,
+    get inTransaction() {
+      return b.inTransaction;
+    },
+    exec: (sql) => b.exec(sql),
+    prepare: (sql) => b.prepare(sql),
+    transaction: (fn, mode) => {
+      if (!raced) {
+        raced = true;
+        assert.deepEqual(migrate(a, [m1, m2]).applied, [1, 2]);
+      }
+      return b.transaction(fn, mode);
+    },
+    close: () => b.close(),
+  };
+  assert.deepEqual(migrate(racing, [m1, m2]).applied, []);
+  assert.ok(raced);
+  assert.equal(schemaVersion(b), 2);
+  assert.equal(b.prepare("SELECT count(*) AS n FROM schema_migrations").get<{ n: number }>()?.n, 2);
+});
