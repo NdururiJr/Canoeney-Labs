@@ -17,7 +17,12 @@ export function projectHome(projectSlug: string): string {
   return dir;
 }
 
+/** Agent ids name folders, so only plain slugs: "../_company" must never resolve. */
+const AGENT_ID = /^[a-z0-9][a-z0-9-]*$/;
+
+/** ~/.jsmhq/<project>/<agent>/ — the agent's HQ-managed clone. */
 export function managedWorkspace(projectSlug: string, agentId: string): string {
+  if (!AGENT_ID.test(agentId)) throw new Error(`Invalid agent id ${JSON.stringify(agentId)}: use lower-case letters, digits and "-".`);
   return join(projectHome(projectSlug), agentId);
 }
 

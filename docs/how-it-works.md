@@ -140,7 +140,7 @@ HQ keeps a company record, separate from the per-project folders above, in `~/.j
 
 It holds the company data model, a tamper-evident audit chain of what happened and who did it, agent and client memory, company knowledge, and the alert outbox the dashboard reads.
 
-Agents are never given a path to it. HQ refuses to open it inside a repository, so it can't be committed by accident. On macOS and Linux the folder is private to you (`0700`), and so is the file (`0600`).
+HQ never gives agents its path, and it refuses to start an agent whose folder is the store or inside it (agent ids must be lower-case letters, digits and `-`, so a managed folder can't point there either). Agent settings still live in the repository's `.jsmhq/config.json`; moving them out of the repository is plan M0-D. HQ refuses to open the store inside a repository, so it can't be committed by accident. On macOS and Linux the folder is private to you (`0700`), and so is the file (`0600`).
 
 HQ records when it starts and stops. If the store was written by a newer HQ, this HQ stops with a message asking you to update.
 
