@@ -193,6 +193,11 @@ export class SqliteAuditSink implements AuditSink {
   }
 
   verify(): AuditVerify {
+    // The walk below covers seq 1, 2, 3, ... only. A row below 1 is outside the
+    // chain (the chain trigger refuses one, but a trigger can be dropped), so it
+    // fails verification: brokenAtSeq is then the lowest such seq.
+    const min = this.db.prepare("SELECT MIN(seq) AS m FROM audit_events").get<{ m: number | null }>()?.m ?? null;
+    if (min !== null && min < 1) return { ok: false, brokenAtSeq: min };
     const page = this.db.prepare("SELECT * FROM audit_events WHERE seq > ? ORDER BY seq ASC LIMIT ?");
     let prevSeq = 0;
     let prevHash = GENESIS_HASH;

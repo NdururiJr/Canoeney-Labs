@@ -78,19 +78,63 @@ test("verify finds a deleted row", (t) => {
   assert.deepEqual(sink.verify(), { ok: false, brokenAtSeq: 3 });
 });
 
-test("verify finds a row replaced via INSERT OR REPLACE", (t) => {
+function forge(db: CompanyDb, seq: number, prevHash: string, verb = "INSERT"): void {
+  db.prepare(
+    `${verb} INTO audit_events(seq, at, actor_kind, actor_id, action, target, decision_id, data_json, prev_hash, hash)
+     VALUES (?, ?, 'hq', 'hq', 'forged', NULL, NULL, '{}', ?, ?)`,
+  ).run(seq, START, prevHash, `forged${seq}`);
+}
+
+test("an INSERT OR REPLACE of an existing row is refused, and caught by verify without the trigger", (t) => {
   const { db, sink } = fresh(t);
   three(sink);
   const orig = db
     .prepare("SELECT at, actor_kind, actor_id, action, prev_hash, hash FROM audit_events WHERE seq = 2")
     .get<{ at: string; actor_kind: string; actor_id: string; action: string; prev_hash: string; hash: string }>()!;
-  // Triggers stay in place: SQLite does not fire the delete trigger on REPLACE
-  // (no recursive_triggers), so only the hash chain can catch this.
-  db.prepare(
-    `INSERT OR REPLACE INTO audit_events(seq, at, actor_kind, actor_id, action, target, decision_id, data_json, prev_hash, hash)
-     VALUES (2, ?, ?, ?, ?, NULL, NULL, '{"x":2}', ?, ?)`,
-  ).run(orig.at, orig.actor_kind, orig.actor_id, orig.action, orig.prev_hash, orig.hash);
+  const replace = () =>
+    db
+      .prepare(
+        `INSERT OR REPLACE INTO audit_events(seq, at, actor_kind, actor_id, action, target, decision_id, data_json, prev_hash, hash)
+         VALUES (2, ?, ?, ?, ?, NULL, NULL, '{"x":2}', ?, ?)`,
+      )
+      .run(orig.at, orig.actor_kind, orig.actor_id, orig.action, orig.prev_hash, orig.hash);
+  // The delete trigger does not fire on REPLACE (no recursive_triggers); the chain trigger does.
+  assert.throws(replace, /audit chain/);
+  assert.deepEqual(sink.verify(), { ok: true, count: 3, head: sink.head()!.hash });
+  db.exec("DROP TRIGGER audit_events_chain");
+  replace();
   assert.deepEqual(sink.verify(), { ok: false, brokenAtSeq: 2 });
+});
+
+test("a forged insert that does not extend the chain is refused", (t) => {
+  const { db, sink } = fresh(t);
+  const e3 = three(sink);
+  assert.throws(() => forge(db, 0, GENESIS_HASH), /audit chain/);
+  assert.throws(() => forge(db, -5, GENESIS_HASH), /audit chain/);
+  assert.throws(() => forge(db, 5, e3.hash), /audit chain/); // skips seq 4
+  assert.throws(() => forge(db, 4, GENESIS_HASH), /audit chain/); // wrong prev_hash
+  assert.deepEqual(sink.verify(), { ok: true, count: 3, head: e3.hash });
+  assert.deepEqual(
+    sink.query().map((e) => e.seq),
+    [1, 2, 3],
+  );
+});
+
+test("the first event of an empty chain must have seq 1 and the genesis hash", (t) => {
+  const { db } = fresh(t);
+  assert.throws(() => forge(db, 2, GENESIS_HASH), /audit chain/);
+  assert.throws(() => forge(db, 1, "f".repeat(64)), /audit chain/);
+  forge(db, 1, GENESIS_HASH);
+});
+
+test("verify fails on a row outside the chain and reports its seq", (t) => {
+  const { db, sink } = fresh(t);
+  three(sink);
+  db.exec("DROP TRIGGER audit_events_chain");
+  forge(db, 0, GENESIS_HASH);
+  assert.deepEqual(sink.verify(), { ok: false, brokenAtSeq: 0 });
+  forge(db, -5, GENESIS_HASH);
+  assert.deepEqual(sink.verify(), { ok: false, brokenAtSeq: -5 }); // the lowest stray row
 });
 
 test("hash is independent of key order and survives unicode", (t) => {

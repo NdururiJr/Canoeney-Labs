@@ -159,8 +159,8 @@ test("charter versions are append-only", (t) => {
 test("audit events are append-only", (t) => {
   const db = fresh(t);
   db.prepare(
-    "INSERT INTO audit_events(at, actor_kind, actor_id, action, data_json, prev_hash, hash) VALUES (?, 'hq', 'hq', 'x', '{}', 'p', 'h')",
-  ).run(NOW);
+    "INSERT INTO audit_events(seq, at, actor_kind, actor_id, action, data_json, prev_hash, hash) VALUES (1, ?, 'hq', 'hq', 'x', '{}', ?, 'h')",
+  ).run(NOW, "0".repeat(64));
   assert.throws(() => db.exec("UPDATE audit_events SET action = 'y'"), /append-only/);
   assert.throws(() => db.exec("DELETE FROM audit_events"), /append-only/);
 });

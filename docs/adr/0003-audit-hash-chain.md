@@ -8,8 +8,12 @@ Accepted
 
 The audit trail is the company's record of everything HQ mediates. The owner
 and the Security & Audit agent read it, so it has to show when it has been
-changed. The `audit_events` table already refuses `UPDATE` and `DELETE` through
-triggers, but anyone with write access to the database file can drop a trigger.
+changed. The `audit_events` table refuses `UPDATE` and `DELETE` through
+triggers, and a third trigger (`audit_events_chain`) refuses any `INSERT` that
+does not extend the chain: its `seq` must be the current maximum + 1 (1 on an
+empty table) and its `prev_hash` the hash of the current last row (64 zeros on
+an empty table). But anyone with write access to the database file can drop a
+trigger.
 
 ## Decision
 
@@ -57,26 +61,37 @@ escapes lone surrogates.
 back together; callers should open it with mode `"immediate"`. Otherwise
 `append` opens its own `BEGIN IMMEDIATE` transaction.
 
-**Verification.** `verify()` walks rows by `seq` ascending and reports the first
-row where `seq` is not the previous seq + 1, `prev_hash` is not the previous
-hash, or the hash recomputed from the stored columns differs (the stored hash
-is never trusted; a non-canonical `data_json` also fails).
+**Verification.** `verify()` first fails if any row has `seq` below 1, with
+`brokenAtSeq` set to the lowest such `seq`: those rows are outside the chain
+and the walk would never see them. It then walks rows by `seq` ascending from 1
+and reports the first row where `seq` is not the previous seq + 1, `prev_hash`
+is not the previous hash, or the hash recomputed from the stored columns
+differs (the stored hash is never trusted; a non-canonical `data_json` also
+fails). So every row in the table is either walked or reported.
 
 ## What it detects
 
 - An edited row: its recomputed hash differs.
 - A deleted row in the middle: the next row's `seq` and `prev_hash` no longer
   follow on.
-- Reordered or inserted rows: `seq` or `prev_hash` breaks.
-- A row replaced with `INSERT OR REPLACE`. The triggers do not stop this:
-  SQLite does not fire the delete trigger for the implicit delete of `REPLACE`
-  unless `recursive_triggers` is on. The chain is the only defence, and a
-  test proves it catches the replacement. `append` uses a plain `INSERT`.
+- Reordered rows: `seq` or `prev_hash` breaks.
+- Inserted rows. With the triggers in place, an insert that does not extend
+  the chain is refused (`audit chain`): a row in the middle, a row with `seq`
+  0 or below, or one with the wrong `prev_hash`. With the chain trigger
+  dropped, a row inserted in the middle breaks `seq` or `prev_hash`, and a row
+  with `seq` below 1 fails the first check of `verify()`. A row appended at the
+  head with the right `seq` and `prev_hash` and a correctly computed hash is
+  indistinguishable from a real event: see below.
+- A row replaced with `INSERT OR REPLACE`. SQLite does not fire the delete
+  trigger for the implicit delete of `REPLACE` unless `recursive_triggers` is
+  on, but the chain trigger refuses it because the `seq` is not new. With that
+  trigger dropped, the chain still catches the replacement; tests prove both.
+  `append` uses a plain `INSERT`.
 
 ## What it does not detect on its own
 
 Someone who can rewrite the file can recompute every hash after the point they
-edit, or truncate the end of the chain. The chain is therefore tamper-evident
+edit, append forged events at the head, or truncate the end of the chain. The chain is therefore tamper-evident
 only if the head hash (`head()`) is anchored somewhere the attacker cannot
 write. Anchoring the head off-host daily, and backups, belong to M0-G, which
 reads `head()`. Until then the chain detects accidents and unsophisticated

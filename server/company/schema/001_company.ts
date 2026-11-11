@@ -164,6 +164,13 @@ CREATE TABLE audit_events(
   hash TEXT NOT NULL UNIQUE
 );
 ${appendOnly("audit_events")}
+-- A new row must extend the chain: next seq, previous row's hash. This also
+-- refuses an INSERT OR REPLACE of an existing seq (its delete trigger does not
+-- fire without recursive_triggers) and any row with seq <= 0.
+CREATE TRIGGER audit_events_chain BEFORE INSERT ON audit_events
+WHEN NEW.seq IS NOT COALESCE((SELECT MAX(seq) FROM audit_events), 0) + 1
+  OR NEW.prev_hash IS NOT COALESCE((SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1), '${"0".repeat(64)}')
+BEGIN SELECT RAISE(ABORT, 'audit chain'); END;
 
 -- Seeded after agents exists: inserting into departments checks its foreign key target.
 INSERT INTO departments(id, name) VALUES
