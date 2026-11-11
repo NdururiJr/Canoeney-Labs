@@ -180,7 +180,8 @@ Carry-forward: PR #1 finding 1 (value scan, key match) and the PR #1 review's no
 - `interface AuthLimits { perSecretBurst: number; perSecretPerSecond: number; failuresPerSourcePerMinute: number }`; `DEFAULT_AUTH_LIMITS = { perSecretBurst: 100, perSecretPerSecond: 50, failuresPerSourcePerMinute: 20 }`.
 - `class AgentAuth { constructor(o: { projectSlug: string; company: Company; hub: Hub; limits?: Partial<AuthLimits> }) }`
   - `check(req: IncomingMessage, endpoint: "mcp" | "hook", claimedAgentId: string | null): { ok: true; agent: RegisteredAgent } | { ok: false; status: 401 | 429 }`
-  - Reads only `Authorization: Bearer <secret>`. Refuses with 401 when the secret fails, belongs to another project, or the agent is not in the hub's config. When `claimedAgentId` (the hook URL's id, or an `X-HQ-Agent` header) names a different agent, it refuses with 401 and audits `agent.identity-mismatch` (actor = the authenticated agent; `claimed` clipped to 64 characters).
+  - Reads only `Authorization: Bearer <secret>`. Refuses with 401 when the secret fails, belongs to another project, or the agent is not in the hub's config. When `claimedAgentId` (the hook URL's id, or an `X-HQ-Agent` header) names a different agent, it refuses with 401 and audits `agent.identity-mismatch` (actor = the authenticated agent). `claimed` is agent text: it is recorded as it is only when it is the id of an agent registered in this project, and otherwise as `{ chars: n }`.
+  - **`check` never throws.** A throw anywhere inside it, an audit append included, refuses with the uniform 401. It never reaches the `async` request handler in `http.ts` as an error, where an unhandled rejection would end the HQ process.
   - Failures: each 401 has the body `unauthorized` and no other header.
   - **What "source" means.** The source is the TCP peer address. HQ listens on 127.0.0.1, and every sandbox reaches it through the `sbx` proxy, so in practice all agent traffic is one source. The source is therefore used only for the failure **rate limit** (SR-B-21), never to decide which failures are audited.
   - **Audit is collapsed by what failed** (SR-B-04, SR-B-06), with one window per key per minute:
@@ -196,10 +197,12 @@ Carry-forward: PR #1 finding 1 (value scan, key match) and the PR #1 review's no
 
 - [ ] **Step 1: Write the failing tests**
   - `SR-B-01 [T-S1.1] an X-HQ-Agent header naming another agent is refused`: with `ana`'s secret and `X-HQ-Agent: lead`, `create_task` is refused (401). The task count is unchanged, and an `agent.identity-mismatch` row has actor `<slug>/ana`. `get_my_task` with the same header is refused too, and its body holds nothing of the lead's task.
+  - `SR-B-01 [T-S1.1] a credential-shaped claimed id is refused and recorded safely`: `ana`'s secret with `X-HQ-Agent: ghp_…`, and again on `/hook/sk-…/Stop`. Each gets 401 and writes one mismatch row holding `claimed: { chars: n }`. The sample appears nowhere in the chain, and `ana`'s next valid request succeeds (HQ is still up).
+  - `check refuses with 401 when the audit write throws`: an audit sink whose `append` throws. A mismatching request gets the uniform 401, no error reaches the handler, and the next request is served.
   - `SR-B-02 [T-S2.1 T-S2.2 T-S2.3] a hook for B sent with A's secret has no effect`: queue two messages for `ben`. With `ana`'s secret, POST `Stop`, `SessionStart` and `Notification` to `/hook/ben/…`: each is 401, the body holds none of the message text, `ben`'s queue still holds two, his status is unchanged, and three mismatch rows have actor `<slug>/ana`.
   - `SR-B-03 [T-S1.1 T-S2.1] the old project token is refused and no agent-token file is created`.
   - `SR-B-04 [T-S1.4] every failure gets the same response`: no header, wrong scheme, unknown, revoked, malformed, and a secret from another project give byte-identical status, headers (except `Date`) and body. A burst of 100 no-header failures writes at most 2 audit rows. After the fake clock moves a minute, the next no-header failure's row has `suppressed` = the count not written.
-  - `SR-B-06 [T-S1.3] a revoked secret is audited even after other failures`: in one fake-clock minute, a no-header request, then `ana`'s rotated secret: two `auth.failed` rows, the second with `target` = `<slug>/ana` and `reason: "revoked"`.
+  - `SR-B-06 [T-S1.3] a revoked secret is audited even after other failures`: in one fake-clock minute, a no-header request, then `ana`'s rotated secret: two `auth.failed` rows, the second with `target` = `<slug>/ana` and `reason: "revoked"`. Then, in a new minute: 25 no-header failures (past `failuresPerSourcePerMinute`), then `ana`'s rotated secret. The response is 429, and an `auth.failed` row still has `target` = `<slug>/ana`.
   - `SR-B-21 [T-S1.12 T-S2.6] a flood from one secret gets 429 and others still work`: 500 calls in one fake-clock second with `ana`'s secret: later ones get 429, a call with `ben`'s secret succeeds, and there is exactly one `auth.rate-limited` row.
   - `SR-B-24 [T-S5.12] an agent secret opens no WebSocket`: an upgrade to `/ws` with `ana`'s secret in `?token=`, and again in `Authorization`, gets 401.
 - [ ] **Step 2: Run them and confirm they fail.**
@@ -312,10 +315,11 @@ Carry-forward: "`workspaceFor` can throw inside the sessions polling tick for a 
   - Refuses with a visible failure when the registry has no `active` row ("This agent is paused." / "This agent was retired.").
   - Checks `backend.exists(name)` **before** writing files. If the session exists, it reattaches and writes nothing.
   - Otherwise: `const secret = company.secrets.issue(reg.companyId)`, then `adapter.writeFiles(dir, agent, cfg, secret, { role: reg.role, ctoId: company.agents.cto(slug)?.agentId ?? null, … })`, then launches.
-- `Sessions.stop(id)` revokes the agent's live secret with reason `stopped` once the session is gone. A dead session's secret has no legitimate user, and `start` issues a new one anyway.
+  - If `writeFiles` or the launch throws after `issue`, the `catch` revokes the new secret with reason `stopped`, so no secret stays live without a session.
+- Revocation with reason `stopped` happens only where HQ itself ends the session: in `Sessions.stop(id)` once the session is gone, and in the poll's dead-pane branch (`sessions.ts:391-400`), where HQ kills the session.
 - `startPolling`:
   - Each agent's tick body is wrapped so a throw marks that agent `failed` with the message and the loop continues.
-  - When the tick finds a session that was running is gone, it revokes the secret with reason `stopped`.
+  - When `backend.exists` reports a session gone, the tick does **not** revoke. `exists` is false on any tmux failure, including its 5-second timeout, and a `start` that finishes during the tick's `await` looks gone too. Revoking there would lock out a running agent. `start` rotates the secret anyway.
   - When it reattaches an agent and `!company.secrets.hasLive(companyId)`, one activity line says: "`<name>` is running with an old HQ key. Restart `<name>` once so it gets its own."
 - `agentFiles.ts` / `adapters.ts`: the `X-HQ-Agent` header is no longer written (Claude MCP config and Codex TOML). `.claude/settings.local.json` is written with mode `0o600`.
 - `agentWrite(root, rel, data, opts)`: when `opts.mode` is set, it also `chmodSync`s, because `writeFileSync` applies the mode only to a new file.
@@ -329,7 +333,9 @@ Carry-forward: "`workspaceFor` can throw inside the sessions polling tick for a 
   - `SR-B-06 [T-S1.2 T-S1.3] a new session rotates the secret`: start `ana` and read the secret from `.claude/hq-mcp.json`. Give that secret to a client acting as `ben`. Stop and start `ana`: the old secret gets 401 on `/mcp` and an `auth.failed` row; the new one works.
   - `SR-B-07 [T-X3.6] reattaching to a live session issues no secret and writes no file`: the fake backend says the session exists. `start` and a poll tick leave `agent_secrets` unchanged and leave the files' mtimes unchanged.
   - `SR-B-08 [T-S1.3] a paused agent's secret stops at once and start is refused`: `setStatus("paused")`, then 401 on `/mcp` and `/hook`; `start` sets the session to failed with "paused".
-  - `stopping or losing a session revokes its secret`: start `ana`, `stop`: her secret gets 401 with a `revoked` row. Start her again, and make the fake backend report the session gone: after one tick, her secret gets 401.
+  - `stopping a session revokes its secret`: start `ana`, `stop`: her secret gets 401 with a `revoked` row. Start her again, and make the fake backend report a dead pane: after one tick, that secret gets 401 too.
+  - `a session that looks gone for one tick keeps its secret`: start `ana`. The fake backend reports the session gone for one tick and present on the next. Her secret still authenticates, and no restart notice is written.
+  - `a failed start leaves no live secret`: a fake backend whose `create` throws. After `start`, `hasLive` is false and the secret just issued gets 401.
   - `SR-B-22 [T-S7.6] one refused workspace does not stop the poll`: `ana`'s `workspacePath` is inside the company store; after a tick, `ben`'s session state still updates.
   - `SR-B-23 [T-S1.10] secret files are 0600, never written through a link, and git-excluded` (POSIX modes skipped on Windows): mode `0o600` on `hq-mcp.json` and `settings.local.json` (an existing `0o644` file too); a planted symlink at `hq-mcp.json` is replaced, not followed; `git check-ignore` matches both.
   - `SR-B-23 [T-S1.10] codex config holds the secret, no agent header, mode 0600`.
