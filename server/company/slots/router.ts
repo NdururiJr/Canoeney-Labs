@@ -2,7 +2,7 @@ import { REPLY_CODE_PATTERN } from "../replyCode";
 import type { InboundMessage, Route, Router } from "./types";
 
 export class LocalRouter implements Router {
-  route(m: InboundMessage): Route {
+  async route(m: InboundMessage): Promise<Route> {
     const codes = new Set<string>();
     for (const hit of m.text.matchAll(new RegExp(REPLY_CODE_PATTERN.source, "gi"))) {
       codes.add(hit[0].slice(1).toUpperCase());

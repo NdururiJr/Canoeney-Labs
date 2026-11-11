@@ -27,7 +27,9 @@ const cases: [string, Route][] = [
 ];
 
 for (const [text, expected] of cases) {
-  test(`routes ${JSON.stringify(text)}`, () => {
-    assert.deepEqual(new LocalRouter().route(msg(text)), expected);
+  test(`routes ${JSON.stringify(text)}`, async () => {
+    const route = new LocalRouter().route(msg(text));
+    assert.ok(route instanceof Promise);
+    assert.deepEqual(await route, expected);
   });
 }

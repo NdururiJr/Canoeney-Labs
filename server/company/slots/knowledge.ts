@@ -17,8 +17,10 @@ export class SqliteKnowledgeStore {
 
   /** Owner path: create the document at version 1 or bump its version. */
   put(doc: { id: string; title: string; body: string }, byHumanId: string): KnowledgeDoc {
-    // The upsert and its audit event commit together; append joins this transaction.
-    return this.db.transaction(() => {
+    // The upsert and its audit event commit together: append joins this
+    // transaction, and this joins a caller's transaction if one is open (open
+    // it with mode "immediate"), so a wider owner action commits atomically.
+    const write = (): KnowledgeDoc => {
       const at = this.clock.now().toISOString();
       const row = this.db
         .prepare(
@@ -37,18 +39,19 @@ export class SqliteKnowledgeStore {
         data: { version: row.version },
       });
       return { ...row };
-    }, "immediate");
+    };
+    return this.db.inTransaction ? write() : this.db.transaction(write, "immediate");
   }
 
   /** Read-only view for agents. */
   reader(): Knowledge {
     const db = this.db;
     return Object.freeze({
-      get(id: string): KnowledgeDoc | null {
+      async get(id: string): Promise<KnowledgeDoc | null> {
         const row = db.prepare(`SELECT ${DOC_COLUMNS} FROM knowledge_docs WHERE id = ?`).get<DocRow>(id);
         return row ? { ...row } : null;
       },
-      list(): Omit<KnowledgeDoc, "body">[] {
+      async list(): Promise<Omit<KnowledgeDoc, "body">[]> {
         return db
           .prepare("SELECT id, title, version, updated_at AS updatedAt FROM knowledge_docs ORDER BY id")
           .all<Omit<KnowledgeDoc, "body">>()

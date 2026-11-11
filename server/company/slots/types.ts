@@ -1,5 +1,8 @@
 // Interfaces for the pluggable slots of the company core. Each slot has a
-// default implementation elsewhere in server/company/.
+// default implementation elsewhere in server/company/. Memory, Knowledge and
+// Router are async so a network-backed product can replace them; AuditSink is
+// sync because it must join a caller's local transaction
+// (docs/adr/0004-slot-interfaces.md).
 import type { ActorKind, Urgency } from "../types";
 
 export interface AuditEventInput {
@@ -52,13 +55,13 @@ export interface MemoryEntry {
 
 export const MEMORY_VALUE_MAX_BYTES = 65_536;
 
-// Long-term memory per agent or client. set throws RangeError when the value's
-// UTF-8 length exceeds MEMORY_VALUE_MAX_BYTES; list is sorted by key.
+// Long-term memory per agent or client. set rejects with RangeError when the
+// value's UTF-8 length exceeds MEMORY_VALUE_MAX_BYTES; list is sorted by key.
 export interface Memory {
-  get(s: MemoryScope, key: string): string | null;
-  set(s: MemoryScope, key: string, value: string): void;
-  delete(s: MemoryScope, key: string): boolean;
-  list(s: MemoryScope): MemoryEntry[];
+  get(s: MemoryScope, key: string): Promise<string | null>;
+  set(s: MemoryScope, key: string, value: string): Promise<void>;
+  delete(s: MemoryScope, key: string): Promise<boolean>;
+  list(s: MemoryScope): Promise<MemoryEntry[]>;
 }
 
 export interface KnowledgeDoc {
@@ -72,8 +75,8 @@ export interface KnowledgeDoc {
 // The agent-facing, read-only view of company knowledge. Writes go through the
 // owner path on the store (SqliteKnowledgeStore.put), never through this.
 export interface Knowledge {
-  get(id: string): KnowledgeDoc | null;
-  list(): Omit<KnowledgeDoc, "body">[];
+  get(id: string): Promise<KnowledgeDoc | null>;
+  list(): Promise<Omit<KnowledgeDoc, "body">[]>;
 }
 
 // An inbound message from the owner on any channel. text is untrusted input.
@@ -91,7 +94,7 @@ export type Route =
 // Finds which decision an inbound message answers. It never interprets the
 // message (yes/no); that is a later step with its own checks.
 export interface Router {
-  route(m: InboundMessage): Route;
+  route(m: InboundMessage): Promise<Route>;
 }
 
 export interface OutboundAlert {

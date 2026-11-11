@@ -8,14 +8,14 @@ export class SqliteMemory implements Memory {
     private readonly clock: Clock,
   ) {}
 
-  get(s: MemoryScope, key: string): string | null {
+  async get(s: MemoryScope, key: string): Promise<string | null> {
     const row = this.db
       .prepare("SELECT value FROM memory_items WHERE scope_kind = ? AND scope_id = ? AND key = ?")
       .get<{ value: string }>(s.kind, s.id, key);
     return row ? row.value : null;
   }
 
-  set(s: MemoryScope, key: string, value: string): void {
+  async set(s: MemoryScope, key: string, value: string): Promise<void> {
     const bytes = Buffer.byteLength(value, "utf8");
     if (bytes > MEMORY_VALUE_MAX_BYTES) {
       throw new RangeError(`memory value is ${bytes} bytes; the limit is ${MEMORY_VALUE_MAX_BYTES}`);
@@ -28,14 +28,14 @@ export class SqliteMemory implements Memory {
       .run(s.kind, s.id, key, value, this.clock.now().toISOString());
   }
 
-  delete(s: MemoryScope, key: string): boolean {
+  async delete(s: MemoryScope, key: string): Promise<boolean> {
     const r = this.db
       .prepare("DELETE FROM memory_items WHERE scope_kind = ? AND scope_id = ? AND key = ?")
       .run(s.kind, s.id, key);
     return r.changes > 0;
   }
 
-  list(s: MemoryScope): MemoryEntry[] {
+  async list(s: MemoryScope): Promise<MemoryEntry[]> {
     // Rows from the driver have a null prototype; copy into plain objects.
     return this.db
       .prepare(
