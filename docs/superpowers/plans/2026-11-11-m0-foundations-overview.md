@@ -61,7 +61,7 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | A rejected `DashboardChannel.send` promise must count as a failed send in the channel fallback loop | M1 |
 | `Company.knowledge` is the concrete `SqliteKnowledgeStore`; add a `KnowledgeStore` interface (`put` + `reader`) | The first plan that swaps the owner write path (M1) |
 | `AuditQuery` has no `target` filter (needed for "owner and Security can search it") | M1 (M1.9) |
-| `scripts/smoke-test.mjs`: the first HQ's 60 s start timer is never cleared; clear it once the token is seen | Next plan touching the smoke test |
+| ~~`scripts/smoke-test.mjs`: the first HQ's 60 s start timer is never cleared; clear it once the token is seen~~ Done in M0-A: none of the four wait timers was cleared, and the 15 s pty timer failed Windows CI at `fe154e1` once HQ took 12.6 s to start. Every wait now goes through `within()`, which clears its timer | Done (M0-A) |
 | ADR 0003: an `INSERT OR REPLACE` with a new seq and a duplicated mid-chain hash deletes that row via `UNIQUE(hash)`; `verify` catches it, but correct the ADR sentence | Next plan touching the audit chain |
 | `migrate` checks `SchemaTooNewError` only before the lock (a newer HQ migrating concurrently) | Accepted for M0; revisit in M0-G (always-on host) |
 | `~/.jsmhq` is now created `0700` on fresh installs (was `0755`) | Note only |

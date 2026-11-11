@@ -48,6 +48,19 @@ function cleanup() {
     /* Windows may still hold a file; the runner is thrown away anyway */
   }
 }
+// Waits for fn to call done, and fails if that takes longer than ms. The timer
+// is cleared once done is called: a timer left running would end a later,
+// slower step with this step's message. `why` may be a function, so the
+// message can include output gathered while waiting.
+function within(ms, why, fn) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => fail(typeof why === "function" ? why() : why), ms);
+    fn((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
 function spawnSyncKill(pid) {
   try {
     execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
@@ -72,12 +85,11 @@ step(`version ${sh(process.execPath, [bin, "--version"]).trim()}`);
 // 2. The terminal library loads its prebuilt binary and can spawn a process.
 const req = createRequire(join(pkgRoot, "package.json"));
 const pty = req("@lydell/node-pty");
-await new Promise((done) => {
+await within(15_000, "pty spawn timed out", (done) => {
   const p = pty.spawn(process.execPath, ["-e", "console.log('pty-ok')"], { cols: 80, rows: 10 });
   let out = "";
   p.onData((d) => (out += d));
   p.onExit(() => (out.includes("pty-ok") ? done() : fail(`pty spawn printed: ${JSON.stringify(out)}`)));
-  setTimeout(() => fail("pty spawn timed out"), 15_000);
 });
 step("terminal library spawns processes");
 
@@ -92,7 +104,7 @@ const startHq = () =>
   spawn(process.execPath, [bin, "--repo", repo, "--port", String(port), "--no-open"], { stdio: ["ignore", "pipe", "pipe"], env: hqEnv });
 hq = startHq();
 let log = "";
-const token = await new Promise((done) => {
+const token = await within(60_000, () => `HQ didn't start in 60s:\n${log}`, (done) => {
   const onData = (d) => {
     log += d;
     const m = log.match(/token=([a-f0-9]+)/);
@@ -101,7 +113,6 @@ const token = await new Promise((done) => {
   hq.stdout.on("data", onData);
   hq.stderr.on("data", onData);
   hq.on("exit", (code) => fail(`HQ exited early (code ${code}):\n${log}`));
-  setTimeout(() => fail(`HQ didn't start in 60s:\n${log}`), 60_000);
 });
 hq.removeAllListeners("exit");
 step("HQ started");
@@ -115,10 +126,8 @@ const second = startHq();
 let secondLog = "";
 second.stdout.on("data", (d) => (secondLog += d));
 second.stderr.on("data", (d) => (secondLog += d));
-const secondCode = await new Promise((done) => {
+const secondCode = await within(60_000, () => `a second HQ on port ${port} didn't exit in 60s:\n${secondLog}`, (done) => {
   second.on("exit", done);
-  setTimeout(() => fail(`a second HQ on port ${port} didn't exit in 60s:
-${secondLog}`), 60_000);
 });
 if (secondCode !== 1 || !/in use/.test(secondLog)) fail(`second HQ: expected exit 1 with "in use", got ${secondCode}:
 ${secondLog}`);
@@ -135,7 +144,7 @@ if (!page.ok || !html.includes("<div id=")) fail(`page: HTTP ${page.status}`);
 step("page served");
 
 const WebSocket = req("ws");
-const snap = await new Promise((done) => {
+const snap = await within(15_000, "no snapshot in 15s", (done) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${token}`, { headers: { Origin: `http://127.0.0.1:${port}` } });
   ws.on("message", (raw) => {
     const e = JSON.parse(String(raw));
@@ -145,7 +154,6 @@ const snap = await new Promise((done) => {
     }
   });
   ws.on("error", (err) => fail(`websocket: ${err.message}`));
-  setTimeout(() => fail("no snapshot in 15s"), 15_000);
 });
 if (snap.welcome !== true) fail("expected the welcome screen on a fresh repo");
 step(`snapshot ok (welcome, ${snap.setup.checks.length} setup checks)`);
