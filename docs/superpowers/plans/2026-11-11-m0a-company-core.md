@@ -18,7 +18,7 @@
 - "Store client personal data in the trail by reference, never by value" (§9.5): no contact fields on `clients`; audit `data` carries ids.
 - "Existing HQ capabilities … regress" is an anti-goal (§4): `pnpm typecheck`, `pnpm build`, `scripts/session-backend-test.ts` and `scripts/smoke-test.mjs` keep passing on Ubuntu, macOS and Windows.
 - Times are stored as ISO-8601 UTC strings from the injected `Clock`. East Africa Time applies to scheduling in M1, not to storage.
-- The fork's name is not chosen yet (§8.1). Don't introduce a new product name. The `.jsmhq` folder name goes behind one constant, `HQ_DIRNAME`, for M0-H.
+- The fork's name is **Canoeney Labs** (M0.1, owner, may still change), but renaming is M0-H's job. M0-A introduces no product name in code. The `.jsmhq` folder name goes behind one constant, `HQ_DIRNAME`, so M0-H changes it in one place.
 - Money is an integer in minor units plus an upper-case ISO 4217 currency (`KES`, `USD`).
 - Existing `.jsmhq/config.json` and `plan.json` stay as they are. Moving them is M0-D.
 

@@ -15,9 +15,9 @@ M0 has 18 goals that fall into separate pieces of software. Each piece gets its 
 | **M0-E Least-privilege GitHub** | M0.10 scoped identity per agent, branch protection, no global consequential secrets, no Local mode for company agents (S3); merge-by as a gated setting; Actions hardening (S9) | B, D | **Yes:** GitHub App or bot accounts, and whether private-repo branch protection needs a paid plan (spend) |
 | **M0-F Per-role skills** | M0.18 skills vendored into company-owned forks, pinned by hash, installed per role, changes as category 2 (S12) | A, B | No (the company skill repo is created by the owner) |
 | **M0-G Always-on operations** | M0.6 Linux host; M0.15 external uptime check, public health path, daily heartbeat; M0.16 encrypted nightly off-host backup, daily audit-head anchor, tested restore | A (and C for the public endpoint) | **Yes:** host and monthly budget, after the virtualisation check |
-| **M0-H Rename** | M0.1 new name and logo; M0.17 `~/.jsmhq`, `.jsmhq/`, bin name, `X-HQ-Agent` header | A (it adds `HQ_DIRNAME`) | **Yes:** the name |
+| **M0-H Rename** | M0.1 new name and logo; M0.17 `~/.jsmhq`, `.jsmhq/`, bin name, `X-HQ-Agent` header | A (it adds `HQ_DIRNAME`) | Name chosen: **Canoeney Labs**. The logo is still open |
 
-M0-H can run at any point once the name is chosen; M0-A puts the folder name behind one constant so the rename is cheap.
+M0-H can run at any point after M0-A, which puts the folder name behind one constant so the rename is cheap.
 
 ## Owner track (runs alongside the code)
 
@@ -25,7 +25,7 @@ M0-H can run at any point once the name is chosen; M0-A puts the folder name beh
 |---|---|---|
 | Now | Start Meta business verification and get a dedicated +254 business number (lead time) | M1.5, §8.5 |
 | Now | Check that candidate hosts support Docker Sandboxes' virtualisation, then choose the host and budget | M0.6, §8.3 |
-| Now | Choose the fork's name and logo | M0.1, §8.1 |
+| Now | Choose the logo (name chosen: Canoeney Labs) | M0.1, §8.1 |
 | After M0-A merges, before M0-B starts | Run the threat model (STRIDE, attack trees, requirement extraction, mitigation mapping) over S1–S12 in your own session, so M0-B onward write tests that trace to threats | M0.8 |
 | Before M0-E | Decide the GitHub identity model and any paid-plan spend | M0.10 |
 | Before M0-F | Create the company-owned skills repository | M0.18 |
