@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeCommands } from "./commands";
+import { companyHome, openCompany } from "./company";
 import { startHttp } from "./http";
 import { Hub } from "./hub";
 import { GitHubSync } from "./githubSync";
@@ -39,10 +40,13 @@ async function main() {
   const { config, isNew } = loadConfig(repo, port);
   config.project.hqPort = port;
   const slug = config.project.id;
+  // Opened right after the config so a store written by a newer HQ stops startup with its own message.
+  const company = openCompany({ home: companyHome(), repoRoot: repo.root });
   const token = agentToken(slug);
   const uiToken = browserToken(slug, dev);
 
   log.info(`repo   ${repo.root}${repo.github ? `  (github.com/${repo.github})` : ""}`);
+  log.info(`company ${company.db.file}`);
   log.info("checking setup…");
   const setup = await runSetupChecks(repo, config.team);
   for (const c of setup.checks) log.info(`  ${c.status === "ok" ? "✓" : c.status === "warning" ? "!" : "✗"} ${c.label}: ${c.detail}`);
@@ -92,6 +96,8 @@ async function main() {
     allowedOrigins: [uiOrigin, `http://127.0.0.1:${uiPort}`, `http://localhost:${port}`, `http://127.0.0.1:${port}`],
     commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp),
   });
+  // Only once HQ is serving: a port already in use must not record a start.
+  company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });
   sessions.startPolling();
   sbx.startApprovalPolling();
   const github = new GitHubSync(hub, planner, repo.github);
@@ -111,6 +117,12 @@ async function main() {
     sessions.shutdown();
     sbx.stopApprovalPolling();
     github.stop();
+    try {
+      company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.stopped", data: { project: slug } });
+      company.close();
+    } catch (err) {
+      log.warn(`company store did not close cleanly: ${err instanceof Error ? err.message : err}`);
+    }
     process.exit(0);
   };
   process.on("SIGINT", quit);

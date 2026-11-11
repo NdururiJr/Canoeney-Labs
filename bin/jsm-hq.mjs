@@ -28,9 +28,9 @@ Docs: ${pkg.homepage ?? "https://github.com/jsmastery-pro/jsm-hq"}`);
   process.exit(0);
 }
 
-const major = Number(process.versions.node.split(".")[0]);
-if (major < 20) {
-  console.error(`JSM HQ needs Node.js 20 or newer (you have ${process.versions.node}).`);
+const [major, minor] = process.versions.node.split(".").map(Number);
+if (major < 22 || (major === 22 && minor < 13)) {
+  console.error(`JSM HQ needs Node.js 22.13 or newer (you have ${process.versions.node}).`);
   process.exit(1);
 }
 

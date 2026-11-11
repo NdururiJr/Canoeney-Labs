@@ -2,12 +2,20 @@
 
 import { existsSync } from "node:fs";
 import type { AgentConfig } from "../src/data/types";
+import { companyHome, isInside } from "./company/home";
 import { run } from "./lib/exec";
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
 
+/**
+ * The agent's folder. Throws if it is the company store or inside it: agents
+ * must never work in, or be pointed at, the company's records.
+ */
 export function workspaceFor(agent: AgentConfig, projectSlug: string): string {
-  return agent.workspacePath || managedWorkspace(projectSlug, agent.id);
+  const dir = agent.workspacePath || managedWorkspace(projectSlug, agent.id);
+  const store = companyHome();
+  if (isInside(dir, store)) throw new Error(`${dir} is inside the company store (${store}). Choose a folder outside it for ${agent.name}.`);
+  return dir;
 }
 
 /**

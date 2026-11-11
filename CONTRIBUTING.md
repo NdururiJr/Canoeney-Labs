@@ -2,7 +2,7 @@
 
 ## Run it from source
 
-Needs Node.js 20+ and pnpm 10 or 11 (`corepack enable` gets you pnpm).
+Needs Node.js 22.13+ and pnpm 10 or 11 (`corepack enable` gets you pnpm).
 
 ```bash
 git clone https://github.com/jsmastery-pro/jsm-hq && cd jsm-hq

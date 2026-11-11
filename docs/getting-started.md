@@ -15,7 +15,7 @@ HQ checks everything below when it starts and shows a **setup checklist** with t
 
 | | macOS | Linux (Ubuntu) | Windows 11 (PowerShell) |
 |---|---|---|---|
-| Node.js 20+ | `brew install node` | [nodesource](https://github.com/nodesource/distributions) or `nvm install 22` | `winget install OpenJS.NodeJS.LTS` |
+| Node.js 22.13+ | `brew install node` | [nodesource](https://github.com/nodesource/distributions) or `nvm install 22` | `winget install OpenJS.NodeJS.LTS` |
 | git | `xcode-select --install` | `sudo apt install git` | `winget install Git.Git` |
 | GitHub CLI | `brew install gh` | `sudo apt install gh` | `winget install GitHub.cli` |
 | tmux | `brew install tmux` | `sudo apt install tmux` | not needed |

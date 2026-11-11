@@ -15,3 +15,6 @@ prototypes/
 docs/archive/
 docs/initial-idea.md
 *.tsbuildinfo
+
+# Brainstorming companion mockups (local only)
+.superpowers/
