@@ -25,7 +25,7 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
 ## 2. Goals
 
 ### M0: Foundations
-1. **New identity for the fork.** JSM HQ's trademarks forbid publishing a fork under that name or logo (see `TRADEMARKS.md`). Pick a new name and logo, update package metadata, and keep the MIT licence and attribution. Name: **open (owner)**.
+1. **New identity for the fork.** JSM HQ's trademarks forbid publishing a fork under that name or logo (see `TRADEMARKS.md`). Pick a new name and logo, update package metadata, and keep the MIT licence and attribution. Name: **Canoeney Labs (owner, chosen 2026-11-11, from the Swahili *kanuni*, "rules"; may still change)**. Logo: open (owner).
 2. **Unforgeable agent identity on every agent-authenticated endpoint.**
    - **The problem:** today all agents share one project token (`server/paths.ts` `agentToken`). There are two impersonation paths. `/mcp` takes the agent id from a self-declared `X-HQ-Agent` header, and `/hook/<agentId>/<event>` takes it from the URL (`server/http.ts`). A forged Stop hook for agent B, for example, takes B's queued messages and changes B's state.
    - **The fix:** **one secret per agent** for **both** endpoints and any future one. HQ derives the agent's identity from the secret alone and never from a header or URL.
@@ -312,7 +312,7 @@ The design's value is that **code** enforces the rules. These are all the ways a
 
 ## 8. Open items for the owner (do not block design, block build steps)
 
-1. The fork's new name and logo (M0 start)
+1. The fork's logo (M0 start). Name chosen: Canoeney Labs (M0.1)
 2. Initial thresholds: spend limits [X], escalation timings [X] hours
 3. Always-on host and its monthly budget, after the virtualisation check
 4. Agent accounts: Claude/ChatGPT subscriptions or metered API keys. This affects spend tracking and cost. **Before choosing subscriptions, check that running an autonomous, always-on company on a consumer subscription is allowed under that provider's current terms.** Subscriptions also have usage limits that the scheduler must work within.
