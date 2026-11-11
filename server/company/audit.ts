@@ -7,7 +7,7 @@ import type { Clock } from "./clock";
 import type { CompanyDb } from "./db";
 import { canonicalJson } from "./canonicalJson";
 import type { AuditEvent, AuditEventInput, AuditQuery, AuditSink, AuditVerify } from "./slots/types";
-import type { ActorKind } from "./types";
+import { ACTOR_KINDS, type ActorKind } from "./types";
 
 export const GENESIS_HASH = "0".repeat(64);
 
@@ -131,6 +131,18 @@ export class SqliteAuditSink implements AuditSink {
   // transaction instead of starting one. Without a caller transaction it runs
   // in its own BEGIN IMMEDIATE transaction.
   append(e: AuditEventInput): AuditEvent {
+    // Types are checked at run time too: a number or object here would be
+    // hashed as JSON but stored as SQLite text, so verify could never
+    // reproduce the hash of that row.
+    if (!(ACTOR_KINDS as readonly unknown[]).includes(e.actorKind)) throw new TypeError("audit actorKind must be agent, human or hq");
+    if (typeof e.actorId !== "string") throw new TypeError("audit actorId must be a string");
+    if (typeof e.action !== "string") throw new TypeError("audit action must be a string");
+    for (const [name, v] of [
+      ["target", e.target],
+      ["decisionId", e.decisionId],
+    ] as const) {
+      if (v !== undefined && v !== null && typeof v !== "string") throw new TypeError(`audit ${name} must be a string or null`);
+    }
     // Refuse before any transaction: nothing is written on refusal. SQLite TEXT
     // would store a lone surrogate as U+FFFD, and verify could then never
     // reproduce the hash of that row. (data is safe: JSON escapes surrogates.)

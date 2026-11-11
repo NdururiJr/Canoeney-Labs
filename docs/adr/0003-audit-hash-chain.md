@@ -26,7 +26,7 @@ actorKind, actorId, action, target, decisionId, data }))`, with `target` and
 (`server/company/canonicalJson.ts`) sorts object keys, writes no whitespace,
 omits `undefined` keys and refuses values that do not round-trip through JSON
 (`NaN`, `Infinity`, `bigint`, functions, symbols, `Date`, `Map`, anything that
-is not a plain object). The same string is stored in `data_json`, so what is
+is not a plain object, and `undefined` array elements, holes included). The same string is stored in `data_json`, so what is
 hashed is what is stored, and key order or Unicode cannot change a hash.
 
 **Genesis.** The first event's `prevHash` is `GENESIS_HASH`, 64 zeros.
@@ -54,7 +54,10 @@ as JS strings but stored as SQLite TEXT, which turns a lone surrogate into
 U+FFFD, so the hash could never be reproduced and `verify()` would break at
 that row for good, hiding later tampering. `append` therefore throws
 `TypeError` for such strings before writing. `data` is safe: `JSON.stringify`
-escapes lone surrogates.
+escapes lone surrogates. For the same reason `append` checks types at run time:
+`actorKind` must be `agent`, `human` or `hq`, `actorId` and `action` strings,
+and `target` and `decisionId` strings, `null` or absent; anything else is a
+`TypeError` and nothing is written.
 
 **Transactions.** `append` joins the caller's transaction when one is open
 (`db.inTransaction`), so a business write and its audit event commit or roll

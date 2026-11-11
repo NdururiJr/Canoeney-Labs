@@ -14,3 +14,11 @@ test("rejects non-plain values", () => {
     assert.throws(() => canonicalJson(bad), TypeError);
   }
 });
+
+test("rejects array holes and undefined elements", () => {
+  // eslint-disable-next-line no-sparse-arrays
+  assert.throws(() => canonicalJson([1, , 2]), TypeError);
+  assert.throws(() => canonicalJson({ a: [1, , 2] }), TypeError);
+  assert.throws(() => canonicalJson([1, undefined, 2]), TypeError);
+  assert.equal(canonicalJson([1, null, 2]), "[1,null,2]");
+});

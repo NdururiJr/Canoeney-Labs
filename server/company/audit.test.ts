@@ -280,3 +280,28 @@ test("two connections appending interleaved keep one valid chain", (t) => {
     );
   }
 });
+
+test("refuses non-string actorId or action, non-string target or decisionId, and unknown actorKind", (t) => {
+  const { sink } = fresh(t);
+  const bad: Record<string, unknown>[] = [
+    { actorId: 42 },
+    { actorId: null },
+    { actorId: undefined },
+    { action: { a: 1 } },
+    { action: undefined },
+    { target: 7 },
+    { target: ["x"] },
+    { decisionId: 1n },
+    { decisionId: {} },
+    { actorKind: "robot" },
+    { actorKind: undefined },
+  ];
+  for (const over of bad) {
+    assert.throws(() => sink.append({ ...ev(), ...over } as unknown as AuditEventInput), TypeError, JSON.stringify(Object.keys(over)));
+  }
+  assert.equal(sink.head(), null);
+  // null and undefined target / decisionId are fine
+  sink.append(ev({ target: null, decisionId: undefined }));
+  for (const actorKind of ["agent", "human", "hq"] as const) sink.append(ev({ actorKind }));
+  assert.equal(sink.verify().ok, true);
+});

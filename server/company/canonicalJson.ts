@@ -24,7 +24,13 @@ function write(value: unknown, stack: object[]): string {
   if (stack.includes(obj)) throw new TypeError("canonicalJson: circular reference");
   stack.push(obj);
   try {
-    if (Array.isArray(obj)) return "[" + obj.map((v) => write(v, stack)).join(",") + "]";
+    if (Array.isArray(obj)) {
+      // By index, not map(): map skips holes, so [1,,2] would become "[1,,2]".
+      // A hole reads as undefined here and is refused like any undefined element.
+      const items: string[] = [];
+      for (let i = 0; i < obj.length; i++) items.push(write(obj[i], stack));
+      return "[" + items.join(",") + "]";
+    }
     const proto = Object.getPrototypeOf(obj);
     if (proto !== Object.prototype && proto !== null) {
       throw new TypeError("canonicalJson: only plain objects are supported");
