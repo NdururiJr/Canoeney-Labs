@@ -156,3 +156,25 @@ test("store file is private on POSIX", { skip: process.platform === "win32" }, (
   open();
   assert.equal(statSync(file).mode & 0o777, 0o600);
 });
+
+test("an async transaction fn is refused and its writes are rolled back", async (t) => {
+  const { open } = tmpStore(t);
+  const db = open([m1]);
+  let continued = false;
+  assert.throws(
+    () =>
+      db.transaction((async () => {
+        db.prepare("INSERT INTO a(x) VALUES (?)").run(1);
+        await null;
+        continued = true;
+      }) as unknown as () => void),
+    (err: unknown) => err instanceof TypeError && err.message === "transaction fn must be synchronous",
+  );
+  assert.equal(db.inTransaction, false);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM a").get<{ n: number }>()?.n, 0);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(continued, true); // the rest of fn ran later, outside any transaction
+  assert.equal(db.prepare("SELECT count(*) AS n FROM a").get<{ n: number }>()?.n, 0);
+  db.transaction(() => db.prepare("INSERT INTO a(x) VALUES (?)").run(2), "immediate");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM a").get<{ n: number }>()?.n, 1);
+});

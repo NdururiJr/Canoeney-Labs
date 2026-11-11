@@ -21,8 +21,13 @@ export interface CompanyDb {
   readonly inTransaction: boolean;
   exec(sql: string): void;
   prepare(sql: string): Statement;
+  /** fn must be synchronous; one that returns a promise is rolled back with a TypeError. */
   transaction<T>(fn: () => T, mode?: "deferred" | "immediate"): T;
   close(): void;
+}
+
+function isThenable(v: unknown): v is PromiseLike<unknown> {
+  return (typeof v === "object" || typeof v === "function") && v !== null && typeof (v as { then?: unknown }).then === "function";
 }
 
 class SqliteCompanyDb implements CompanyDb {
@@ -60,6 +65,12 @@ class SqliteCompanyDb implements CompanyDb {
     this.depth++;
     try {
       const result = fn();
+      if (isThenable(result)) {
+        // An await inside fn would let other code run inside this transaction
+        // and the rest of fn run after COMMIT. Roll back what ran so far.
+        result.then(undefined, () => {}); // its own later failure is not reported twice
+        throw new TypeError("transaction fn must be synchronous");
+      }
       this.raw.exec("COMMIT");
       return result;
     } catch (err) {
