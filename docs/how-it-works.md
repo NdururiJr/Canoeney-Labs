@@ -134,6 +134,16 @@ HQ never stores key values and never reads your env files.
 
 **Remove a project:** delete each agent in Settings → Team (this removes its sandbox and, if you choose, its folder), then delete `~/.jsmhq/<project>`.
 
+## Company store
+
+HQ keeps a company record, separate from the per-project folders above, in `~/.jsmhq/_company/company.db`. Set `HQ_COMPANY_HOME` to put it somewhere else.
+
+It holds the company data model, a tamper-evident audit chain of what happened and who did it, agent and client memory, company knowledge, and the alert outbox the dashboard reads.
+
+Agents are never given a path to it. HQ refuses to open it inside a repository, so it can't be committed by accident. On macOS and Linux the folder is private to you (`0700`), and so is the file (`0600`).
+
+HQ records when it starts and stops. If the store was written by a newer HQ, this HQ stops with a message asking you to update.
+
 ## Windows
 
 Windows 11 support is experimental. Run HQ in PowerShell or Windows Terminal, not in WSL.

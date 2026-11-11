@@ -1,0 +1,56 @@
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { SqliteAuditSink } from "./audit";
+import { systemClock, type Clock } from "./clock";
+import { openCompanyDb, type CompanyDb } from "./db";
+import { DashboardChannel } from "./slots/dashboardChannel";
+import { SqliteKnowledgeStore } from "./slots/knowledge";
+import { SqliteMemory } from "./slots/memory";
+import { LocalRouter } from "./slots/router";
+import type { AuditSink, Channel, Memory, Router } from "./slots/types";
+
+export { SchemaTooNewError } from "./db";
+export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome } from "./home";
+
+export interface Company {
+  db: CompanyDb;
+  clock: Clock;
+  audit: AuditSink;
+  memory: Memory;
+  knowledge: SqliteKnowledgeStore;
+  router: Router;
+  channels: Record<string, Channel>;
+  close(): void;
+}
+
+function isInside(child: string, parent: string): boolean {
+  let a = resolve(child);
+  let b = resolve(parent);
+  if (process.platform === "win32") {
+    a = a.toLowerCase();
+    b = b.toLowerCase();
+  }
+  const rel = relative(b, a);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** Open the company store at `home` and build every slot on it. */
+export function openCompany(opts: { home: string; repoRoot: string | null; clock?: Clock }): Company {
+  const { home, repoRoot } = opts;
+  if (repoRoot !== null && isInside(home, repoRoot)) {
+    throw new Error(`The company home ${home} is inside the repository ${repoRoot}. Set HQ_COMPANY_HOME to a folder outside it.`);
+  }
+  const clock = opts.clock ?? systemClock;
+  const db = openCompanyDb(join(home, "company.db"));
+  const audit = new SqliteAuditSink(db, clock);
+  const dashboard = new DashboardChannel(db, clock);
+  return {
+    db,
+    clock,
+    audit,
+    memory: new SqliteMemory(db, clock),
+    knowledge: new SqliteKnowledgeStore(db, clock, audit),
+    router: new LocalRouter(),
+    channels: { [dashboard.name]: dashboard },
+    close: () => db.close(),
+  };
+}

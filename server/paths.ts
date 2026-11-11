@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { HQ_DIRNAME } from "./company/home";
 
 export const slugify = (s: string) =>
   s
@@ -11,7 +12,7 @@ export const slugify = (s: string) =>
 
 /** ~/.jsmhq/<project>/ — HQ's per-project home (agent folders, tokens). */
 export function projectHome(projectSlug: string): string {
-  const dir = join(homedir(), ".jsmhq", projectSlug);
+  const dir = join(homedir(), HQ_DIRNAME, projectSlug);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
