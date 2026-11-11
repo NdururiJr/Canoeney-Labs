@@ -41,3 +41,37 @@ export interface AuditSink {
   verify(): AuditVerify;
   query(q?: AuditQuery): AuditEvent[];
 }
+
+export type MemoryScope = { kind: "agent" | "client"; id: string };
+
+export interface MemoryEntry {
+  key: string;
+  value: string;
+  updatedAt: string;
+}
+
+export const MEMORY_VALUE_MAX_BYTES = 65_536;
+
+// Long-term memory per agent or client. set throws RangeError when the value's
+// UTF-8 length exceeds MEMORY_VALUE_MAX_BYTES; list is sorted by key.
+export interface Memory {
+  get(s: MemoryScope, key: string): string | null;
+  set(s: MemoryScope, key: string, value: string): void;
+  delete(s: MemoryScope, key: string): boolean;
+  list(s: MemoryScope): MemoryEntry[];
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  title: string;
+  body: string;
+  version: number;
+  updatedAt: string;
+}
+
+// The agent-facing, read-only view of company knowledge. Writes go through the
+// owner path on the store (SqliteKnowledgeStore.put), never through this.
+export interface Knowledge {
+  get(id: string): KnowledgeDoc | null;
+  list(): Omit<KnowledgeDoc, "body">[];
+}
