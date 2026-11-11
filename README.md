@@ -59,7 +59,7 @@ Use it often? `npm install -g @therealjsmastery/jsm-hq`, then run `jsm-hq` in an
 
 | What | Why |
 | --- | --- |
-| Node.js 20+ | Runs HQ |
+| Node.js 22.13+ | Runs HQ |
 | git and a GitHub repo | Each agent clones it, pushes a branch and opens a PR |
 | GitHub CLI (`gh`) | Reads PRs and reviews |
 | Docker Sandboxes (`sbx`) | Each agent runs in its own VM |
