@@ -43,7 +43,7 @@ test("opens a file store with WAL and foreign keys on", (t) => {
 });
 
 test("an in-memory store reports the memory journal", (t) => {
-  const db = openCompanyDb(":memory:");
+  const db = openCompanyDb(":memory:", []);
   t.after(() => db.close());
   assert.equal(db.prepare("PRAGMA journal_mode").get<{ journal_mode: string }>()?.journal_mode, "memory");
   assert.equal(schemaVersion(db), 0);

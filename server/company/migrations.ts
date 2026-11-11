@@ -1,4 +1,5 @@
 import type { CompanyDb } from "./db";
+import { m001 } from "./schema/001_company";
 
 export interface Migration {
   version: number;
@@ -8,7 +9,7 @@ export interface Migration {
 
 // Migrations are TypeScript modules so the server bundle carries them.
 // A migration is never edited after it merges; add a new one instead.
-export const MIGRATIONS: readonly Migration[] = [];
+export const MIGRATIONS: readonly Migration[] = [m001];
 
 export class SchemaTooNewError extends Error {
   constructor(
