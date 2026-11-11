@@ -39,11 +39,12 @@ hashed but never used for ordering or verification.
 **Secret-key guard.** Before anything is written, `append` throws
 `AuditSecretError` if any key at any depth of `data`, through objects and
 arrays, looks like a secret value. A key is normalised (lower-cased, with `-`,
-`_` and whitespace removed) and refused if it equals `pin` or ends with one of
-`secret`, `token`, `password`, `passwordhash`, `passphrase`, `apikey`,
-`authorization`, `cookie`, `privatekey`, `bearer`, `credential`,
-`credentials`. So `access_token`, `client_secret`, `x-api-key` and
-`AWS_CREDENTIALS` are refused. `token` is singular on purpose: usage keys such
+`_` and whitespace removed) and refused if it ends with one of `secret`,
+`token`, `password`, `passwordhash`, `passphrase`, `apikey`, `authorization`,
+`cookie`, `privatekey`, `privkey`, `bearer`, `credential`, `credentials`,
+`pin`, `pinhash`, `pincode`, `otp`, `totp`, `recoverycode`, `recoverycodes`.
+So `access_token`, `client_secret`, `x-api-key`, `AWS_CREDENTIALS`,
+`approvalPin` and `recovery_codes` are refused. `token` is singular on purpose: usage keys such
 as `inputTokens` and `tokenCount` are allowed, and so are `secretName` and
 `pinned`, because secret names may be logged and secret values may not
 (spec section 4). This guards key names only. It cannot spot a secret placed

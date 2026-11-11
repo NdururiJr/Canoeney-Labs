@@ -13,10 +13,19 @@ export const GENESIS_HASH = "0".repeat(64);
 
 // Key names that look like secret values (spec section 4: a secret value never
 // enters the audit trail). A key is normalised (lower-cased, "-", "_" and
-// whitespace removed) and refused if it is "pin" or ends with one of these
-// words. "token" is singular on purpose, so usage keys such as inputTokens or
-// tokenCount stay allowed, as do names such as secretName.
+// whitespace removed) and refused if it ends with one of these words. "token"
+// is singular on purpose, so usage keys such as inputTokens or tokenCount stay
+// allowed, as do names such as secretName; "pin" refuses approvalPin but not
+// pinned.
 const SECRET_SUFFIXES = [
+  "pin",
+  "pinhash",
+  "pincode",
+  "otp",
+  "totp",
+  "recoverycode",
+  "recoverycodes",
+  "privkey",
   "secret",
   "token",
   "password",
@@ -33,7 +42,7 @@ const SECRET_SUFFIXES = [
 
 function isSecretKey(key: string): boolean {
   const k = key.toLowerCase().replace(/[-_\s]/g, "");
-  return k === "pin" || SECRET_SUFFIXES.some((s) => k.endsWith(s));
+  return SECRET_SUFFIXES.some((s) => k.endsWith(s));
 }
 
 // A lone surrogate (category Cs in unicode mode). String.prototype.isWellFormed

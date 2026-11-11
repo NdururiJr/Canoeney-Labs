@@ -161,7 +161,28 @@ test("refuses secret-shaped keys anywhere in data", (t) => {
 
 test("refuses broader secret-shaped keys", (t) => {
   const { sink } = fresh(t);
-  const bad = ["access_token", "refreshToken", "client_secret", "x-api-key", "password_hash", "Bearer", "privateKey", "AWS_CREDENTIALS", "api key"];
+  const bad = [
+    "access_token",
+    "refreshToken",
+    "client_secret",
+    "x-api-key",
+    "password_hash",
+    "Bearer",
+    "privateKey",
+    "AWS_CREDENTIALS",
+    "api key",
+    "pin",
+    "approvalPin",
+    "owner_pin",
+    "pinHash",
+    "pin_code",
+    "otp",
+    "smsOtp",
+    "TOTP",
+    "recovery_code",
+    "recoveryCodes",
+    "privKey",
+  ];
   for (const key of bad) {
     assert.throws(() => sink.append(ev({ data: { [key]: "x" } })), AuditSecretError, key);
     assert.throws(() => sink.append(ev({ data: { deep: [{ [key]: "x" }] } })), AuditSecretError, key);
