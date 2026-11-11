@@ -115,6 +115,59 @@ test("refuses secret-shaped keys anywhere in data", (t) => {
   assert.equal(sink.head()?.seq, 1);
 });
 
+test("refuses broader secret-shaped keys", (t) => {
+  const { sink } = fresh(t);
+  const bad = ["access_token", "refreshToken", "client_secret", "x-api-key", "password_hash", "Bearer", "privateKey", "AWS_CREDENTIALS", "api key"];
+  for (const key of bad) {
+    assert.throws(() => sink.append(ev({ data: { [key]: "x" } })), AuditSecretError, key);
+    assert.throws(() => sink.append(ev({ data: { deep: [{ [key]: "x" }] } })), AuditSecretError, key);
+  }
+  assert.equal(sink.head(), null);
+  for (const key of ["secretName", "inputTokens", "tokenCount", "pinned", "prevHash"]) {
+    sink.append(ev({ data: { [key]: "ok" } }));
+  }
+  assert.equal(sink.head()?.seq, 5);
+});
+
+test("refuses malformed unicode in actor, action, target or decisionId", (t) => {
+  const { sink } = fresh(t);
+  const bad = "a\uD800b";
+  for (const over of [{ actorId: bad }, { action: bad }, { target: bad }, { decisionId: bad }]) {
+    assert.throws(() => sink.append(ev(over)), TypeError);
+  }
+  assert.equal(sink.head(), null);
+  // well-formed astral characters are fine and verify
+  sink.append(ev({ actorId: "🚀", target: "Wanjirũ" }));
+  assert.equal(sink.verify().ok, true);
+});
+
+test("append joins a caller's transaction and commits with it", (t) => {
+  const { db, sink } = fresh(t);
+  db.transaction(() => {
+    db.prepare("INSERT INTO humans(id, display_name, role, created_at) VALUES ('h1', 'H', 'owner', ?)").run(START);
+    sink.append(ev({ data: { n: 1 } }));
+    sink.append(ev({ data: { n: 2 } }));
+  }, "immediate");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM humans").get<{ n: number }>()?.n, 1);
+  assert.deepEqual(sink.verify().ok && sink.verify(), { ok: true, count: 2, head: sink.head()!.hash });
+});
+
+test("append rolls back with a caller's transaction", (t) => {
+  const { db, sink } = fresh(t);
+  assert.throws(
+    () =>
+      db.transaction(() => {
+        db.prepare("INSERT INTO humans(id, display_name, role, created_at) VALUES ('h1', 'H', 'owner', ?)").run(START);
+        sink.append(ev());
+        throw new Error("boom");
+      }, "immediate"),
+    /boom/,
+  );
+  assert.equal(sink.head(), null);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM humans").get<{ n: number }>()?.n, 0);
+  assert.equal(sink.append(ev()).seq, 1); // still usable afterwards
+});
+
 test("clock going backwards does not break order or verification", (t) => {
   const { sink, clock } = fresh(t);
   sink.append(ev());

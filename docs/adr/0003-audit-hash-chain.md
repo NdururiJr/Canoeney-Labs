@@ -34,11 +34,28 @@ hashed but never used for ordering or verification.
 
 **Secret-key guard.** Before anything is written, `append` throws
 `AuditSecretError` if any key at any depth of `data`, through objects and
-arrays, matches `/^(secret|token|password|passphrase|pin|api[-_]?key|
-authorization|cookie|private[-_]?key)$/i`. Key names such as `secretName` are
-allowed: secret names may be logged, secret values may not (spec section 4).
-This guards key names only. It cannot spot a secret placed under an innocent
-key, so callers still must not log values.
+arrays, looks like a secret value. A key is normalised (lower-cased, with `-`,
+`_` and whitespace removed) and refused if it equals `pin` or ends with one of
+`secret`, `token`, `password`, `passwordhash`, `passphrase`, `apikey`,
+`authorization`, `cookie`, `privatekey`, `bearer`, `credential`,
+`credentials`. So `access_token`, `client_secret`, `x-api-key` and
+`AWS_CREDENTIALS` are refused. `token` is singular on purpose: usage keys such
+as `inputTokens` and `tokenCount` are allowed, and so are `secretName` and
+`pinned`, because secret names may be logged and secret values may not
+(spec section 4). This guards key names only. It cannot spot a secret placed
+under an innocent key, so callers still must not log values.
+
+**Well-formed text.** `actorId`, `action`, `target` and `decisionId` are hashed
+as JS strings but stored as SQLite TEXT, which turns a lone surrogate into
+U+FFFD, so the hash could never be reproduced and `verify()` would break at
+that row for good, hiding later tampering. `append` therefore throws
+`TypeError` for such strings before writing. `data` is safe: `JSON.stringify`
+escapes lone surrogates.
+
+**Transactions.** `append` joins the caller's transaction when one is open
+(`db.inTransaction`), so a business write and its audit event commit or roll
+back together; callers should open it with mode `"immediate"`. Otherwise
+`append` opens its own `BEGIN IMMEDIATE` transaction.
 
 **Verification.** `verify()` walks rows by `seq` ascending and reports the first
 row where `seq` is not the previous seq + 1, `prev_hash` is not the previous

@@ -127,6 +127,22 @@ test("nested transaction throws", (t) => {
   assert.equal(db.transaction(() => 5), 5);
 });
 
+test("inTransaction is true only inside a transaction, and false after a throw", (t) => {
+  const { open } = tmpStore(t);
+  const db = open([m1]);
+  assert.equal(db.inTransaction, false);
+  db.transaction(() => assert.equal(db.inTransaction, true));
+  assert.equal(db.inTransaction, false);
+  assert.throws(
+    () =>
+      db.transaction(() => {
+        throw new Error("boom");
+      }),
+    /boom/,
+  );
+  assert.equal(db.inTransaction, false);
+});
+
 test("opens and reopens a store in a folder with spaces", (t) => {
   const { dir, open } = tmpStore(t);
   assert.ok(dir.includes(" "));

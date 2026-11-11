@@ -11,9 +11,34 @@ import type { ActorKind } from "./types";
 
 export const GENESIS_HASH = "0".repeat(64);
 
-// Key names that look like secret values. Names such as "secretName" are fine:
-// secret names may be logged, secret values may not (spec section 4).
-const SECRET_KEY = /^(secret|token|password|passphrase|pin|api[-_]?key|authorization|cookie|private[-_]?key)$/i;
+// Key names that look like secret values (spec section 4: a secret value never
+// enters the audit trail). A key is normalised (lower-cased, "-", "_" and
+// whitespace removed) and refused if it is "pin" or ends with one of these
+// words. "token" is singular on purpose, so usage keys such as inputTokens or
+// tokenCount stay allowed, as do names such as secretName.
+const SECRET_SUFFIXES = [
+  "secret",
+  "token",
+  "password",
+  "passwordhash",
+  "passphrase",
+  "apikey",
+  "authorization",
+  "cookie",
+  "privatekey",
+  "bearer",
+  "credential",
+  "credentials",
+];
+
+function isSecretKey(key: string): boolean {
+  const k = key.toLowerCase().replace(/[-_\s]/g, "");
+  return k === "pin" || SECRET_SUFFIXES.some((s) => k.endsWith(s));
+}
+
+// A lone surrogate (category Cs in unicode mode). String.prototype.isWellFormed
+// would do, but the ES2022 lib in tsconfig does not declare it.
+const LONE_SURROGATE = /\p{Cs}/u;
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
@@ -59,7 +84,7 @@ function assertNoSecretKeys(value: unknown, seen: Set<object> = new Set()): void
     return;
   }
   for (const [key, v] of Object.entries(value)) {
-    if (SECRET_KEY.test(key)) throw new AuditSecretError(key);
+    if (isSecretKey(key)) throw new AuditSecretError(key);
     assertNoSecretKeys(v, seen);
   }
 }
@@ -101,16 +126,30 @@ export class SqliteAuditSink implements AuditSink {
     private readonly clock: Clock,
   ) {}
 
+  // Callers that open their own transaction so a business write and its audit
+  // event commit together should use mode "immediate": append then joins that
+  // transaction instead of starting one. Without a caller transaction it runs
+  // in its own BEGIN IMMEDIATE transaction.
   append(e: AuditEventInput): AuditEvent {
+    // Refuse before any transaction: nothing is written on refusal. SQLite TEXT
+    // would store a lone surrogate as U+FFFD, and verify could then never
+    // reproduce the hash of that row. (data is safe: JSON escapes surrogates.)
+    for (const [name, v] of [
+      ["actorId", e.actorId],
+      ["action", e.action],
+      ["target", e.target],
+      ["decisionId", e.decisionId],
+    ] as const) {
+      if (typeof v === "string" && LONE_SURROGATE.test(v)) throw new TypeError(`audit ${name} is not well-formed unicode`);
+    }
     const data = e.data ?? {};
-    // Refuse before opening the transaction: nothing is written on refusal.
     assertNoSecretKeys(data);
     const dataJson = canonicalJson(data); // also rejects unsupported values early
     const target = e.target ?? null;
     const decisionId = e.decisionId ?? null;
     const at = this.clock.now().toISOString();
 
-    return this.db.transaction(() => {
+    const write = (): AuditEvent => {
       const last = this.head();
       const seq = last ? last.seq + 1 : 1;
       const prevHash = last ? last.hash : GENESIS_HASH;
@@ -143,7 +182,8 @@ export class SqliteAuditSink implements AuditSink {
         prevHash,
         hash,
       };
-    }, "immediate");
+    };
+    return this.db.inTransaction ? write() : this.db.transaction(write, "immediate");
   }
 
   head(): { seq: number; hash: string } | null {

@@ -17,6 +17,8 @@ export interface Statement {
 
 export interface CompanyDb {
   readonly file: string;
+  /** True while a transaction() call is running on this handle. */
+  readonly inTransaction: boolean;
   exec(sql: string): void;
   prepare(sql: string): Statement;
   transaction<T>(fn: () => T, mode?: "deferred" | "immediate"): T;
@@ -31,6 +33,10 @@ class SqliteCompanyDb implements CompanyDb {
     readonly file: string,
     private readonly raw: DatabaseSync,
   ) {}
+
+  get inTransaction(): boolean {
+    return this.depth > 0;
+  }
 
   exec(sql: string): void {
     this.raw.exec(sql);
