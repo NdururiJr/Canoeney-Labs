@@ -6,7 +6,7 @@ CREATE TABLE channel_outbox(
   channel TEXT NOT NULL,
   recipient_human_id TEXT NOT NULL REFERENCES humans(id),
   decision_id TEXT NULL REFERENCES decisions(id),
-  urgency TEXT NOT NULL,
+  urgency TEXT NOT NULL CHECK (urgency IN ('critical', 'high', 'normal', 'fyi')),
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   link TEXT NULL,

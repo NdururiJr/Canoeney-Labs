@@ -1,5 +1,7 @@
-// Vocabulary of the company store. The SQL CHECK lists and seeds in
-// schema/001_company.ts are built from these arrays, so the two cannot drift.
+// Vocabulary of the company store. The SQL CHECK lists and seeds in the
+// migrations are literals (a merged migration never changes); the tripwire
+// test in schema.test.ts fails if a union here grows beyond its column's
+// CHECK, so widening a union also needs a new migration.
 
 export const ROLE_IDS = [
   "ceo",
