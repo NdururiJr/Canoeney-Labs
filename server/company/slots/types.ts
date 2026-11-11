@@ -1,6 +1,6 @@
 // Interfaces for the pluggable slots of the company core. Each slot has a
 // default implementation elsewhere in server/company/.
-import type { ActorKind } from "../types";
+import type { ActorKind, Urgency } from "../types";
 
 export interface AuditEventInput {
   actorKind: ActorKind;
@@ -74,4 +74,40 @@ export interface KnowledgeDoc {
 export interface Knowledge {
   get(id: string): KnowledgeDoc | null;
   list(): Omit<KnowledgeDoc, "body">[];
+}
+
+// An inbound message from the owner on any channel. text is untrusted input.
+export interface InboundMessage {
+  channel: string;
+  senderRef: string;
+  text: string;
+  receivedAt: string;
+}
+
+export type Route =
+  | { kind: "decision-reply"; code: string }
+  | { kind: "unrouted"; reason: "no-code" | "ambiguous" };
+
+// Finds which decision an inbound message answers. It never interprets the
+// message (yes/no); that is a later step with its own checks.
+export interface Router {
+  route(m: InboundMessage): Route;
+}
+
+export interface OutboundAlert {
+  recipientHumanId: string;
+  decisionId: string | null;
+  urgency: Urgency;
+  title: string;
+  body: string;
+  link: string | null;
+}
+
+// retryable: false means the provider rejected the alert, so the caller falls
+// straight through to the next channel instead of retrying this one.
+export type SendResult = { ok: true; providerRef: string } | { ok: false; error: string; retryable: boolean };
+
+export interface Channel {
+  readonly name: string;
+  send(a: OutboundAlert): Promise<SendResult>;
 }
