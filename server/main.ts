@@ -42,7 +42,6 @@ async function main() {
   const slug = config.project.id;
   // Opened right after the config so a store written by a newer HQ stops startup with its own message.
   const company = openCompany({ home: companyHome(), repoRoot: repo.root });
-  company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });
   const token = agentToken(slug);
   const uiToken = browserToken(slug, dev);
 
@@ -97,6 +96,8 @@ async function main() {
     allowedOrigins: [uiOrigin, `http://127.0.0.1:${uiPort}`, `http://localhost:${port}`, `http://127.0.0.1:${port}`],
     commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp),
   });
+  // Only once HQ is serving: a port already in use must not record a start.
+  company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });
   sessions.startPolling();
   sbx.startApprovalPolling();
   const github = new GitHubSync(hub, planner, repo.github);
