@@ -93,6 +93,7 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
     - Adopted superpowers skills are forked and edited so "your human partner" becomes "your manager, via `send_message`". Anything that needs a person goes through the decision engine, because several of these skills stop and wait for a human answer.
     - Choose **one skill family per concern.** The repo already includes jsm-skills-workflow (debug, plan, review, honest), which overlaps with superpowers. Agents must never hold two procedures for the same job.
     - The starting sets are in §2a.
+
 ### M1: Company layer
 1. **Owner charter (the CEO's rulebook).** A versioned document holding mission, current goals, limits (spending thresholds, autonomy levels per decision area) and standing instructions. **Only the owner can change it**, through the authenticated dashboard. Agents get it read-only through an MCP tool. Every version is kept and every change is audited. It must live **outside any repo or folder an agent can write to or open a PR against**. The current `.jsmhq/config.json` is committed to the managed repo, so it is not a safe home for the charter. **(owner: #7; advisor: mechanism)**
 2. **Owner decision rights, enforced in code.** These always need owner approval **(owner, all eight)**:
@@ -110,7 +111,7 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
 4. **Approval engine.**
    - A decision request carries: category, requester, summary, details, options, the requester's recommendation, cost impact, urgency, deadline, status, decider, channel used, verification method, and links to related audit events.
    - **Urgency → channel (advisor; channels are the owner's):** Critical → WhatsApp **voice call** plus a WhatsApp message with details. High → WhatsApp message. Normal → email. For your information → dashboard only. The owner can remap urgencies to channels in settings.
-   - **HQ sets the urgency, not the agent (review 2).**
+   - **HQ sets the urgency, not the agent (advisor, from review 2).**
      - Urgency is worked out from category, cost and deadline. The urgency an agent asks for is a capped suggestion.
      - **Only Security's emergency-pause request and triggers the owner defines can reach Critical**, and there is a **daily cap on Critical alerts**.
      - Without this, a CEO could mark everything Critical. That would bypass away mode and batching, and four unanswered WhatsApp calls would get calling permission revoked.
@@ -155,7 +156,7 @@ Marking convention: **(owner)** = decided by the owner in conversation. **(advis
    - It has **no `send_message` to builders**, so it can't be used as a relay the CEO could hide behind. Its only output channels are findings to the owner and the CEO.
    - It reads audit text knowing that the text **can itself contain prompt injection**.
    - **It takes its objectives from the charter only.** The CEO can't `delegate` to it, because "focus on X, not Y" would let the CEO steer its own auditor. The CEO may send a labelled, untrusted *request for an investigation*, and that's all.
-   - **Separation of duties (review 2):**
+   - **Separation of duties (advisor, from review 2):**
      - Security & Audit has **read-only company state, no repo access, and no code-review tools.**
      - Reviewing shipped code belongs to a separate Delivery security-reviewer role from M2, which has repo access but **no access to the audit log**.
      - The reviewer's findings land in the audit trail as events, where Security & Audit sees them as data.
@@ -248,11 +249,25 @@ The design's value is that **code** enforces the rules. These are all the ways a
 
 ## 6. Exit gates
 
-**M0 is done when:** the new name and identity are in place; per-agent identity is live, and a test proves that agent A cannot act as agent B; the data model, storage and slots exist with tests; HQ runs on the always-on host and survives a restart without losing agents; owner login and the approval PIN work; the threat model and ADRs are written; and the **owner approves the M0 review**.
+**M0 is done when** every M0 goal is in place:
+- the test harness runs (M0.13), and the new name and identity are in place (M0.1, M0.17);
+- per-agent identity is live, and a test proves that agent A cannot act as agent B (M0.2);
+- the data model, storage and slots exist with tests (M0.3–M0.5);
+- least-privilege GitHub identities, branch protection and Actions hardening are live on the company-website repo (M0.10);
+- company configuration and `plan.json` live in the company store (M0.11–M0.12);
+- role tool sets and the per-command role check work (M0.14);
+- per-role skills are vendored and pinned (M0.18);
+- HQ runs on the always-on host and survives a restart without losing agents (M0.6);
+- the external uptime check and the daily heartbeat work (M0.15);
+- an encrypted backup has been restored in a test (M0.16);
+- owner login, the approval PIN and the dashboard's escaping and CSP work (M0.7);
+- the threat model, with each §6 test traced to a threat, and the ADRs are written (M0.8–M0.9);
+- the owner has run `/security-audit` in full mode on the fork, and each finding is fixed or accepted by the owner (M0.8);
+- and the **owner approves the M0 review**.
 
 **M1 is done when** a **simulated company week** runs on the always-on host, in which:
-- The CEO reads the charter, plans, delegates to the CIO, Security & Audit, and the CTO and builders, runs its scheduled cycles, and delivers a weekly Owner Briefing.
-- **Red-team tests pass, one or more per enforcement surface S1–S8 (§2b).**
+- The CEO reads the charter, plans, delegates to the CIO and the CTO (and through the CTO to the builders), sends at least one investigation request to Security & Audit, runs its scheduled cycles, and delivers a weekly Owner Briefing.
+- **Red-team tests pass, one or more for each enforcement surface built by M1: S1–S10 and S12 (§2b).** S11 has nothing to test until M2 grants a third-party MCP server.
   - **The enforcement tests are deterministic and run at the code level.** For example, a test client holding agent A's credential calls a gated tool, a forged hook for B, or a dashboard command as a Supervisor. An LLM can't be relied on to misbehave on cue, so tests where the live CEO "tries" something are best-effort extras, not the gate.
   - Each of the following must be **blocked and audited**:
     - an edit to the charter by any agent;
@@ -265,8 +280,14 @@ The design's value is that **code** enforces the rules. These are all the ways a
     - the same denied request raised again inside the cooldown;
     - an attempt to pause or silence Security & Audit;
     - a merge by any agent (branch protection);
-    - a paused agent still acting (its credentials must be revoked).
-  - Approved-action execution is shown to be at-most-once across a simulated HQ crash.
+    - a paused agent still acting (its credentials must be revoked);
+    - the CEO giving Security & Audit an objective;
+    - a forged origin label ("[HQ notice] …") inside an agent's message being shown as coming from HQ;
+    - an agent-requested Critical urgency producing a Critical alert, or Critical alerts beyond the daily cap;
+    - a workflow file added on an agent branch running with a write token or any secret (S9);
+    - script or markup in agent-written text running in the dashboard (S10);
+    - a skill whose content doesn't match its pinned hash being installed, or a skill change applied without approval (S12).
+  - Approved-action execution is shown to be at-most-once across a simulated HQ crash, and an action left in "started" reaches the owner as a manual check.
 - The owner receives, and answers, at least one decision request through **each** channel: WhatsApp message, WhatsApp call, Telegram, Discord, Slack, email and dashboard. High-stakes approvals require the PIN.
 - **If WhatsApp is not ready (owner decision):** if Meta verification or the messaging tier is still pending when everything else passes, M1 can exit with **Telegram standing in for WhatsApp**.
   - The Critical and High routes that would use WhatsApp messages go to Telegram instead.
@@ -313,6 +334,7 @@ The design's value is that **code** enforces the rules. These are all the ways a
    - **Approve, grant, resume or relax:** always needs the dashboard plus the PIN, for every gated category and for any change to the Security & Audit agent.
    - **Deny, pause or stop:** allowed from **any** registered channel without the PIN. Abuse of a hijacked channel can then only cause delay, never harm.
    - **Emergency brake:** *pause* works from any channel; *resume* needs the dashboard plus the PIN.
+   - **Supervisors may pause** too (M1.11). Delegating any owner right to a supervisor needs the dashboard plus the PIN.
    - **Channel replies** can settle voluntary CEO escalations, acknowledgements, and denials.
    - The PIN is **never** typed into a channel.
 3. **Voice call: WhatsApp calling is required (owner), and it is an alert only.**
