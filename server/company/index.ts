@@ -1,7 +1,8 @@
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import { SqliteAuditSink } from "./audit";
 import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
+import { isInside } from "./home";
 import { DashboardChannel } from "./slots/dashboardChannel";
 import { SqliteKnowledgeStore } from "./slots/knowledge";
 import { SqliteMemory } from "./slots/memory";
@@ -9,7 +10,7 @@ import { LocalRouter } from "./slots/router";
 import type { AuditSink, Channel, Memory, Router } from "./slots/types";
 
 export { SchemaTooNewError } from "./db";
-export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome } from "./home";
+export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome, isInside } from "./home";
 
 export interface Company {
   db: CompanyDb;
@@ -20,17 +21,6 @@ export interface Company {
   router: Router;
   channels: Record<string, Channel>;
   close(): void;
-}
-
-function isInside(child: string, parent: string): boolean {
-  let a = resolve(child);
-  let b = resolve(parent);
-  if (process.platform === "win32") {
-    a = a.toLowerCase();
-    b = b.toLowerCase();
-  }
-  const rel = relative(b, a);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /** Open the company store at `home` and build every slot on it. */
