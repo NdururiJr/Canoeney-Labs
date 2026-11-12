@@ -180,6 +180,8 @@ export function startHttp(o: Options) {
     socketsBySession.set(session.id, mine);
     // Each socket gets what its role may see (SR-C-09).
     const sendEvent = (e: OfficeEvent) => {
+      // A remote socket gets no terminal output: the page has no terminal there (SR-C-08).
+      if (remote && e.type === "terminal.output") return;
       const v = viewFor(session.role, e);
       if (v && ws.readyState === ws.OPEN) ws.send(JSON.stringify(v));
     };

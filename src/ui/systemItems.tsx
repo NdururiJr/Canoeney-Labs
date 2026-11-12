@@ -73,6 +73,39 @@ export function NeedsYouRow({ before, quote, after }: { before: string; quote?: 
   );
 }
 
+/** The line under an agent's name on its team card: the open question, its task, its note, or "No task". */
+export function CardNote({ needs, task, note, flagged, author }: { needs: boolean; task: { id: string; title: string } | null; note: string | null; flagged?: boolean; author: string }) {
+  if (needs) return <StatusNote note={note ?? ""} flagged={flagged} author={author} className="text-red" />;
+  if (task)
+    return (
+      <>
+        <span className="mr-1 font-term text-[16px] text-muted">{task.id}</span>
+        <AgentText inline author="an agent" text={task.title} />
+      </>
+    );
+  return note ? <StatusNote note={note} flagged={flagged} author={author} /> : <>No task</>;
+}
+
+/** The body of the hover tooltip: HQ's own words, then any agent words in their own span. */
+export function TooltipBody({ title, sub, quote }: { title: string; sub?: string; quote?: { author: string; text: string } }) {
+  return (
+    <>
+      <div className="font-semibold">{title}</div>
+      {(sub || quote) && (
+        <div className="truncate text-[13px] text-muted">
+          {sub}
+          {quote && (
+            <>
+              {sub ? " — " : ""}
+              <AgentText inline author={quote.author} text={quote.text} />
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** An agent's status note: HQ's own note as text; one that holds agent words wholly inside AgentText. */
 export function StatusNote({ note, flagged, author, className = "" }: { note: string; flagged?: boolean; author: string; className?: string }) {
   return flagged ? <AgentText inline author={author} text={note} className={className} /> : <span className={className}>{note}</span>;

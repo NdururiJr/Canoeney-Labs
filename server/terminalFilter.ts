@@ -6,9 +6,18 @@
 // see. Both are removed (an OSC 8 link keeps its visible text). Everything
 // else, colours and cursor moves included, passes unchanged.
 //
-// The filter reads an OSC the way xterm.js does: it may start with ESC ] or
-// the one-byte U+009D, end with BEL, ESC \ or U+009C, and its number is read
-// as a number (so "08" is 8).
+// The filter reads escapes the way xterm.js's parser does
+// (EscapeSequenceParser, OscParser):
+// - an OSC starts with ESC ] or the one-byte U+009D, and C0 controls or DEL
+//   between ESC and ] do not stop it;
+// - inside an OSC, C0 controls are ignored, so they cannot split its number;
+//   the number is read as a number ("08" is 8);
+// - an OSC ends with BEL, U+009C or ESC (ESC \ is the usual form); CAN or SUB
+//   abort it;
+// - ESC followed by another ESC drops the first, so removing a sequence can
+//   never join the bytes around it into a new one.
+// The page also swallows OSC 8 and 52 in xterm itself (TerminalView), so the
+// two layers must both fail for one to get through.
 //
 // Output arrives in chunks, so a sequence cut at the end of one is held until
 // the next. A sequence that never ends is dropped after 64 KiB, never passed
@@ -16,21 +25,64 @@
 
 const ESC = "\x1b";
 const BEL = "\x07";
+const CAN = "\x18";
+const SUB = "\x1a";
+const DEL = "\x7f";
 const OSC_C1 = "\u009d";
 const ST_C1 = "\u009c";
 const HOLD_LIMIT = 64 * 1024;
 const REMOVED = new Set([52, 8]);
 
-/** The index just past the terminator from `from`, or -1 when the input ends first. */
-function terminatorEnd(s: string, from: number): number {
-  for (let i = from; i < s.length; i++) {
-    if (s[i] === BEL || s[i] === ST_C1) return i + 1;
-    if (s[i] === ESC) {
-      if (i + 1 >= s.length) return -1;
-      if (s[i + 1] === "\\") return i + 2;
+/** A C0 control other than ESC, CAN and SUB, or DEL: xterm runs or ignores it without leaving the sequence. */
+const isQuietControl = (ch: string) => (ch < " " && ch !== ESC && ch !== CAN && ch !== SUB) || ch === DEL;
+
+type Scan =
+  | { kind: "incomplete" }
+  /** Emit `text` and continue at `end`. */
+  | { kind: "pass"; text: string; end: number }
+  /** Drop everything up to `end`. */
+  | { kind: "remove"; end: number };
+
+/** Reads one OSC whose number starts at `from`. `at` is where its introducer started. */
+function scanOsc(s: string, at: number, from: number): Scan {
+  let digits = "";
+  let valid = true;
+  let inNumber = true;
+  for (let k = from; k < s.length; k++) {
+    const ch = s[k];
+    let end = -1;
+    if (ch === BEL || ch === ST_C1 || ch === CAN || ch === SUB) end = k + 1;
+    else if (ch === ESC) {
+      if (k + 1 >= s.length) return { kind: "incomplete" };
+      // ESC \ ends it; any other ESC ends it too and starts the next escape.
+      end = s[k + 1] === "\\" ? k + 2 : k;
     }
+    if (end >= 0) {
+      const id = valid && digits ? Number(digits) : NaN;
+      return REMOVED.has(id) ? { kind: "remove", end } : { kind: "pass", text: s.slice(at, end), end };
+    }
+    if (!inNumber || isQuietControl(ch)) continue;
+    if (ch === ";") inNumber = false;
+    else if (ch >= "0" && ch <= "9") digits += ch;
+    else valid = false; // not a number xterm would act on
   }
-  return -1;
+  return { kind: "incomplete" };
+}
+
+/** Reads the escape that starts at `at` (an ESC or U+009D). */
+function scanEscape(s: string, at: number): Scan {
+  if (s[at] === OSC_C1) return scanOsc(s, at, at + 1);
+  for (let j = at + 1; j < s.length; j++) {
+    const ch = s[j];
+    // A second ESC: xterm drops the first one. The controls in between still run.
+    if (ch === ESC) return { kind: "pass", text: s.slice(at + 1, j), end: j };
+    if (ch === CAN || ch === SUB) return { kind: "pass", text: s.slice(at, j + 1), end: j + 1 };
+    if (isQuietControl(ch)) continue;
+    if (ch === "]") return scanOsc(s, at, j + 1);
+    // Any other escape (CSI and the rest): its first character after ESC goes out with it.
+    return { kind: "pass", text: s.slice(at, j + 1), end: j + 1 };
+  }
+  return { kind: "incomplete" };
 }
 
 export class TerminalFilter {
@@ -42,47 +94,23 @@ export class TerminalFilter {
     let out = "";
     let i = 0;
     while (i < s.length) {
-      // The next place an OSC could start.
-      let at = -1;
-      for (let j = i; j < s.length; j++) {
-        if (s[j] === ESC || s[j] === OSC_C1) {
-          at = j;
-          break;
-        }
-      }
-      if (at < 0) return out + s.slice(i);
+      let at = i;
+      while (at < s.length && s[at] !== ESC && s[at] !== OSC_C1) at++;
       out += s.slice(i, at);
-      let body: number; // where the OSC number starts
-      if (s[at] === OSC_C1) body = at + 1;
-      else {
-        // Not enough input to tell what follows the ESC.
-        if (at + 1 >= s.length) return out + this.hold(s.slice(at));
-        if (s[at + 1] !== "]") {
-          out += ESC;
-          i = at + 1;
-          continue;
-        }
-        body = at + 2;
+      if (at >= s.length) break;
+      const r = scanEscape(s, at);
+      if (r.kind === "incomplete") {
+        this.hold(s.slice(at));
+        break;
       }
-      let k = body;
-      while (k < s.length && s[k] >= "0" && s[k] <= "9") k++;
-      if (k >= s.length) return out + this.hold(s.slice(at));
-      const code = k > body ? Number(s.slice(body, k)) : NaN;
-      if (!REMOVED.has(code) || s[k] !== ";") {
-        out += s.slice(at, k);
-        i = k;
-        continue;
-      }
-      const end = terminatorEnd(s, k + 1);
-      if (end < 0) return out + this.hold(s.slice(at));
-      i = end; // removed
+      if (r.kind === "pass") out += r.text;
+      i = r.end;
     }
     return out;
   }
 
   /** Keeps an unfinished sequence for the next chunk; one too long to be honest is dropped. */
-  private hold(rest: string): string {
+  private hold(rest: string): void {
     this.carry = rest.length > HOLD_LIMIT ? "" : rest;
-    return "";
   }
 }

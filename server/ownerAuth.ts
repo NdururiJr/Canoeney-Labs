@@ -57,6 +57,7 @@ export const OWNER_ID = "owner";
 const MINUTE = 60_000;
 const ENROLL_TTL_MS = 10 * MINUTE;
 const BODY_LIMIT = 4 * 1024;
+const BODY_DEADLINE_MS = 10_000;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const WRONG = { error: "wrong password or code" };
 const LOCKED = { error: "too many attempts; try again later" };
@@ -222,7 +223,10 @@ export class OwnerAuth {
     const source = this.sourceOf(req);
     // One login or enrollment step at a time per source, so a burst cannot get
     // past the lock before the earlier failures are counted.
-    return this.serial(source, () => this.step(req, res, path, source));
+    // The body is read before joining the queue, within a deadline: a request that never
+    // finishes sending cannot hold up the next login from the same source.
+    const body = await this.body(req);
+    return this.serial(source, () => this.step(res, path, source, body, req));
   }
 
   private sourceQueues = new Map<string, Promise<void>>();
@@ -241,9 +245,8 @@ export class OwnerAuth {
     return run;
   }
 
-  private async step(req: IncomingMessage, res: ServerResponse, path: string, source: string): Promise<void> {
+  private async step(res: ServerResponse, path: string, source: string, body: Record<string, unknown>, req: IncomingMessage): Promise<void> {
     if (this.isLocked(source)) throw new HttpError(429, LOCKED);
-    const body = await this.body(req);
 
     if (path === "/auth/login") {
       const r = await this.accounts.verifyLogin(String(body.account ?? OWNER_ID), String(body.password ?? ""), String(body.code ?? ""));
@@ -299,10 +302,11 @@ export class OwnerAuth {
     const raw = randomBytes(32).toString("base64url");
     const now = this.now();
     const s: DashboardSession = { id: sha256(raw), humanId, role, remote: this.isRemote(req), createdAt: now, lastSeenAt: now };
+    // The row first: a login that cannot be recorded gets no session and no cookie.
+    this.audit.append({ actorKind: "human", actorId: humanId, action: "auth.login", data: { remote: s.remote } });
     this.sessions.set(s.id, s);
     const https = (req.socket as { encrypted?: boolean }).encrypted === true || (isLoopback(req.socket.remoteAddress) && req.headers["x-forwarded-proto"] === "https");
     res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${raw}; HttpOnly; SameSite=Strict; Path=/${https ? "; Secure" : ""}`);
-    this.audit.append({ actorKind: "human", actorId: humanId, action: "auth.login", data: { remote: s.remote } });
     this.json(res, 200, { humanId, role, remote: s.remote });
   }
 
@@ -412,6 +416,11 @@ export class OwnerAuth {
 
   private body(req: IncomingMessage): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new HttpError(408, { error: "too slow" }));
+        req.destroy();
+      }, BODY_DEADLINE_MS);
+      timer.unref();
       let size = 0;
       const chunks: Buffer[] = [];
       req.on("data", (c: Buffer) => {
@@ -420,6 +429,7 @@ export class OwnerAuth {
         else chunks.push(c);
       });
       req.on("end", () => {
+        clearTimeout(timer);
         try {
           const v: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
           resolve(v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
@@ -427,7 +437,10 @@ export class OwnerAuth {
           reject(new HttpError(400, { error: "bad request" }));
         }
       });
-      req.on("error", reject);
+      req.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
     });
   }
 

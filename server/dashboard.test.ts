@@ -341,3 +341,17 @@ test("dispatch never throws: a failing PIN check is a refusal, and a PIN rule th
   assert.deepEqual(await throwingRule.dispatch(ctx, { cmd: "y", args: [] }), { ok: false, error: "pin-required" });
   assert.equal(ran, 0);
 });
+
+test("a remote socket receives no terminal output, and a supervisor no host path", async (t) => {
+  const d = await makeDashboardHq(t);
+  const remote = await d.connect("owner", { "x-forwarded-for": "100.64.0.7" });
+  const sup = await d.connect("supervisor");
+  d.hq.hub.terminal("ana", "secret screen");
+  d.hq.hub.emit({ type: "config.updated", config: d.hq.hub.snap.config });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(!remote.frames.some((f) => f.type === "terminal.output"));
+  const supText = JSON.stringify(sup.frames);
+  // JSON doubles each backslash of a Windows path.
+  const inJson = JSON.stringify(d.hq.repoRoot).slice(1, -1);
+  assert.ok(!supText.includes(inJson) && !supText.includes("hqPort"), "a supervisor received the repo path or HQ port");
+});

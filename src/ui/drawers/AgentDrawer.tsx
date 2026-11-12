@@ -157,7 +157,7 @@ function BlockedRequests({ agent }: { agent: AgentConfig }) {
         {shown.map((a) => (
           <li key={a.id} className="flex items-center gap-2 py-0.5">
             <span className="min-w-0 flex-1 truncate font-term text-[16px]" title={`${a.title ?? a.host} — ${a.detail}`}>
-              {a.title ?? a.host}
+              <AgentText inline author={agent.name} text={a.title ?? a.host} />
             </span>
             <button className="btn px-1.5 text-[11px]" disabled={busy} onClick={() => act(a.id, "allow")}>
               Allow
@@ -320,7 +320,7 @@ function TaskTab({ snap, agent, taskId }: { snap: OfficeSnapshot; agent: AgentCo
           {task.description && <AgentMarkdown author="an agent" source={task.description} className="mt-1 text-[14px]" />}
           {!!task.files?.length && (
             <div className="mt-1 text-[13px]">
-              Files: {task.files.map((f) => <code key={f} className="mr-1 bg-cream-2 px-1 font-term text-[15px]">{f}</code>)}
+              Files: {task.files.map((f) => <code key={f} className="mr-1 bg-cream-2 px-1 font-term text-[15px]"><AgentText inline author="an agent" text={f} /></code>)}
             </div>
           )}
           {task.doneWhen && <div className="mt-1 text-[13px]"><b>Done when:</b> <AgentText inline author="an agent" text={task.doneWhen} /></div>}

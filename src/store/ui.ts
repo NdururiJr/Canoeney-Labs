@@ -23,6 +23,8 @@ export type FocusTarget =
 export interface HoverInfo {
   title: string;
   sub?: string;
+  /** Words an agent wrote (a task title, a flagged note), shown labelled (SR-C-13). */
+  quote?: { author: string; text: string };
   x: number;
   y: number;
 }

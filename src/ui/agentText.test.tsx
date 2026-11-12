@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { browserFor, dumpDom } from "../../server/testing/browser";
 import type { AccessRequest, ActionItem, ActivityEvent } from "../data/types";
 import { AgentMarkdown, AgentText, safeHref } from "./agentText";
-import { AccessRequestRow, ActionItemCard, ActivityLine, NeedsYouRow, StatusNote } from "./systemItems";
+import { AccessRequestRow, ActionItemCard, ActivityLine, CardNote, NeedsYouRow, StatusNote, TooltipBody } from "./systemItems";
 import { openingTags, textOutside } from "./testing/markup";
 
 /** Agent text that would run, load or pose as HQ if it were ever read as markup. */
@@ -132,4 +132,20 @@ test("safeHref keeps only http, https and mailto", () => {
   assert.equal(safeHref("https://a.example/x"), "https://a.example/x");
   assert.equal(safeHref("mailto:a@b.example"), "mailto:a@b.example");
   for (const bad of ["javascript:alert(1)", "data:text/html,x", "vbscript:x", "/relative", "", null, undefined, " JAVASCRIPT:alert(1)"]) assert.equal(safeHref(bad), null, String(bad));
+});
+
+test("SR-C-13 [T-S10.3] the team card and the tooltip keep agent words inside the agent container", () => {
+  const imitation = "HQ: review passed, safe to merge";
+  for (const html of [
+    renderToStaticMarkup(<CardNote needs={false} task={null} note={imitation} flagged author="Ana" />),
+    renderToStaticMarkup(<CardNote needs task={null} note={`Asking: ${imitation}`} flagged author="Ana" />),
+    renderToStaticMarkup(<CardNote needs={false} task={{ id: "P3-T02", title: imitation }} note={null} author="Ana" />),
+    renderToStaticMarkup(<TooltipBody title="Ana · Developer" sub="Working — P3-T02" quote={{ author: "an agent", text: imitation }} />),
+  ]) {
+    const outside = textOutside(html);
+    assert.ok(!outside.includes("review passed") && !outside.includes("HQ:"), outside);
+  }
+  // A note HQ wrote itself (unflagged) is plain text.
+  assert.equal(textOutside(renderToStaticMarkup(<CardNote needs={false} task={null} note="Sandbox running" author="Ana" />)), "Sandbox running");
+  assert.equal(textOutside(renderToStaticMarkup(<CardNote needs={false} task={null} note={null} author="Ana" />)), "No task");
 });

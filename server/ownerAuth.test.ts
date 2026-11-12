@@ -234,3 +234,33 @@ test("enrollment is confirmed only with the token from its own start, within ten
   assert.equal((await post(hq, "/auth/enroll/confirm", { code: code(), enrollToken: start.json?.enrollToken })).status, 401);
   assert.equal(hq.company.humans.hasOwner(), false);
 });
+
+test("a login whose audit row cannot be written gets no session", async (t) => {
+  const hq = await makeHq(t);
+  await hq.enroll();
+  const real = hq.company.audit.append.bind(hq.company.audit);
+  hq.company.audit.append = (e) => {
+    if (e.action === "auth.login") throw new Error("store busy");
+    return real(e);
+  };
+  const r = await hq.login();
+  assert.equal(r.status, 401);
+  assert.equal(r.cookie, null);
+  assert.equal(r.setCookie, null);
+});
+
+test("a login body that never finishes does not hold up the next login from the same source", async (t) => {
+  const hq = await makeHq(t);
+  await hq.enroll();
+  const { connect } = await import("node:net");
+  const port = Number(new URL(hq.url).port);
+  const stalled = connect(port, "127.0.0.1", () =>
+    stalled.write(`POST /auth/login HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: ${ORIGIN}\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{"acc`),
+  );
+  t.after(() => stalled.destroy());
+  await new Promise((r) => setTimeout(r, 200));
+  const started = Date.now();
+  const r = await hq.login();
+  assert.equal(r.status, 200);
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});

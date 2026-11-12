@@ -58,3 +58,53 @@ test("SR-C-14 [T-S10.5] an OSC number with leading zeros, or the one-byte OSC in
     for (let cut = 1; cut < seq.length; cut++) assert.equal(all([`x${seq.slice(0, cut)}`, `${seq.slice(cut)}y`]), "xOpen PRy");
   }
 });
+
+// The real parser the page uses: does an OSC 8 or OSC 52 still reach it after the filter?
+async function reachesXterm(chunks: string[]): Promise<boolean> {
+  const { Terminal } = await import("@xterm/headless");
+  const term = new Terminal({ allowProposedApi: true });
+  let hit = false;
+  term.parser.registerOscHandler(8, () => ((hit = true), true));
+  term.parser.registerOscHandler(52, () => ((hit = true), true));
+  const f = new TerminalFilter();
+  for (const c of chunks) await new Promise<void>((r) => term.write(f.push(c), r));
+  term.dispose();
+  return hit;
+}
+
+test("SR-C-14 [T-S10.5] xterm's own parser sees no OSC 8 or 52 after the filter", async () => {
+  const cases: string[][] = [
+    [`${ESC}\x00]8;;https://evil.example${BEL}Open${ESC}]8;;${BEL}`],
+    [`${ESC}\x7f]8;;https://evil.example${BEL}`],
+    [`${ESC}\n]8;;https://evil.example${BEL}`],
+    [`${ESC}]8\x01;;https://evil.example${BEL}`],
+    [`${ESC}]\x008;;https://evil.example${BEL}`],
+    [`${ESC}]5\x002;c;YQ==${BEL}`],
+    [`\u009d\x008;;https://evil.example${BEL}`],
+    [`${ESC}${ESC}]8;;a${BEL}]8;;https://evil.example${BEL}`],
+    [ESC, `${ESC}]8;;a${BEL}`, `]8;;https://evil.example${BEL}`],
+    [`${ESC}]08;;https://evil.example${BEL}`],
+  ];
+  for (const c of cases) assert.equal(await reachesXterm(c), false, JSON.stringify(c));
+  // Every C0 control and DEL at every position of both sequences.
+  for (const seq of [`${ESC}]8;;https://evil.example${BEL}`, `${ESC}]52;c;YQ==${BEL}`]) {
+    for (let code = 0; code < 0x20; code++) {
+      for (const ch of [String.fromCharCode(code), "\x7f"]) {
+        for (let at = 1; at < seq.length; at++) {
+          const input = seq.slice(0, at) + ch + seq.slice(at);
+          assert.equal(await reachesXterm([input]), false, JSON.stringify(input));
+        }
+      }
+    }
+  }
+});
+
+test("the control check is real: without the filter, xterm does see OSC 8", async () => {
+  const { Terminal } = await import("@xterm/headless");
+  const term = new Terminal({ allowProposedApi: true });
+  let hit = false;
+  term.parser.registerOscHandler(8, () => ((hit = true), true));
+  await new Promise<void>((r) => term.write(`${ESC}\x00]8;;https://evil.example${BEL}`, r));
+  term.dispose();
+  assert.equal(hit, true);
+});

@@ -49,6 +49,10 @@ Anything else is **remote**, and a remote session may not use the host shell, th
 - **The source:** the socket address, or for a loopback socket, the **last** `X-Forwarded-For` address (the one the proxy on this host added) when `net.isIP` accepts it. The client's own addresses are never used, and the header text is never written.
 - **Audit:** failures are audited once per source and minute, with a count. The password and code are never recorded.
 - **PIN:** five wrong PINs lock the PIN step for that human for 15 minutes.
+- **One at a time:** login and enrollment steps from one source, and PIN checks for one human, run one after another, so a burst cannot get past a lock before the earlier failures count. A request body must arrive within 10 seconds, and is read before joining the queue.
+- **Locks live in memory:** restarting HQ clears them.
+- **Agents may share the owner's local source:** a sandbox reaches HQ through the proxy on this host, so its requests may arrive from loopback like the owner's browser. An agent could then keep local login locked with five bad attempts every 15 minutes, until HQ restarts. Separate listeners (SR-G-01, M0-G) close this.
+- **Before login, the audit actor is `hq/auth`.** `audit_events` allows the actor kinds `agent`, `human` and `hq`. The plan's `{ kind: "anonymous" }` would need a migration of that check; the rows name the source instead.
 
 ### The PIN travels with its command (SR-C-05)
 

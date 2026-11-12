@@ -198,7 +198,10 @@ function teamForSupervisor(team: AgentConfig[]): Partial<AgentConfig>[] {
 }
 
 function configForSupervisor(c: HqConfig): Partial<HqConfig> {
-  return { project: c.project, team: teamForSupervisor(c.team) as AgentConfig[] };
+  // A keep-list here too: the project's host path and HQ port are not a supervisor's business.
+  const p = c.project;
+  const project = { id: p.id, name: p.name, repo: p.repo, ...(p.officeName ? { officeName: p.officeName } : {}) };
+  return { project: project as HqConfig["project"], team: teamForSupervisor(c.team) as AgentConfig[] };
 }
 
 /** An agent's status without the host folder its session runs in. */
