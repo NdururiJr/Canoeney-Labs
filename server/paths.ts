@@ -30,16 +30,11 @@ export function managedWorkspace(projectSlug: string, agentId: string): string {
 export const sessionName = (projectSlug: string, agentId: string) => `hq-${projectSlug}-${agentId}`;
 
 /**
- * Agent token: what hooks and the Team MCP send. Stable per project so agent
- * sessions that outlive an HQ restart keep working. Stored 0600 in HQ's home.
+ * Before M0-B every agent of a project shared one token, kept here. Each agent
+ * now has its own secret (server/company/agentSecrets.ts); HQ removes the old
+ * file at startup.
  */
-export function agentToken(projectSlug: string): string {
-  const file = join(projectHome(projectSlug), "agent-token");
-  if (existsSync(file)) return readFileSync(file, "utf8").trim();
-  const tok = randomBytes(24).toString("hex");
-  writeFileSync(file, tok, { mode: 0o600 });
-  return tok;
-}
+export const legacyAgentTokenFile = (projectSlug: string): string => join(projectHome(projectSlug), "agent-token");
 
 /**
  * Browser token, required by the UI's WebSocket. New on every start — except in

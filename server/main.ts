@@ -4,11 +4,12 @@
 //
 // --dev: the UI is served by Vite (pnpm dev:hq); HQ prints/opens the Vite URL.
 
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeCommands } from "./commands";
 import { companyHome, openCompany } from "./company";
+import { AgentAuth } from "./agentAuth";
 import { startHttp } from "./http";
 import { Hub } from "./hub";
 import { GitHubSync } from "./githubSync";
@@ -20,7 +21,7 @@ import { SbxMcp } from "./sbxMcp";
 import { run } from "./lib/exec";
 import { log } from "./lib/log";
 import { ensurePtyHelperExecutable } from "./lib/ptyFix";
-import { agentToken, browserToken } from "./paths";
+import { browserToken, legacyAgentTokenFile } from "./paths";
 import { detectRepo } from "./repo";
 import { Sessions } from "./sessions";
 import { runSetupChecks } from "./setup";
@@ -42,7 +43,8 @@ async function main() {
   const slug = config.project.id;
   // Opened right after the config so a store written by a newer HQ stops startup with its own message.
   const company = openCompany({ home: companyHome(), repoRoot: repo.root });
-  const token = agentToken(slug);
+  // The shared agent token from before M0-B is not used any more.
+  rmSync(legacyAgentTokenFile(slug), { force: true });
   const uiToken = browserToken(slug, dev);
 
   log.info(`repo   ${repo.root}${repo.github ? `  (github.com/${repo.github})` : ""}`);
@@ -53,7 +55,7 @@ async function main() {
 
   const hub = new Hub(repo, slug, config, loadPlan(repo.root), setup);
   hub.snap.welcome = isNew;
-  const sessions = new Sessions(hub, token);
+  const sessions = new Sessions(hub, "");
   const inbox = new Inbox(hub, { type: (id, text) => sessions.typeInto(id, text), enter: (id) => sessions.pressEnter(id) });
   sessions.onSessionDown = (id) => inbox.sessionDown(id);
   sessions.onSessionReattached = (id) => inbox.sessionReattached(id);
@@ -91,7 +93,8 @@ async function main() {
     planner,
     port,
     browserToken: uiToken,
-    agentToken: token,
+    agentAuth: new AgentAuth({ projectSlug: slug, company, hub }),
+    company,
     distDir: dev ? null : distDir,
     allowedOrigins: [uiOrigin, `http://127.0.0.1:${uiPort}`, `http://localhost:${port}`, `http://127.0.0.1:${port}`],
     commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp),

@@ -1,6 +1,7 @@
 // 127.0.0.1 only. Routes:
 //   GET  /ws?token=…            browser WebSocket (browser token)
-//   POST /hook/<agent>/<event>  Claude Code hooks (agent token)
+//   POST /hook/<agent>/<event>  Claude Code hooks (the agent's own secret)
+//   POST /mcp                   the Team MCP (the agent's own secret)
 //   GET  /api/health
 //   GET  /*                     the built UI (dist/), when present
 
@@ -10,6 +11,8 @@ import { extname, join, normalize } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { OfficeEvent } from "../src/data/source";
+import type { AgentAuth, CheckResult } from "./agentAuth";
+import type { Company } from "./company";
 import { handleHook } from "./hooks";
 import type { Hub } from "./hub";
 import type { Inbox } from "./inbox";
@@ -48,7 +51,9 @@ interface Options {
   planner: Planner;
   port: number;
   browserToken: string;
-  agentToken: string;
+  /** Resolves /mcp and /hook callers from their own secret (M0-B). */
+  agentAuth: AgentAuth;
+  company: Company;
   distDir: string | null;
   allowedOrigins: string[];
   commands: Record<string, (...args: unknown[]) => unknown>;
@@ -59,17 +64,27 @@ export function startHttp(o: Options) {
     res.writeHead(code, { "Content-Type": type });
     res.end(body);
   };
+  // Every refusal looks the same, whatever failed (SR-B-04).
+  const refuse = (res: ServerResponse, r: Extract<CheckResult, { ok: false }>) =>
+    send(res, r.status, r.status === 401 ? "unauthorized" : "too many requests");
+  const decode = (s: string) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  };
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
     if (req.method === "POST" && url.pathname.startsWith("/hook/")) {
-      const auth = req.headers.authorization ?? "";
-      if (!safeEqual(auth, `Bearer ${o.agentToken}`)) return send(res, 401, "unauthorized");
-      const [, , agentId, event] = url.pathname.split("/");
+      const [, , claimed, event] = url.pathname.split("/");
+      const who = o.agentAuth.check(req, "hook", decode(claimed ?? ""));
+      if (!who.ok) return refuse(res, who);
       try {
         const body = await readBody(req);
-        const r = handleHook(o.hub, o.inbox, decodeURIComponent(agentId ?? ""), event ?? "", body ? JSON.parse(body) : {});
+        const r = handleHook(o.hub, o.inbox, who.agent.agentId, event ?? "", body ? JSON.parse(body) : {});
         if (!r.ok) return send(res, 404, "");
         if (r.response) return send(res, 200, JSON.stringify(r.response), "application/json");
         res.writeHead(204);
@@ -79,15 +94,16 @@ export function startHttp(o: Options) {
       }
     }
 
-    // Team MCP: agent token + the agent's id (written into its MCP config by HQ).
+    // Team MCP: the agent is whoever its secret says. An X-HQ-Agent header (sent
+    // by agents started before M0-B) is only a claim that must match.
     if (url.pathname === "/mcp") {
-      const auth = req.headers.authorization ?? "";
-      const agentId = String(req.headers["x-hq-agent"] ?? "");
-      if (!safeEqual(auth, `Bearer ${o.agentToken}`) || !o.hub.cfg(agentId)) return send(res, 401, "unauthorized");
+      const header = req.headers["x-hq-agent"];
+      const who = o.agentAuth.check(req, "mcp", header === undefined ? null : String(header));
+      if (!who.ok) return refuse(res, who);
       if (req.method === "GET" || req.method === "DELETE") return send(res, 405, "stateless server");
       try {
         const raw = await readBody(req, 1024 * 1024);
-        return await handleMcp(o.hub, o.planner, agentId, req, res, raw ? JSON.parse(raw) : undefined);
+        return await handleMcp(o.hub, o.planner, who.agent.agentId, req, res, raw ? JSON.parse(raw) : undefined);
       } catch {
         return res.headersSent ? void res.end() : send(res, 400, "bad request");
       }
