@@ -78,7 +78,7 @@ async function main() {
   };
   void sbx.refresh();
   void mcp.refresh();
-  const planner = new Planner(hub, inbox);
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug)?.agentId ?? null);
   planner.actions = new ActionItems(hub, planner);
 
   const root = dirname(dirname(fileURLToPath(import.meta.url)));

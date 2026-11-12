@@ -70,7 +70,7 @@ async function answer(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, d
   if (decision === "deny") {
     settle(req, "denied");
     hub.activity("config", req.agentId, `You denied ${who} access to ${req.domain}`);
-    planner.notify(req.agentId, `The user denied access to ${req.domain}. Continue without it. If you can't, say why in your reply${hub.cfg(req.agentId)?.isLead ? "" : " and call set_my_status blocked with the reason"}.`);
+    planner.notify(req.agentId, `The user denied access to ${req.domain}. Continue without it. If you can't, say why in your reply${req.agentId === planner.ctoId() ? "" : " and call set_my_status blocked with the reason"}.`);
     return;
   }
 

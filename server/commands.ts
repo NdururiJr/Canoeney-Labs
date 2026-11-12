@@ -91,7 +91,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       agent.cli = input.cli === "codex" ? "codex" : "claude";
       agent.model = str(input.model, 60).trim();
       agent.mode = input.mode === "local" ? "local" : "sandbox";
-      const lead = team().find((a) => a.isLead);
+      const lead = hub.cfg(planner.ctoId() ?? "");
       if (lead) agent.sandbox = structuredClone(lead.sandbox);
       team().push(agent);
       const status = Hub.freshStatus(id);
@@ -128,7 +128,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
 
     removeAgent: async (id, opts) => {
       const agent = hub.cfg(str(id));
-      if (!agent || agent.isLead) return;
+      if (!agent || agent.id === planner.ctoId()) return;
       const o = (opts ?? {}) as Partial<RemoveAgentOptions>;
       const removed = await sessions.removeResources(agent.id, { deleteSandbox: o.deleteSandbox !== false, deleteFolder: o.deleteFolder === true });
       hub.snap.config.team = team().filter((a) => a.id !== agent.id);
@@ -289,10 +289,10 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       Object.assign(wf.deploy, p.deploy ?? {});
       hub.configChanged();
       // The lead was told the old rule; tell it the new one now, so no restart is needed.
-      const lead = hub.snap.config.team.find((a) => a.isLead);
-      if (lead && wf.merge.by !== mergeBy) {
+      const leadId = planner.ctoId();
+      if (leadId && wf.merge.by !== mergeBy) {
         const waiting = hub.snap.pullRequests.filter((pr) => pr.review === "passed" && !pr.merged && !pr.closed).map((pr) => pr.number);
-        planner.notify(lead.id, mergeByNotice(wf.merge.by, waiting));
+        planner.notify(leadId, mergeByNotice(wf.merge.by, waiting));
       }
     },
 

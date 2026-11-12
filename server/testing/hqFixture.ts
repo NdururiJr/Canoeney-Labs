@@ -55,7 +55,7 @@ export async function makeHq(t: TestContext, opts: { team?: AgentConfig[]; limit
 
   const hub = new Hub(repo, slug, config, loadPlan(repoRoot), { checks: [], checkedAt: FIXTURE_START } as never);
   const inbox = new Inbox(hub, { type: async () => false, enter: async () => false });
-  const planner = new Planner(hub, inbox);
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug)?.agentId ?? null);
   const auth = new AgentAuth({ projectSlug: slug, company, hub, limits: opts.limits });
   const server = await startHttp({
     hub,

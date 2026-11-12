@@ -24,7 +24,17 @@ export class Planner {
   /** Set by main: the user's action items (Team MCP `ask_user`). */
   actions: ActionItems | null = null;
 
-  constructor(private hub: Hub, private inbox: Inbox) {}
+  /**
+   * `ctoLookup` answers "who is the CTO" from the company store (M0-B). It is
+   * the only answer: `isLead` in the repo config routes and grants nothing.
+   */
+  constructor(private hub: Hub, private inbox: Inbox, private ctoLookup: () => string | null) {}
+
+  /** The project's CTO (the agent HQ calls "the lead"), or null. */
+  ctoId(): string | null {
+    const id = this.ctoLookup();
+    return id && this.hub.cfg(id) ? id : null;
+  }
 
   private get snap() {
     return this.hub.snap;
@@ -34,11 +44,11 @@ export class Planner {
     return this.snap.tasks.find((t) => t.id.toLowerCase() === id.trim().toLowerCase());
   }
 
-  /** An agent by id or (case-insensitive) name; "lead" means the lead. */
+  /** An agent by id or (case-insensitive) name; "lead" means the CTO. */
   agentId(ref: string): string | null {
     const r = ref.trim().toLowerCase();
     const team = this.snap.config.team;
-    if (r === "lead") return team.find((a) => a.isLead)?.id ?? null;
+    if (r === "lead") return this.ctoId();
     return team.find((a) => a.id === r || a.name.toLowerCase() === r)?.id ?? null;
   }
 
@@ -137,9 +147,9 @@ export class Planner {
     const words = { "in-progress": "started", blocked: "is blocked on", "in-review": "sent for review", done: "finished" }[status];
     this.hub.activity(status === "blocked" ? "agent.needs-input" : "task.started", agentId, `${name} ${words} ${task.id}${note ? `: ${note}` : ""}`);
     // Let the lead know when work is blocked or ready for review.
-    const lead = this.snap.config.team.find((a) => a.isLead);
-    if (lead && lead.id !== agentId && (status === "blocked" || status === "in-review" || status === "done"))
-      this.message(agentId, lead.id, `${task.id} ${words}${note ? `: ${note}` : ""}${prNumber ? ` (PR #${prNumber})` : ""}`);
+    const leadId = this.ctoId();
+    if (leadId && leadId !== agentId && (status === "blocked" || status === "in-review" || status === "done"))
+      this.message(agentId, leadId, `${task.id} ${words}${note ? `: ${note}` : ""}${prNumber ? ` (PR #${prNumber})` : ""}`);
     return task;
   }
 

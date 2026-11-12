@@ -1,6 +1,7 @@
 // The HQ Team MCP. Agents connect over Streamable HTTP (stateless) at /mcp,
-// identified by the agent token + X-HQ-Agent header that HQ writes into their
-// .mcp.json. The lead manages the plan; everyone can message everyone.
+// identified by their own secret (server/agentAuth.ts). What an agent may call
+// comes from its role in the company store (spec §2a; ADR 0005), read on every
+// request, and every call writes one audit row before it acts.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -8,6 +9,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import type { Hub } from "./hub";
 import { requestAccess } from "./access";
+import type { Company } from "./company";
+import type { RegisteredAgent } from "./company/agents";
+import { isHqTool, MESSAGE_TO, recordArgs, roleHas, targetOf, type HqTool } from "./company/roleTools";
 import type { Planner } from "./planner";
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -15,49 +19,90 @@ type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (value: unknown): Result => ({ content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] });
 const fail = (msg: string): Result => ({ content: [{ type: "text", text: msg }], isError: true });
 
-/** Wraps a tool body: thrown errors become tool errors the agent can read. */
-function guard<A>(fn: (args: A) => Result) {
-  return async (args: A): Promise<Result> => {
-    try {
-      return fn(args);
-    } catch (err) {
-      return fail(err instanceof Error ? err.message : String(err));
-    }
-  };
-}
+export const COULD_NOT_RECORD = "HQ could not record this action, so it was not done.";
+const NOT_YOURS = "That tool is not available to your role.";
 
-function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
+function buildServer(hub: Hub, planner: Planner, company: Company, agent: RegisteredAgent): McpServer {
   const server = new McpServer({ name: "hq", version: "0.1.0" });
-  const isLead = !!hub.cfg(me)?.isLead;
-  const leadOnly = () => {
-    if (!isLead) throw new Error("Only the lead can do this. Ask the lead with send_message.");
+  const me = agent.agentId;
+  const ctoId = planner.ctoId();
+  const record = (target: string | null, data: Record<string, unknown>) =>
+    company.audit.append({ actorKind: "agent", actorId: agent.companyId, action: "tool.called", target, data });
+
+  /**
+   * Runs a tool body with its audit row (SR-B-12, SR-B-16): the row is written
+   * first, in the same transaction, so a call whose row cannot be written does
+   * not happen. A body that throws is rolled back and recorded as an error.
+   */
+  const audited =
+    <A>(tool: HqTool, fn: (args: A) => Result) =>
+    async (args: A): Promise<Result> => {
+      const recorded = recordArgs(args);
+      const target = targetOf(args);
+      let written = false;
+      try {
+        return company.db.transaction(() => {
+          record(target, { tool, outcome: "ok", args: recorded });
+          written = true;
+          return fn(args);
+        }, "immediate");
+      } catch (err) {
+        if (!written) {
+          // The full row could not be written (e.g. an argument looks like a
+          // credential): refuse, and record that a call was refused.
+          try {
+            record(null, { tool, outcome: "refused", reason: "unrecordable" });
+          } catch {
+            /* nothing more can be recorded */
+          }
+          return fail(COULD_NOT_RECORD);
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        try {
+          record(target, { tool, outcome: "error", args: recorded, error: { chars: msg.length } });
+        } catch {
+          return fail(COULD_NOT_RECORD);
+        }
+        return fail(msg);
+      }
+    };
+
+  /** Registers a tool only when the agent's role has it. */
+  const tool = <A>(name: HqTool, config: ToolConfig, fn: (args: A) => Result) => {
+    if (!roleHas(agent.role, name)) return;
+    const run = audited(name, fn);
+    // A tool without an input schema is called with the SDK's request context
+    // first; that is not the agent's arguments.
+    server.registerTool(name, config as never, (config.inputSchema ? (args: A) => run(args) : () => run({} as A)) as never);
   };
+  /** A tool body: throws for a failure the agent can read. */
+  const body = <A>(fn: (args: A) => Result) => fn;
   const taskView = (id: string) => {
     const t = planner.task(id);
     return t && { ...t, owner: t.ownerId ? hub.name(t.ownerId) : null };
   };
 
-  server.registerTool(
+  tool(
     "list_workers",
     { description: "The team: each agent's id, name, role, whether they are running, and what they are doing now." },
-    guard(() =>
+    body(() =>
       ok(
         hub.snap.config.team.map((a) => {
           const st = hub.status(a.id);
           return {
-            id: a.id, name: a.name, role: a.role, lead: a.isLead, you: a.id === me,
+            id: a.id, name: a.name, role: a.role, lead: a.id === ctoId, you: a.id === me,
             running: st?.session.state === "running", state: st?.state, task: st?.currentTaskId ?? null,
-            free: st?.session.state === "running" && !a.isLead && !planner.currentTask(a.id),
+            free: st?.session.state === "running" && a.id !== ctoId && !planner.currentTask(a.id),
           };
         }),
       ),
     ),
   );
 
-  server.registerTool(
+  tool(
     "get_status",
     { description: "Live status of every agent (state, note, current task) plus the active boards with task counts." },
-    guard(() =>
+    body(() =>
       ok({
         agents: hub.snap.agents.map((s) => ({ id: s.agentId, name: hub.name(s.agentId), state: s.state, note: s.note, task: s.currentTaskId, session: s.session.state })),
         boards: hub.snap.boards.map((b) => {
@@ -69,7 +114,7 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
     ),
   );
 
-  server.registerTool(
+  tool(
     "list_tasks",
     {
       description: "Tasks, optionally filtered by board, status or owner.",
@@ -79,23 +124,22 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
         owner: z.string().optional().describe("Agent id or name"),
       },
     },
-    guard(({ boardId, status, owner }: { boardId?: string; status?: string; owner?: string }) => {
+    body(({ boardId, status, owner }: { boardId?: string; status?: string; owner?: string }) => {
       const ownerId = owner ? planner.agentId(owner) : undefined;
       const list = hub.snap.tasks.filter((t) => (!boardId || t.boardId === boardId) && (!status || t.status === status) && (!owner || t.ownerId === ownerId));
       return ok(list.map((t) => ({ id: t.id, board: t.boardId, title: t.title, status: t.status, owner: t.ownerId ? hub.name(t.ownerId) : null, needs: t.needs })));
     }),
   );
 
-  server.registerTool(
+  tool(
     "create_board",
     { description: "Lead only. Create a board (a phase or an area of work).", inputSchema: { title: z.string(), active: z.boolean().optional().describe("Agents only pick tasks from active boards") } },
-    guard(({ title, active }: { title: string; active?: boolean }) => {
-      leadOnly();
+    body(({ title, active }: { title: string; active?: boolean }) => {
       return ok(planner.createBoard(title, active ? "active" : "planned"));
     }),
   );
 
-  server.registerTool(
+  tool(
     "create_task",
     {
       description: "Lead only. Add a task. Keep tasks small: one task = one branch = one PR.",
@@ -108,13 +152,12 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
         needs: z.array(z.string()).optional().describe("Task ids that must be done first"),
       },
     },
-    guard((args: { title: string; boardId?: string; description?: string; files?: string[]; doneWhen?: string; needs?: string[] }) => {
-      leadOnly();
+    body((args: { title: string; boardId?: string; description?: string; files?: string[]; doneWhen?: string; needs?: string[] }) => {
       return ok(planner.createTask(args, me));
     }),
   );
 
-  server.registerTool(
+  tool(
     "update_task",
     {
       description: "Lead only. Edit a task's details or status.",
@@ -128,29 +171,27 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
         status: z.enum(["todo", "in-progress", "in-review", "done", "blocked"]).optional(),
       },
     },
-    guard(({ taskId, ...patch }: { taskId: string; title?: string; description?: string; files?: string[]; doneWhen?: string; needs?: string[]; status?: "todo" | "in-progress" | "in-review" | "done" | "blocked" }) => {
-      leadOnly();
+    body(({ taskId, ...patch }: { taskId: string; title?: string; description?: string; files?: string[]; doneWhen?: string; needs?: string[]; status?: "todo" | "in-progress" | "in-review" | "done" | "blocked" }) => {
       return ok(planner.updateTask(taskId, patch));
     }),
   );
 
-  server.registerTool(
+  tool(
     "assign_task",
     {
       description: "Lead only. Give a task to an agent. HQ tells them to pull main and start it (right away if idle, otherwise when their current turn ends).",
       inputSchema: { taskId: z.string(), agent: z.string().describe("Agent id or name") },
     },
-    guard(({ taskId, agent }: { taskId: string; agent: string }) => {
-      leadOnly();
+    body(({ taskId, agent }: { taskId: string; agent: string }) => {
       const t = planner.assign(taskId, agent, me);
       return ok(`Assigned ${t.id} to ${hub.name(t.ownerId)}. They have been told to start.`);
     }),
   );
 
-  server.registerTool(
+  tool(
     "get_my_task",
     { description: "Your current task: title, description, the files you may edit, done-when, and what it needs. Marks it in progress." },
-    guard(() => {
+    body(() => {
       const t = planner.currentTask(me);
       if (!t) return ok("You have no task right now. Wait for the lead, or ask with send_message.");
       if (t.status === "todo") planner.setStatus(me, "in-progress");
@@ -159,7 +200,7 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "set_my_status",
     {
       description: "Update your current task: in-progress, blocked (say why), in-review (PR opened), or done. The lead is told automatically.",
@@ -169,13 +210,13 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
         prNumber: z.number().int().optional(),
       },
     },
-    guard(({ status, note, prNumber }: { status: "in-progress" | "blocked" | "in-review" | "done"; note?: string; prNumber?: number }) => {
+    body(({ status, note, prNumber }: { status: "in-progress" | "blocked" | "in-review" | "done"; note?: string; prNumber?: number }) => {
       const t = planner.setStatus(me, status, note, prNumber);
       return ok(`${t.id} is now ${t.status}.`);
     }),
   );
 
-  server.registerTool(
+  tool(
     "ask_user",
     {
       description:
@@ -186,7 +227,7 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
         waiting: z.boolean().optional().describe("True if you can't continue without it"),
       },
     },
-    guard(({ title, details, waiting }: { title: string; details: string; waiting?: boolean }) => {
+    body(({ title, details, waiting }: { title: string; details: string; waiting?: boolean }) => {
       if (!planner.actions) throw new Error("Action items aren't available.");
       if (!details.trim()) throw new Error("Add the steps in details, so the user knows exactly what to do.");
       const item = planner.actions.add(me, title, details, !!waiting);
@@ -194,25 +235,27 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "request_access",
     {
       description:
         "Your sandbox blocks most websites and APIs. When a request you need is blocked (docs or an API), ask the user to allow that domain. Pass the host (e.g. docs.example.com) and why you need it. The user answers in HQ; you'll get a message.",
       inputSchema: { domain: z.string(), reason: z.string() },
     },
-    guard(({ domain, reason }: { domain: string; reason: string }) => ok(requestAccess(hub, me, domain, reason))),
+    body(({ domain, reason }: { domain: string; reason: string }) => ok(requestAccess(hub, me, domain, reason))),
   );
 
-  server.registerTool(
+  tool(
     "send_message",
     {
       description: "Send a message to another agent (id, name, or \"lead\"). HQ delivers it: right away if they are idle, otherwise when their current turn ends.",
       inputSchema: { to: z.string(), text: z.string() },
     },
-    guard(({ to, text }: { to: string; text: string }) => {
+    body(({ to, text }: { to: string; text: string }) => {
       const toId = planner.agentId(to);
       if (toId === me) throw new Error("That's you.");
+      const toRole = toId ? company.agents.get(agent.projectSlug, toId)?.role : undefined;
+      if (toId && (!toRole || !MESSAGE_TO[agent.role]?.includes(toRole))) throw new Error(`You can't message ${hub.name(toId)}.`);
       planner.message(me, to, text);
       return ok(`Sent to ${hub.name(toId)}.`);
     }),
@@ -221,9 +264,41 @@ function buildServer(hub: Hub, planner: Planner, me: string): McpServer {
   return server;
 }
 
-/** Handles one MCP HTTP request for an already-authenticated agent. */
-export async function handleMcp(hub: Hub, planner: Planner, agentId: string, req: IncomingMessage, res: ServerResponse, body: unknown) {
-  const server = buildServer(hub, planner, agentId);
+type ToolConfig = { description: string; inputSchema?: Record<string, unknown> };
+
+type RpcMessage = { jsonrpc?: string; id?: string | number | null; method?: string; params?: { name?: unknown } };
+
+/**
+ * Refuses, before the MCP SDK sees it, a tools/call (alone or in a batch) for
+ * a tool outside the agent's role (SR-B-13). Returns true when it answered.
+ */
+function refuseOutsideRole(company: Company, agent: RegisteredAgent, res: ServerResponse, body: unknown): boolean {
+  const messages = (Array.isArray(body) ? body : [body]) as RpcMessage[];
+  const denied = messages.filter((m) => m?.method === "tools/call" && !roleHas(agent.role, String(m.params?.name ?? "")));
+  if (denied.length === 0) return false;
+  for (const m of denied) {
+    try {
+      // The requested name is agent text: kept only when it is one of HQ's tools.
+      const name = m.params?.name;
+      company.audit.append({ actorKind: "agent", actorId: agent.companyId, action: "tool.denied", target: isHqTool(name) ? name : "unknown" });
+    } catch {
+      /* still refused */
+    }
+  }
+  const error = (m: RpcMessage, message: string) => ({ jsonrpc: "2.0", id: m?.id ?? null, error: { code: -32601, message } });
+  const reply = Array.isArray(body)
+    ? messages.filter((m) => m?.id !== undefined).map((m) => error(m, denied.includes(m) ? NOT_YOURS : "Not run: this batch holds a refused call."))
+    : error(messages[0], NOT_YOURS);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(reply));
+  return true;
+}
+
+/** Handles one MCP HTTP request for an already-authenticated agent. The role is read from the store now, not cached. */
+export async function handleMcp(hub: Hub, planner: Planner, company: Company, who: RegisteredAgent, req: IncomingMessage, res: ServerResponse, body: unknown) {
+  const agent = company.agents.getById(who.companyId) ?? who;
+  if (refuseOutsideRole(company, agent, res, body)) return;
+  const server = buildServer(hub, planner, company, agent);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
     void transport.close();
