@@ -17,7 +17,7 @@ import { handleHook } from "./hooks";
 import type { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { DashboardSession, OwnerAuth } from "./ownerAuth";
-import type { CommandCtx, CommandResult, Dashboard } from "./dashboard";
+import { viewFor, type CommandCtx, type CommandResult, type Dashboard } from "./dashboard";
 import { handleMcp } from "./mcp";
 import type { Planner } from "./planner";
 
@@ -165,7 +165,11 @@ export function startHttp(o: Options) {
     const mine = socketsBySession.get(session.id) ?? new Set<WebSocket>();
     mine.add(ws);
     socketsBySession.set(session.id, mine);
-    const sendEvent = (e: OfficeEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(e));
+    // Each socket gets what its role may see (SR-C-09).
+    const sendEvent = (e: OfficeEvent) => {
+      const v = viewFor(session.role, e);
+      if (v && ws.readyState === ws.OPEN) ws.send(JSON.stringify(v));
+    };
     sendEvent({ type: "snapshot", snapshot: o.hub.snap });
     const unsub = o.hub.subscribe(sendEvent);
     const ctx: CommandCtx = { actor: { kind: "human", id: session.humanId }, role: session.role, remote: session.remote, sessionId: session.id };

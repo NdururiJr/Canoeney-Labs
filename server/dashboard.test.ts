@@ -256,3 +256,43 @@ test("a builder added from the dashboard reports to the current team's CTO", asy
   assert.equal(d.hq.company.agents.get(d.hq.slug, "dee")?.managerId, `${d.hq.slug}/lead`);
   c.close();
 });
+
+test("SR-C-09 [T-S5.7] a supervisor's snapshot and event stream hold no owner-only data", async (t) => {
+  const d = await makeDashboardHq(t);
+  const MARK = "owner-only-marker";
+  const hub = d.hq.hub;
+  const ana = hub.cfg("ana")!;
+  ana.sandbox.allow.push(`${MARK}.example`);
+  ana.roleMd = MARK;
+  ana.workspacePath = `/home/${MARK}`;
+  ana.skills = [MARK];
+  hub.snap.sbx = { ...hub.snap.sbx, proxy: MARK } as never;
+  hub.snap.mcp = { servers: [], attached: { ana: [MARK] }, error: null, checkedAt: "x" } as never;
+  hub.snap.accessRequests = [{ id: "R-1", agentId: "ana", domain: `${MARK}.example`, reason: "r", at: "x", status: "pending" } as never];
+  hub.status("ana")!.session.workspace = `/home/${MARK}`;
+  const sup = await d.connect("supervisor");
+  const owner = await d.connect("owner");
+  hub.emit({ type: "terminal.output", agentId: "ana", data: MARK });
+  hub.emit({ type: "workspace.info", info: { agentId: "ana", path: MARK } as never });
+  hub.emit({ type: "sbx.updated", sbx: hub.snap.sbx });
+  hub.emit({ type: "mcp.updated", mcp: hub.snap.mcp! });
+  hub.emit({ type: "setup.updated", setup: { ...hub.snap.setup, checks: [{ id: "x", label: MARK }] } as never });
+  hub.emit({ type: "access.updated", request: hub.snap.accessRequests![0] });
+  hub.emit({ type: "config.updated", config: hub.snap.config });
+  hub.emit({ type: "agent.updated", agent: hub.status("ana")! });
+  hub.activity("config", null, "a line both see");
+  await new Promise((r) => setTimeout(r, 200));
+  const supFrames = JSON.stringify(sup.frames);
+  assert.ok(!supFrames.includes(MARK), "a supervisor received owner-only data");
+  assert.ok(!sup.frames.some((f) => f.type === "terminal.output"));
+  assert.ok(supFrames.includes("a line both see"));
+  assert.ok(sup.frames.some((f) => f.type === "snapshot"));
+  // The owner receives all of it.
+  const ownerFrames = JSON.stringify(owner.frames);
+  for (const type of ["terminal.output", "workspace.info", "sbx.updated", "mcp.updated", "setup.updated", "access.updated"]) {
+    assert.ok(owner.frames.some((f) => f.type === type), type);
+  }
+  assert.ok(ownerFrames.includes(MARK));
+  sup.close();
+  owner.close();
+});

@@ -79,10 +79,10 @@ export async function makeDashboardHq(t: TestContext): Promise<DashboardHq> {
   });
   const connect: DashboardHq["connect"] = async (who = "owner", headers = {}) => {
     const cookie = await hq.sessionCookie(who, headers);
-    const { ws } = await openWs(hq, { cookie, origin: ORIGIN, ...headers });
+    const { ws, frames } = await openWs(hq, { cookie, origin: ORIGIN, ...headers });
     if (!ws) throw new Error("socket refused");
-    const frames: Record<string, unknown>[] = [];
-    ws.on("message", (raw) => frames.push(JSON.parse(String(raw)) as Record<string, unknown>));
+    // Closed when the test ends, even if it failed before closing it.
+    t.after(() => ws.close());
     return {
       ws,
       frames,

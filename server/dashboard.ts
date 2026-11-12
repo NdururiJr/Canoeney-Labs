@@ -6,6 +6,8 @@
 // those in order, writes one audit row per call (before it runs) under the human's own id, and
 // answers the socket that sent it. Terminal keystrokes are audited collapsed,
 // once per session, agent and minute, and never with the text typed.
+import type { OfficeEvent } from "../src/data/source";
+import type { AgentConfig, AgentStatus, HqConfig, OfficeSnapshot } from "../src/data/types";
 import type { Clock } from "./company/clock";
 import type { AuditSink } from "./company/slots/types";
 import type { HumanRole } from "./company/types";
@@ -176,5 +178,54 @@ function safe<T>(fn: () => T): T | null {
     return fn();
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------- What a role sees (SR-C-09)
+
+/** Events a supervisor never receives: terminal output and the owner's machine, sandbox and access state. */
+const OWNER_ONLY_EVENTS = new Set(["terminal.output", "workspace.info", "sbx.updated", "mcp.updated", "setup.updated", "access.updated"]);
+
+/** A supervisor's view of the team: an explicit keep-list, so a new field is owner-only until it is listed here. */
+function teamForSupervisor(team: AgentConfig[]): Partial<AgentConfig>[] {
+  return team.map((a) => ({ id: a.id, name: a.name, role: a.role, color: a.color, cli: a.cli, isLead: a.isLead }));
+}
+
+function configForSupervisor(c: HqConfig): Partial<HqConfig> {
+  return { project: c.project, team: teamForSupervisor(c.team) as AgentConfig[] };
+}
+
+/** An agent's status without the host folder its session runs in. */
+function statusForSupervisor(s: AgentStatus): AgentStatus {
+  return { ...s, session: { ...s.session, workspace: null } };
+}
+
+/** The event as the role may see it, or null when it is not sent at all. */
+export function viewFor(role: HumanRole, e: OfficeEvent): OfficeEvent | null {
+  if (role === "owner") return e;
+  if (OWNER_ONLY_EVENTS.has(e.type)) return null;
+  switch (e.type) {
+    case "snapshot": {
+      const s = e.snapshot;
+      const kept = {
+        welcome: s.welcome,
+        config: configForSupervisor(s.config),
+        agents: s.agents.map(statusForSupervisor),
+        boards: s.boards,
+        tasks: s.tasks,
+        pullRequests: s.pullRequests,
+        environments: s.environments,
+        messages: s.messages,
+        activity: s.activity,
+        actionItems: s.actionItems,
+      };
+      return { type: "snapshot", snapshot: kept as unknown as OfficeSnapshot };
+    }
+    case "config.updated":
+      return { type: "config.updated", config: configForSupervisor(e.config) as HqConfig };
+    case "agent.updated":
+      return { type: "agent.updated", agent: statusForSupervisor(e.agent) };
+    default:
+      return e;
   }
 }

@@ -265,13 +265,23 @@ export async function hook(hq: Hq, secret: string | null, agentId: string, event
   return { status: res.status, text: await res.text(), headers: res.headers };
 }
 
-/** Opens a dashboard WebSocket. Resolves with 101 and the socket, or with the refusal status. */
-export function openWs(hq: Hq, headers: Record<string, string> = {}, path = "/ws"): Promise<{ status: number; ws: WebSocket | null }> {
+/**
+ * Opens a dashboard WebSocket. Resolves with 101 and the socket, or with the
+ * refusal status. Frames are collected from the start: HQ sends its snapshot
+ * right after the upgrade, sometimes in the same chunk as the 101.
+ */
+export function openWs(
+  hq: Hq,
+  headers: Record<string, string> = {},
+  path = "/ws",
+): Promise<{ status: number; ws: WebSocket | null; frames: Record<string, unknown>[] }> {
   return new Promise((resolve) => {
+    const frames: Record<string, unknown>[] = [];
     const ws = new WebSocket(hq.url.replace("http", "ws") + path, { headers });
-    ws.on("unexpected-response", (_req, res) => resolve({ status: res.statusCode ?? 0, ws: null }));
-    ws.on("open", () => resolve({ status: 101, ws }));
-    ws.on("error", () => resolve({ status: -1, ws: null }));
+    ws.on("message", (raw) => frames.push(JSON.parse(String(raw)) as Record<string, unknown>));
+    ws.on("unexpected-response", (_req, res) => resolve({ status: res.statusCode ?? 0, ws: null, frames }));
+    ws.on("open", () => resolve({ status: 101, ws, frames }));
+    ws.on("error", () => resolve({ status: -1, ws: null, frames }));
   });
 }
 
