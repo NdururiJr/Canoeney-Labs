@@ -29,6 +29,7 @@ function JsonNode({ name, value, depth }: { name: string; value: unknown; depth:
 function summary(e: OfficeEvent): string {
   switch (e.type) {
     case "snapshot": return "full snapshot";
+    case "command.result": return `${e.id} ${e.ok ? "ok" : e.error}`;
     case "workspace.info": return `${e.info.agentId} ${e.info.path}`;
     case "sbx.updated": return `base ${e.sbx.basePolicy}, ${Object.keys(e.sbx.agents).length} sandboxes`;
     case "setup.updated": return `sandbox ${e.setup.sandboxReady ? "ready" : "not ready"}`;

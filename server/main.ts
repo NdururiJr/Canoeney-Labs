@@ -9,6 +9,7 @@ import { existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeCommands } from "./commands";
+import { Dashboard } from "./dashboard";
 import { companyHome, openCompany } from "./company";
 import { AgentAuth } from "./agentAuth";
 import { startHttp } from "./http";
@@ -135,7 +136,7 @@ async function main() {
     company,
     distDir: dev ? null : distDir,
     allowedOrigins,
-    commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp, company),
+    dashboard: new Dashboard(makeCommands(hub, sessions, planner, inbox, sbx, mcp, company), { ownerAuth, audit: company.audit, clock: company.clock }),
   });
   // Only once HQ is serving: a port already in use must not record a start.
   company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });

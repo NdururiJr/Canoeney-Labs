@@ -46,7 +46,9 @@ export type OfficeEvent =
   | { type: "terminal.output"; agentId: string; data: string }
   | { type: "access.updated"; request: AccessRequest }
   | { type: "mcp.updated"; mcp: McpState }
-  | { type: "action.updated"; item: ActionItem };
+  | { type: "action.updated"; item: ActionItem }
+  /** The answer to one command, sent only to the socket that sent it (M0-C). */
+  | { type: "command.result"; id: string; ok: boolean; error?: string };
 
 export type SimSpeed = 1 | 2 | 4;
 

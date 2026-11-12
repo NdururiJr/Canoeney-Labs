@@ -26,8 +26,6 @@ export interface Actor {
   id: string;
 }
 
-/** Dashboard commands until owner login exists (M0-C replaces it with the logged-in human). */
-export const DASHBOARD_ACTOR = { kind: "human", id: "dashboard" } as const;
 const HQ_ACTOR: Actor = { kind: "hq", id: "hq" };
 
 export interface RegisteredAgent {

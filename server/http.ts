@@ -17,9 +17,9 @@ import { handleHook } from "./hooks";
 import type { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { DashboardSession, OwnerAuth } from "./ownerAuth";
+import type { CommandCtx, CommandResult, Dashboard } from "./dashboard";
 import { handleMcp } from "./mcp";
 import type { Planner } from "./planner";
-import { log } from "./lib/log";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
@@ -52,7 +52,8 @@ interface Options {
   company: Company;
   distDir: string | null;
   allowedOrigins: string[];
-  commands: Record<string, (...args: unknown[]) => unknown>;
+  /** The dashboard command table and its dispatcher (M0-C). */
+  dashboard: Dashboard;
 }
 
 export function startHttp(o: Options) {
@@ -141,7 +142,10 @@ export function startHttp(o: Options) {
     for (const ws of socketsBySession.get(sessionId) ?? []) ws.close(4401, "session ended");
     socketsBySession.delete(sessionId);
   });
-  const sweep = setInterval(() => o.ownerAuth.sweep(), 60_000);
+  const sweep = setInterval(() => {
+    o.ownerAuth.sweep();
+    o.dashboard.flush();
+  }, 60_000);
   sweep.unref();
   server.on("close", () => clearInterval(sweep));
 
@@ -164,21 +168,37 @@ export function startHttp(o: Options) {
     const sendEvent = (e: OfficeEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(e));
     sendEvent({ type: "snapshot", snapshot: o.hub.snap });
     const unsub = o.hub.subscribe(sendEvent);
+    const ctx: CommandCtx = { actor: { kind: "human", id: session.humanId }, role: session.role, remote: session.remote, sessionId: session.id };
+    const allowed = o.dashboard.limiter();
+    let limitedRowAt: number | null = null;
+    const reply = (id: unknown, r: CommandResult) => {
+      if (typeof id === "string" && id.length <= 40) sendEvent({ type: "command.result", id, ...r });
+    };
     ws.on("message", async (raw) => {
+      let msg: { cmd?: unknown; args?: unknown; pin?: unknown; id?: unknown } = {};
+      try {
+        const parsed: unknown = JSON.parse(String(raw));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) msg = parsed as typeof msg;
+      } catch {
+        /* not JSON: dispatched as an unknown command */
+      }
+      // Over the rate (SR-C-18): dropped, and one row per minute for this connection.
+      if (!allowed()) {
+        try {
+          limitedRowAt = o.dashboard.rateLimited(ctx, limitedRowAt);
+        } catch {
+          /* the drop stands without its row */
+        }
+        return reply(msg.id, { ok: false, error: "rate-limited" });
+      }
       // A message from the client is activity; frames HQ pushes are not.
       if (!o.ownerAuth.touch(session.id)) return ws.close(4401, "session ended");
-      try {
-        const msg = JSON.parse(String(raw)) as { cmd?: string; args?: unknown[] };
-        const fn = msg.cmd ? o.commands[msg.cmd] : undefined;
-        if (!fn) return log.warn("unknown command", msg.cmd);
-        await fn(...(Array.isArray(msg.args) ? msg.args : []));
-      } catch (err) {
-        log.warn("command failed:", err instanceof Error ? err.message : err);
-      }
+      reply(msg.id, await o.dashboard.dispatch(ctx, msg));
     });
     ws.on("close", () => {
       unsub();
       mine.delete(ws);
+      if (!mine.size) o.dashboard.flush();
     });
   }
 

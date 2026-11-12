@@ -11,6 +11,7 @@ import { WebSocket } from "ws";
 import { AgentAuth, type AuthLimits } from "../agentAuth";
 import type { HumanToEnroll } from "../company/humanAccounts";
 import { stepOf, totpAt } from "../company/totp";
+import { Dashboard, type CommandSpec } from "../dashboard";
 import { OwnerAuth, SESSION_COOKIE, type OwnerAuthLimits } from "../ownerAuth";
 import { FakeClock } from "../company/clock";
 import { companyAgentId } from "../company/agents";
@@ -45,6 +46,7 @@ export interface Hq {
   planner: Planner;
   auth: AgentAuth;
   readonly ownerAuth: OwnerAuth;
+  readonly dashboard: Dashboard;
   /** The setup file HQ writes while no owner is enrolled. */
   setupFile: string;
   slug: string;
@@ -72,7 +74,13 @@ export interface Hq {
 
 export async function makeHq(
   t: TestContext,
-  opts: { team?: AgentConfig[]; limits?: Partial<AuthLimits>; ownerLimits?: Partial<OwnerAuthLimits>; commands?: Record<string, unknown> } = {},
+  opts: {
+    team?: AgentConfig[];
+    limits?: Partial<AuthLimits>;
+    ownerLimits?: Partial<OwnerAuthLimits>;
+    /** Builds the dashboard command table (default: none). */
+    commands?: (p: { hub: Hub; planner: Planner; inbox: Inbox; company: Company }) => Record<string, CommandSpec>;
+  } = {},
 ): Promise<Hq> {
   const dir = mkdtempSync(join(tmpdir(), "hq fixture "));
   const repoRoot = join(dir, "repo dir");
@@ -103,8 +111,11 @@ export async function makeHq(
     new OwnerAuth({ accounts: company.humans, clock, audit: company.audit, allowedOrigins: [ORIGIN], setupFile, limits: opts.ownerLimits });
   let ownerAuth = newOwnerAuth();
   ownerAuth.prepareSetup();
+  const commands = opts.commands?.({ hub, planner, inbox, company }) ?? {};
+  let dashboard: Dashboard;
   const start = (oa: OwnerAuth) =>
     startHttp({
+      dashboard: (dashboard = new Dashboard(commands, { ownerAuth: oa, audit: company.audit, clock })),
       hub,
       inbox,
       planner,
@@ -114,7 +125,6 @@ export async function makeHq(
       port: 0,
       distDir: null,
       allowedOrigins: [ORIGIN],
-      commands: (opts.commands ?? {}) as never,
     });
   let server = await start(ownerAuth);
   const stop = async () => {
@@ -188,6 +198,9 @@ export async function makeHq(
     auth,
     get ownerAuth() {
       return ownerAuth;
+    },
+    get dashboard() {
+      return dashboard;
     },
     setupFile,
     slug,
