@@ -6,6 +6,8 @@ import { ago, Dot, Portrait, ReviewChip, SectionTitle, StateChip, Tabs, useNow }
 import { DrawerHeader } from "./Drawer";
 import { PortBanner, PortsRow } from "./Ports";
 import { TerminalView } from "./TerminalView";
+import { AgentMarkdown, AgentText } from "../agentText";
+import { StatusNote } from "../systemItems";
 
 
 export function AgentDrawer({ id, initialTab }: { id: string; initialTab?: AgentTab }) {
@@ -45,7 +47,7 @@ export function AgentDrawer({ id, initialTab }: { id: string; initialTab?: Agent
       ) : (
         status.note && (
           <div className={`border-b-[3px] border-ink px-3 py-1.5 text-[14px] ${status.state === "needs-input" ? "bg-[#ffe1ea] text-red" : "bg-cream-2"}`}>
-            {status.note}
+            <StatusNote note={status.note} flagged={status.noteIsAgentText} author={agent.name} />
             {status.state === "needs-input" && <span className="ml-2 text-muted">— answer in the terminal and press Enter</span>}
           </div>
         )
@@ -178,9 +180,11 @@ function AccessCard({ request, agent }: { request: AccessRequest; agent: AgentCo
   return (
     <div className="border-b-[3px] border-ink bg-[#ffe1ea] px-3 py-2">
       <div className="text-[14px] text-red">
-        <b>{agent.name}</b> wants to reach <b className="font-term text-[17px]">{request.domain}</b>
+        <b>{agent.name}</b> wants to reach <b className="font-term text-[17px]"><AgentText inline author={agent.name} text={request.domain} /></b>
       </div>
-      <div className="mb-2 text-[13px] text-muted">“{request.reason}”</div>
+      <div className="mb-2 text-[13px] text-muted">
+        <AgentText inline author={agent.name} text={request.reason} />
+      </div>
       <div className="flex flex-wrap gap-2">
         <button className="btn px-2 text-[13px]" onClick={() => officeActions.resolveAccess(request.id, "agent")}>
           Allow for {agent.name}
@@ -287,7 +291,7 @@ function TaskTab({ snap, agent, taskId }: { snap: OfficeSnapshot; agent: AgentCo
           const count = (s: string) => tasks.filter((t) => t.status === s).length;
           return (
             <button key={b.id} className="panel mb-2 block w-full px-3 py-2 text-left" onClick={() => ui.openBoards(b.id)}>
-              <b>{b.title}</b>
+              <b><AgentText inline author="an agent" text={b.title} /></b>
               <div className="font-term text-[17px] text-muted">
                 {count("todo")} to do · {count("in-progress")} in progress · {count("in-review")} in review · {count("done")} done
               </div>
@@ -303,16 +307,21 @@ function TaskTab({ snap, agent, taskId }: { snap: OfficeSnapshot; agent: AgentCo
       <SectionTitle>Current task</SectionTitle>
       {task ? (
         <div className="panel mb-4 px-3 py-2">
-          <div className="font-term text-[18px] text-muted">{task.id} · {snap.boards.find((b) => b.id === task.boardId)?.title}</div>
-          <b className="text-[17px]">{task.title}</b>
-          <div className="mt-1 text-[14px]">Status: {task.status}{task.note ? ` — ${task.note}` : ""}</div>
-          {task.description && <p className="mt-1 whitespace-pre-wrap text-[14px]">{task.description}</p>}
+          <div className="font-term text-[18px] text-muted">
+            {task.id} · <AgentText inline author="an agent" text={snap.boards.find((b) => b.id === task.boardId)?.title ?? ""} />
+          </div>
+          <b className="text-[17px]"><AgentText inline author="an agent" text={task.title} /></b>
+          <div className="mt-1 text-[14px]">
+            Status: {task.status}
+            {task.note && <> — <AgentText inline author={agent.name} text={task.note} /></>}
+          </div>
+          {task.description && <AgentMarkdown author="an agent" source={task.description} className="mt-1 text-[14px]" />}
           {!!task.files?.length && (
             <div className="mt-1 text-[13px]">
               Files: {task.files.map((f) => <code key={f} className="mr-1 bg-cream-2 px-1 font-term text-[15px]">{f}</code>)}
             </div>
           )}
-          {task.doneWhen && <div className="mt-1 text-[13px]"><b>Done when:</b> {task.doneWhen}</div>}
+          {task.doneWhen && <div className="mt-1 text-[13px]"><b>Done when:</b> <AgentText inline author="an agent" text={task.doneWhen} /></div>}
           {task.needs.length > 0 && (
             <div className="text-[14px]">
               Needs: {task.needs.map((n) => `${n} (${snap.tasks.find((t) => t.id === n)?.status ?? "?"})`).join(", ")}
@@ -453,7 +462,7 @@ function MessagesTab({ snap, agent }: { snap: OfficeSnapshot; agent: AgentConfig
                   {out ? `To ${other?.name ?? "?"}` : `From ${other?.name ?? "?"}`}
                   <span className="ml-auto font-term text-[15px]">{ago(m.at, now)}</span>
                 </div>
-                <div className="text-[15px]">{m.text}</div>
+                <div className="text-[15px]"><AgentText inline author={(out ? agent.name : other?.name) ?? "?"} text={m.text} /></div>
               </li>
             );
           })}

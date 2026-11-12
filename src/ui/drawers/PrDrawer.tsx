@@ -3,6 +3,8 @@ import { reviewToolLabel, useOffice } from "../../store/office";
 import { ui } from "../../store/ui";
 import { ago, Dot, ReviewChip, SectionTitle, useNow } from "../kit";
 import { DrawerHeader } from "./Drawer";
+import { safeHref } from "../agentText";
+import { AgentText } from "../agentText";
 
 export function PrDrawer() {
   const snap = useOffice((s) => s.snap);
@@ -18,7 +20,7 @@ export function PrDrawer() {
       <li className="grid grid-cols-[52px_1fr_auto] items-center gap-2.5 border-[3px] border-ink bg-white px-2.5 py-1.5 shadow-[0_3px_0_rgba(36,26,46,0.35)]">
         <span className="font-term text-[24px] leading-none">#{pr.number}</span>
         <div className="min-w-0">
-          <div className="truncate text-[15px] font-semibold">{pr.title}</div>
+          <div className="truncate text-[15px] font-semibold"><AgentText inline author="the PR's author" text={pr.title} /></div>
           <div className="flex items-center gap-1.5 text-[12px] text-muted">
             {author && <Dot color={author.color} size={8} />}
             <button className="underline" onClick={() => author && ui.openAgent(author.id)}>
@@ -32,7 +34,7 @@ export function PrDrawer() {
         <div className="flex flex-col items-end gap-1">
           <ReviewChip review={pr.review} merged={pr.merged} />
           {pr.url ? (
-            <a className="btn px-1.5 text-[11px]" href={pr.url} target="_blank" rel="noreferrer">
+            <a className="btn px-1.5 text-[11px]" href={safeHref(pr.url) ?? undefined} target="_blank" rel="noreferrer">
               Open on GitHub ↗
             </a>
           ) : (

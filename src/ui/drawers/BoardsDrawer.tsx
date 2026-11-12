@@ -4,6 +4,7 @@ import { officeActions, useOffice } from "../../store/office";
 import { ui, useUi } from "../../store/ui";
 import { Dot } from "../kit";
 import { DrawerHeader } from "./Drawer";
+import { AgentText } from "../agentText";
 
 const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: "todo", label: "To do", color: "#83769c" },
@@ -36,7 +37,7 @@ export function BoardsDrawer({ initialBoardId }: { initialBoardId?: string }) {
         {boards.map((b) => (
           <button key={b.id} className="btn px-2 text-[13px]" aria-pressed={b.id === boardId} onClick={() => setBoardId(b.id)}>
             {b.status === "active" && <span className="mr-1 text-blue">●</span>}
-            {b.title}
+            <AgentText inline author="an agent" text={b.title} />
           </button>
         ))}
       </div>
@@ -98,9 +99,13 @@ function TaskCard({ task }: { task: Task }) {
         className={`text-[14px] font-semibold leading-tight ${task.status === "done" ? "line-through" : ""}`}
         title={[task.description, task.files?.length ? `Files: ${task.files.join(", ")}` : "", task.doneWhen ? `Done when: ${task.doneWhen}` : ""].filter(Boolean).join("\n\n") || undefined}
       >
-        {task.title}
+        <AgentText inline author="an agent" text={task.title} />
       </div>
-      {task.status === "blocked" && task.note && <div className="text-[12px] text-red">{task.note}</div>}
+      {task.status === "blocked" && task.note && (
+        <div className="text-[12px] text-red">
+          <AgentText inline author="an agent" text={task.note} />
+        </div>
+      )}
       <div className="mt-1 flex items-center gap-1.5 text-[12px]">
         {owner ? (
           <>

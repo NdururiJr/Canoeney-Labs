@@ -197,3 +197,25 @@ html[data-font] .font-term {
   scrollbar-width: thin;
   scrollbar-color: #3b4a7a transparent;
 }
+
+/* Text an agent wrote (M0-C, SR-C-13): always marked, so it never reads as HQ's own words. */
+.agent-text {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.agent-quote::before {
+  content: "“";
+}
+.agent-quote::after {
+  content: "”";
+}
+.agent-text-box {
+  border-left: 3px dashed currentColor;
+  padding-left: 8px;
+}
+.agent-text-label {
+  font-size: 11px;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

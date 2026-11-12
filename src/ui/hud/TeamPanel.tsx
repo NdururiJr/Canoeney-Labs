@@ -3,6 +3,8 @@ import { selectTeam, useOffice, type AgentView } from "../../store/office";
 import { ui, useUi } from "../../store/ui";
 import { stateStyle } from "../../theme/tokens";
 import { ago, Portrait, StateChip, useNow } from "../kit";
+import { AgentText } from "../agentText";
+import { StatusNote } from "../systemItems";
 
 function AgentCard({ a, focused, n, now }: { a: AgentView; focused: boolean; n: number; now: number }) {
   const snap = useOffice((s) => s.snap);
@@ -46,11 +48,11 @@ function AgentCard({ a, focused, n, now }: { a: AgentView; focused: boolean; n: 
       </div>
       <div className={`col-span-2 mt-1 truncate text-[13px] ${task || needs ? "" : "text-muted"}`}>
         {needs ? (
-          <span className="text-red">{a.status.note}</span>
+          <StatusNote note={a.status.note ?? ""} flagged={a.status.noteIsAgentText} author={a.config.name} className="text-red" />
         ) : task ? (
           <>
             <span className="mr-1 font-term text-[16px] text-muted">{task.id}</span>
-            {task.title}
+            <AgentText inline author="an agent" text={task.title} />
           </>
         ) : (
           a.status.note ?? "No task"

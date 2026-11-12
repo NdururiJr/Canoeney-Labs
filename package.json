@@ -49,9 +49,9 @@
     "dev": "vite",
     "dev:hq": "concurrently -k -n hq,ui -c magenta,cyan \"tsx watch server/main.ts --dev\" \"vite\"",
     "hq": "vite build --logLevel warn && tsx server/main.ts",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx --test \"server/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p server",
-    "build": "tsc --noEmit -p . && tsc --noEmit -p server && vite build && node scripts/build-server.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --test \"server/**/*.test.ts\" \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p server && tsc --noEmit -p tsconfig.test.json",
+    "build": "tsc --noEmit -p . && tsc --noEmit -p server && tsc --noEmit -p tsconfig.test.json && vite build && node scripts/build-server.mjs",
     "preview": "vite preview",
     "prepack": "npm run build",
     "postinstall": "node scripts/fix-node-pty.mjs"
