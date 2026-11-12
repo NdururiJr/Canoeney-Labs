@@ -25,7 +25,12 @@ export class SbxMcp {
   private attachedFile: string;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private hub: Hub, private runTerminal: RunTerminal) {
+  constructor(
+    private hub: Hub,
+    private runTerminal: RunTerminal,
+    /** Runs sbx; tests pass a fake. */
+    private exec: typeof run = run,
+  ) {
     this.attachedFile = join(projectHome(hub.slug), "mcp-attached.json");
     try {
       if (existsSync(this.attachedFile)) this.state.attached = (parseCliJson<Record<string, string[]>>(readFileSync(this.attachedFile, "utf8")) ?? {}) as Record<string, string[]>;
@@ -57,7 +62,7 @@ export class SbxMcp {
       this.state.error = "Docker Sandboxes isn't ready on this machine.";
       return this.publish();
     }
-    const r = await run("sbx", ["mcp", "ls", "--json"], { timeoutMs: 15_000 });
+    const r = await this.exec("sbx", ["mcp", "ls", "--json"], { timeoutMs: 15_000 });
     // sbx ≤ 0.47 wraps the list ({ "servers": [...] }); 0.48+ prints the array itself.
     type Row = { name: string; transport?: string; status?: string; next_step?: string };
     const data = r.ok ? parseCliJson<Row[] | { servers?: Row[] }>(r.stdout) : null;
@@ -86,14 +91,15 @@ export class SbxMcp {
       const key = input.apiKey?.trim();
       // sbx fills ${token} from its secret store (mcp:<name>:token) when it connects.
       if (key && url) args.push("--header", "Authorization: Bearer ${token}");
-      const r = await run("sbx", args, { timeoutMs: 120_000 });
+      const r = await this.exec("sbx", args, { timeoutMs: 120_000 });
       if (!r.ok) {
-        this.hub.activity("config", null, `Couldn't add MCP server ${name}: ${firstLine(r.stderr || r.stdout).slice(0, 200)}`);
+        // No sbx text here: it can repeat the API key (SR-C-17).
+        this.hub.activity("config", null, `Couldn't add MCP server ${name}.`);
         return this.refresh();
       }
       if (key && url) {
-        const s = await run("sbx", ["secret", "set", `mcp:${name}:token`, "--force"], { timeoutMs: 20_000, input: key + "\n" });
-        if (!s.ok) this.hub.activity("config", null, `Added ${name}, but couldn't store its key: ${firstLine(s.stderr).slice(0, 160)}`);
+        const s = await this.exec("sbx", ["secret", "set", `mcp:${name}:token`, "--force"], { timeoutMs: 20_000, input: key + "\n" });
+        if (!s.ok) this.hub.activity("config", null, `Added ${name}, but couldn't store its key.`);
       }
       this.hub.activity("config", null, `Added MCP server ${name}`);
       await this.refresh();
@@ -110,14 +116,14 @@ export class SbxMcp {
   remove(name: string) {
     return this.serial(async () => {
       if (!MCP_NAME.test(name)) return;
-      const r = await run("sbx", ["mcp", "rm", name, "--force"], { timeoutMs: 30_000 });
+      const r = await this.exec("sbx", ["mcp", "rm", name, "--force"], { timeoutMs: 30_000 });
       if (!r.ok) {
         this.hub.activity("config", null, `Couldn't remove MCP server ${name}: ${firstLine(r.stderr || r.stdout).slice(0, 200)}`);
         return this.refresh();
       }
       // The API key HQ may have stored for it (no-op when there's none).
       // sbx stores the key plus an ":endpoint" entry that binds it to the server's URL.
-      for (const secret of [`mcp:${name}:token`, `mcp:${name}:token:endpoint`]) await run("sbx", ["secret", "rm", secret, "--force"], { timeoutMs: 15_000 });
+      for (const secret of [`mcp:${name}:token`, `mcp:${name}:token:endpoint`]) await this.exec("sbx", ["secret", "rm", secret, "--force"], { timeoutMs: 15_000 });
       let changed = false;
       for (const a of this.hub.snap.config.team)
         if (a.mcp?.includes(name)) {
@@ -175,7 +181,7 @@ export class SbxMcp {
     const sandbox = sessionName(this.hub.slug, agentId);
     const failed: string[] = [];
     for (const name of names) {
-      const r = await run("sbx", ["mcp", "load", name, "--sandbox", sandbox], { timeoutMs: 60_000 });
+      const r = await this.exec("sbx", ["mcp", "load", name, "--sandbox", sandbox], { timeoutMs: 60_000 });
       if (r.ok) this.state.attached[agentId] = [...new Set([...(this.state.attached[agentId] ?? []), name])];
       else failed.push(`${name}: ${firstLine(r.stderr || r.stdout).replace(/^error: /, "").slice(0, 140)}`);
     }

@@ -44,6 +44,17 @@ const PROMPT_READY = /⏵⏵|\? for shortcuts|Ask Codex to do anything/; // the 
 const SCREEN_QUIET_MS = 4000; // only second-guess hooks after this much silence
 const STALE_WORKING_MS = 15_000; // "working" with an idle screen this long = a missed Stop
 
+/**
+ * The `sbx run` arguments for an agent session. No BROWSER: a company agent does
+ * not get the opener that sends URLs to the host browser (SR-C-15). The opener sbx
+ * installs can still be run by name inside the sandbox; ADR 0007 records that.
+ */
+export function sbxRunArgs(o: { name: string; size: string[]; envFile: string | null; sbxAgent: string; dir: string; launchArgs: string[] }): string[] {
+  const env = o.envFile ? ["--env-file", o.envFile] : [];
+  const args = o.launchArgs.length ? ["--", ...o.launchArgs] : [];
+  return ["run", "--name", o.name, ...o.size, ...env, o.sbxAgent, o.dir, ...args];
+}
+
 /** Starts bash (else sh) in a sandbox, with links and browser opening set up (see SHELL_ENV, SANDBOX_BROWSER). */
 const SANDBOX_SHELL = `export FORCE_HYPERLINK=1; [ -x ${SANDBOX_BROWSER} ] && export BROWSER=${SANDBOX_BROWSER}; command -v bash >/dev/null && exec bash -l || exec sh -l`;
 
@@ -168,9 +179,7 @@ export class Sessions {
           const { cpus, memoryGb } = agent.sandbox.resources;
           const isNew = !(await this.sandboxExists(name));
           const size = !isNew ? [] : [...(cpus ? ["--cpus", String(cpus)] : []), ...(memoryGb ? ["--memory", `${Math.round(memoryGb * 1024)}m`] : [])];
-          const env = [...(envFile ? ["--env-file", envFile] : []), "-e", `BROWSER=${SANDBOX_BROWSER}`];
-          const args = launch.args.length ? ["--", ...launch.args] : [];
-          spec = { file: "sbx", args: ["run", "--name", name, ...size, ...env, launch.sbxAgent, dir, ...args], envFile: null };
+          spec = { file: "sbx", args: sbxRunArgs({ name, size, envFile, sbxAgent: launch.sbxAgent, dir, launchArgs: launch.args }), envFile: null };
         }
         await this.backend.create(name, dir, spec, { cols: 200, rows: 50 });
       }

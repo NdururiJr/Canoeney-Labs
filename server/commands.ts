@@ -1,4 +1,7 @@
 // Browser commands → server actions. Names match OfficeDataSource methods.
+// Each one declares the lowest human role that may run it, when it needs the
+// approval PIN (the approve, grant or relax direction, spec §9 item 2) and
+// whether a remote session may run it. server/dashboard.ts enforces that.
 
 import { SERVICE_KEYS, type AgentCli, type AgentConfig, type AgentPatch, type ReviewTool, type WelcomeInput, type NewMcpServer, type Board, type NewAgentInput, type ProjectConfig, type RemoveAgentOptions, type SandboxSettings, type SetupCheckId, type WorkflowPatch } from "../src/data/types";
 import { LEAD_NAME, OFFICE_NAME_MAX } from "../src/data/names";
@@ -8,7 +11,7 @@ import { ensureSkillCache } from "./skills";
 import { run } from "./lib/exec";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
-import { DASHBOARD_ACTOR } from "./company/agents";
+import type { CommandSpec } from "./dashboard";
 import { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { Planner } from "./planner";
@@ -46,43 +49,59 @@ function cleanStack(raw: unknown): StackConfig | null {
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "agent";
 const str = (v: unknown, max = 2000) => (typeof v === "string" ? v.slice(0, max) : "");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+const has = (o: unknown, ...keys: string[]) => !!o && typeof o === "object" && keys.some((k) => (o as Record<string, unknown>)[k] !== undefined);
+/** The first argument as an agent id or name, for the audit row. */
+const first = (a: unknown[]) => (typeof a[0] === "string" ? a[0] : null);
+/** A proxy as host:port only: the user-info part can hold a password (SR-C-17). */
+const proxyHost = (u: string) => {
+  try {
+    return new URL(u).host || "the proxy";
+  } catch {
+    return "the proxy";
+  }
+};
 
 export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inbox: Inbox, sbx: Sbx, mcp: SbxMcp, company: Company) {
-  /** Runs an sbx change and reports failures in the activity feed. */
-  const attempt = async (agentId: string | null, what: string, fn: () => Promise<void>) => {
+  /**
+   * Runs an sbx change and reports it in the activity feed. For a command that
+   * takes a secret, a failure is reported without sbx's text, which can repeat
+   * the value (SR-C-17).
+   */
+  const attempt = async (agentId: string | null, what: string, fn: () => Promise<void>, secret = false) => {
     try {
       await fn();
       hub.activity("config", agentId, what);
     } catch (err) {
-      hub.activity("config", agentId, `Couldn't ${what.charAt(0).toLowerCase() + what.slice(1)}: ${err instanceof Error ? err.message : err}`);
+      const lower = what.charAt(0).toLowerCase() + what.slice(1);
+      hub.activity("config", agentId, secret ? `Couldn't ${lower}.` : `Couldn't ${lower}: ${err instanceof Error ? err.message : err}`);
     }
   };
   const team = () => hub.snap.config.team;
 
-  const commands: Record<string, (...args: unknown[]) => unknown> = {
-    sendTerminalInput: (id, data) => sessions.input(str(id, 80), str(data, 100_000)),
-    openShell: (id) => sessions.openShell(str(id, 80)),
-    closeShell: (id) => sessions.closeShell(str(id, 80)),
-    openHostShell: (dir, fresh) => sessions.openHostShell(str(dir, 4096), fresh === true),
-    closeHostShell: () => sessions.closeHostShell(),
-    forwardPort: (agentId, port) => sbx.forwardPort(str(agentId, 80), num(port)),
-    unforwardPort: (agentId, port) => sbx.unforwardPort(str(agentId, 80), num(port)),
-    resizeTerminal: (id, cols, rows) => sessions.resize(str(id, 80), num(cols), num(rows)),
-    startAgent: (id) => sessions.start(str(id, 80)),
-    stopAgent: (id) => sessions.stop(str(id, 80)),
-    openWorkspace: (id) => sessions.openWorkspace(str(id, 80)),
-    recreateSandbox: (id) => sessions.recreate(str(id, 80)),
-    recheckSetup: async () => {
+  const commands: Record<string, CommandSpec> = {
+    sendTerminalInput: { role: "owner", localOnly: true, audit: "collapsed", target: first, run: (_ctx, id, data) => sessions.input(str(id, 80), str(data, 100_000)) },
+    openShell: { role: "owner", localOnly: true, target: first, run: (_ctx, id) => sessions.openShell(str(id, 80)) },
+    closeShell: { role: "owner", target: first, run: (_ctx, id) => sessions.closeShell(str(id, 80)) },
+    openHostShell: { role: "owner", localOnly: true, run: (_ctx, dir, fresh) => sessions.openHostShell(str(dir, 4096), fresh === true) },
+    closeHostShell: { role: "owner", run: () => sessions.closeHostShell() },
+    forwardPort: { role: "owner", target: first, run: (_ctx, agentId, port) => sbx.forwardPort(str(agentId, 80), num(port)) },
+    unforwardPort: { role: "owner", target: first, run: (_ctx, agentId, port) => sbx.unforwardPort(str(agentId, 80), num(port)) },
+    resizeTerminal: { role: "owner", localOnly: true, audit: "collapsed", target: first, run: (_ctx, id, cols, rows) => sessions.resize(str(id, 80), num(cols), num(rows)) },
+    startAgent: { role: "owner", target: first, run: (_ctx, id) => sessions.start(str(id, 80)) },
+    stopAgent: { role: "supervisor", target: first, run: (_ctx, id) => sessions.stop(str(id, 80)) },
+    openWorkspace: { role: "owner", localOnly: true, target: first, run: (_ctx, id) => sessions.openWorkspace(str(id, 80)) },
+    recreateSandbox: { role: "owner", target: first, run: (_ctx, id) => sessions.recreate(str(id, 80)) },
+    recheckSetup: { role: "owner", run: async () => {
       await sessions.recheckSetup();
       await sbx.refresh();
-    },
-    runSetupFix: (id) => sessions.runFix(str(id, 40) as SetupCheckId),
+    } },
+    runSetupFix: { role: "owner", localOnly: true, target: first, run: (_ctx, id) => sessions.runFix(str(id, 40) as SetupCheckId) },
 
     // You → agent: same delivery path as the lead's assign_task / send_message.
-    assignTask: (taskId, agentId) => planner.assign(str(taskId, 40), str(agentId, 80), "you"),
-    sendMessage: (toId, text) => planner.message("you", str(toId, 80), str(text, 2000)),
+    assignTask: { role: "owner", target: first, run: (_ctx, taskId, agentId) => planner.assign(str(taskId, 40), str(agentId, 80), "you") },
+    sendMessage: { role: "owner", target: first, run: (_ctx, toId, text) => planner.message("you", str(toId, 80), str(text, 2000)) },
 
-    addAgent: (raw) => {
+    addAgent: { role: "owner", pin: true, run: (ctx, raw) => {
       const input = (raw ?? {}) as Partial<NewAgentInput>;
       const name = str(input.name, 40).trim() || "Agent";
       // Never an id the config or the company store has used: a retired agent's id is not given out again.
@@ -97,7 +116,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       agent.mode = input.mode === "local" ? "local" : "sandbox";
       const lead = hub.cfg(planner.ctoId() ?? "");
       if (lead) agent.sandbox = structuredClone(lead.sandbox);
-      company.agents.register(hub.slug, agent, "builder", DASHBOARD_ACTOR, "dashboard");
+      const ctoId = planner.ctoId();
+      company.agents.register(hub.slug, agent, "builder", ctx.actor, "dashboard", {}, ctoId ? (company.agents.get(hub.slug, ctoId)?.companyId ?? null) : null);
       team().push(agent);
       const status = Hub.freshStatus(id);
       hub.snap.agents.push(status);
@@ -105,9 +125,9 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       hub.emit({ type: "agent.updated", agent: structuredClone(status) });
       hub.activity("config", null, `Added ${agent.name} (${agent.role}). Press Start to launch their session.`);
       if (agent.cli === "codex") void sessions.recheckSetup();
-    },
+    } },
 
-    updateAgent: (id, patch) => {
+    updateAgent: { role: "owner", pin: (a) => has(a[1], "mode", "cli", "workspacePath", "roleMd", "skills"), target: first, run: (_ctx, id, patch) => {
       const agent = hub.cfg(str(id));
       if (!agent) return;
       const p = (patch ?? {}) as AgentPatch;
@@ -124,14 +144,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       hub.configChanged();
       // Codex agents add their own setup checks.
       if (`${agent.cli}/${agent.mode}` !== before) void sessions.recheckSetup();
-    },
+    } },
 
-    inspectWorkspace: async (id) => {
+    inspectWorkspace: { role: "owner", target: first, run: async (_ctx, id) => {
       const info = await sessions.inspectWorkspace(str(id, 80));
       if (info) hub.emit({ type: "workspace.info", info });
-    },
+    } },
 
-    removeAgent: async (id, opts) => {
+    removeAgent: { role: "owner", pin: true, target: first, run: async (ctx, id, opts) => {
       const agent = hub.cfg(str(id));
       if (!agent || agent.id === planner.ctoId()) return;
       const o = (opts ?? {}) as Partial<RemoveAgentOptions>;
@@ -140,7 +160,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       hub.snap.agents = hub.snap.agents.filter((a) => a.agentId !== agent.id);
       // Retiring revokes the agent's secret, and its id is never given out again.
       const reg = company.agents.get(hub.slug, agent.id);
-      if (reg && reg.status !== "retired") company.agents.setStatus(hub.slug, agent.id, "retired", DASHBOARD_ACTOR);
+      if (reg && reg.status !== "retired") company.agents.setStatus(hub.slug, agent.id, "retired", ctx.actor);
       inbox.forget(agent.id);
       mcp.forget(agent.id);
       for (const t of hub.snap.tasks)
@@ -155,9 +175,9 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const what = removed.length ? ` Deleted: ${removed.join(" and ")}.` : "";
       const kept = removed.includes("folder") ? "" : " Their folder is kept.";
       hub.activity("config", null, `Removed ${agent.name}.${what}${kept}`);
-    },
+    } },
 
-    updateSandbox: (id, patch) => {
+    updateSandbox: { role: "owner", pin: (a) => has(a[1], "allow", "deny"), target: first, run: (_ctx, id, patch) => {
       const agent = hub.cfg(str(id));
       if (!agent) return;
       const p = (patch ?? {}) as Partial<SandboxSettings>;
@@ -176,42 +196,42 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       hub.configChanged();
       // Applies now if the sandbox exists; otherwise on its first Start.
       if (rulesChanged) void sbx.syncRules(agent.id);
-    },
+    } },
 
-    setSecret: (id, service, value) => {
+    setSecret: { role: "owner", pin: true, secret: true, target: first, run: (_ctx, id, service, value) => {
       const agentId = id === null ? null : str(id, 80);
       const svc = str(service, 40);
       if (!(SERVICE_KEYS as readonly string[]).includes(svc) || typeof value !== "string" || !value.trim()) return;
       if (agentId && !hub.cfg(agentId)) return;
-      return attempt(agentId, `Stored the ${svc} key ${agentId ? `for ${hub.name(agentId)}'s sandbox` : "for every sandbox"}`, () => sbx.setKey(agentId, svc, value));
-    },
-    removeSecret: (id, service) => {
+      return attempt(agentId, `Stored the ${svc} key ${agentId ? `for ${hub.name(agentId)}'s sandbox` : "for every sandbox"}`, () => sbx.setKey(agentId, svc, value), true);
+    } },
+    removeSecret: { role: "owner", target: first, run: (_ctx, id, service) => {
       const agentId = id === null ? null : str(id, 80);
       const svc = str(service, 40);
       if (!(SERVICE_KEYS as readonly string[]).includes(svc)) return;
       return attempt(agentId, `Removed the ${svc} key ${agentId ? `from ${hub.name(agentId)}'s sandbox` : "from every sandbox"}`, () => sbx.removeKey(agentId, svc));
-    },
-    setProxy: (url) => {
+    } },
+    setProxy: { role: "owner", pin: true, secret: true, run: (_ctx, url) => {
       const u = typeof url === "string" && url.trim() ? str(url, 300).trim() : null;
       if (u && !/^https?:\/\/[^\s]+$/i.test(u)) return hub.activity("config", null, "Proxy must be an http(s):// URL");
-      return attempt(null, u ? `Set the sandbox proxy to ${u}` : "Removed the sandbox proxy", () => sbx.setProxy(u));
-    },
-    openEnvFile: async (id) => {
+      return attempt(null, u ? `Set the sandbox proxy to ${proxyHost(u)}` : "Removed the sandbox proxy", () => sbx.setProxy(u), true);
+    } },
+    openEnvFile: { role: "owner", localOnly: true, target: first, run: async (_ctx, id) => {
       const agent = hub.cfg(str(id, 80));
       if (!agent) return;
       const file = sbx.ensureEnvFile(agent.id);
       const [cmd, args] = process.platform === "darwin" ? ["open", ["-t", file]] : process.platform === "win32" ? ["notepad", [file]] : ["xdg-open", [file]];
       await run(cmd, args, { timeoutMs: 5000 });
       await sbx.refresh();
-    },
-    refreshSbx: () => sbx.refresh(),
+    } },
+    refreshSbx: { role: "owner", run: () => sbx.refresh() },
 
-    resolveActionItem: (id, decision, note) => {
+    resolveActionItem: { role: "owner", target: first, run: (_ctx, id, decision, note) => {
       const d = decision === "done" || decision === "dismissed" ? decision : null;
       if (d) planner.actions?.resolve(str(id, 40), d, typeof note === "string" ? str(note, 1000) : undefined);
-    },
-    refreshMcp: () => mcp.refresh(),
-    addMcp: (raw) => {
+    } },
+    refreshMcp: { role: "owner", run: () => mcp.refresh() },
+    addMcp: { role: "owner", pin: true, secret: true, run: (_ctx, raw) => {
       const v = (raw ?? {}) as Partial<NewMcpServer>;
       return mcp.add({
         name: str(v.name, 40),
@@ -220,17 +240,17 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
         args: Array.isArray(v.args) ? v.args.slice(0, 20).map((a) => str(a, 200)) : undefined,
         apiKey: str(v.apiKey, 4000) || undefined,
       });
-    },
-    authMcp: (name) => mcp.authorize(str(name, 40)),
-    removeMcp: (name) => mcp.remove(str(name, 40)),
-    setAgentMcp: (agentId, names) => mcp.setAgent(str(agentId, 80), Array.isArray(names) ? names.slice(0, 50).map((n) => str(n, 40)) : []),
-    answerApproval: (agentId, approvalId, decision) => {
+    } },
+    authMcp: { role: "owner", pin: true, target: first, run: (_ctx, name) => mcp.authorize(str(name, 40)) },
+    removeMcp: { role: "owner", target: first, run: (_ctx, name) => mcp.remove(str(name, 40)) },
+    setAgentMcp: { role: "owner", pin: true, target: first, run: (_ctx, agentId, names) => mcp.setAgent(str(agentId, 80), Array.isArray(names) ? names.slice(0, 50).map((n) => str(n, 40)) : []) },
+    answerApproval: { role: "owner", pin: (a) => a[2] === "allow", target: first, run: (_ctx, agentId, approvalId, decision) => {
       const d = decision === "allow" || decision === "dismiss" ? decision : null;
       if (d) return sbx.answerApproval(str(agentId, 80), str(approvalId, 120), d);
-    },
+    } },
 
     /** Saves the project's stack (sanitised against the catalog). The agents get it in ROLE.md on their next start. */
-    updateStack: (raw) => {
+    updateStack: { role: "owner", run: (_ctx, raw) => {
       const cfg = hub.snap.config;
       const stack = cleanStack(raw);
       if (!stack) {
@@ -242,14 +262,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       // Fetch the skills now so the next Start doesn't wait for them.
       const specs = stackSkills(cfg.stack);
       if (specs.length) void ensureSkillCache(hub.slug, specs).catch((e) => hub.activity("config", null, `Couldn't fetch agent skills: ${String(e instanceof Error ? e.message : e).slice(0, 160)}`));
-    },
+    } },
 
-    resolveAccess: (id, decision) => {
+    resolveAccess: { role: "owner", pin: (a) => a[1] === "agent" || a[1] === "everyone", target: first, run: (_ctx, id, decision) => {
       const d = decision === "agent" || decision === "everyone" || decision === "deny" ? decision : null;
       if (d) return resolveAccess(hub, sbx, planner, str(id, 40), d);
-    },
+    } },
 
-    completeWelcome: async (raw) => {
+    completeWelcome: { role: "owner", pin: true, run: async (ctx, raw) => {
       if (!hub.snap.welcome) return;
       const input = (raw ?? {}) as Partial<WelcomeInput>;
       const cli = (c: unknown): AgentCli => (c === "codex" ? "codex" : "claude");
@@ -276,8 +296,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       // are, so that config still works where it exists. The CTO HQ talks to is
       // the one in the current config (planner.ctoId).
       company.db.transaction(() => {
-        const cto = company.agents.register(hub.slug, lead, "cto", DASHBOARD_ACTOR, "dashboard");
-        for (const w of workers) company.agents.register(hub.slug, w, "builder", DASHBOARD_ACTOR, "dashboard", {}, cto.companyId);
+        const cto = company.agents.register(hub.slug, lead, "cto", ctx.actor, "dashboard");
+        for (const w of workers) company.agents.register(hub.slug, w, "builder", ctx.actor, "dashboard", {}, cto.companyId);
       }, "immediate");
       const tools: ReviewTool[] = ["coderabbit", "greptile", "copilot", "human", "custom"];
       if (tools.includes(input.reviewTool as ReviewTool)) cfg.workflow.review.tool = input.reviewTool as ReviewTool;
@@ -296,9 +316,9 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       await sbx.refresh();
       hub.emit({ type: "snapshot", snapshot: structuredClone(hub.snap) });
       hub.activity("config", null, `Welcome! Team created: ${cfg.team.map((a) => a.name).join(", ")}. Press Start team when you're ready.`);
-    },
+    } },
 
-    updateWorkflow: (patch) => {
+    updateWorkflow: { role: "owner", pin: (a) => { const by = (a[0] as WorkflowPatch | undefined)?.merge?.by; return by !== undefined && by !== hub.snap.config.workflow.merge.by; }, run: (_ctx, patch) => {
       const p = (patch ?? {}) as WorkflowPatch;
       const wf = hub.snap.config.workflow;
       const mergeBy = wf.merge.by;
@@ -312,9 +332,9 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
         const waiting = hub.snap.pullRequests.filter((pr) => pr.review === "passed" && !pr.merged && !pr.closed).map((pr) => pr.number);
         planner.notify(leadId, mergeByNotice(wf.merge.by, waiting));
       }
-    },
+    } },
 
-    updateProject: (patch) => {
+    updateProject: { role: "owner", run: (_ctx, patch) => {
       const p = (patch ?? {}) as Partial<ProjectConfig>;
       const project = hub.snap.config.project;
       if (typeof p.name === "string" && p.name.trim()) project.name = str(p.name, 80);
@@ -331,15 +351,15 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
         hub.planChanged();
         hub.activity("config", null, "Plan export on: HQ writes docs/plan.md whenever the plan changes.");
       }
-    },
+    } },
 
-    createBoard: (title) => planner.createBoard(str(title, 80)),
+    createBoard: { role: "owner", run: (_ctx, title) => planner.createBoard(str(title, 80)) },
 
-    updateBoard: (id, patch) => {
+    updateBoard: { role: "owner", target: first, run: (_ctx, id, patch) => {
       const p = (patch ?? {}) as Partial<Board>;
       const status = p.status === "active" || p.status === "planned" || p.status === "done" ? p.status : undefined;
       planner.updateBoard(str(id, 20), { title: typeof p.title === "string" ? p.title : undefined, status });
-    },
+    } },
   };
 
   return commands;

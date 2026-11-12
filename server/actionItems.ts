@@ -55,7 +55,7 @@ export class ActionItems {
     this.items.unshift(item);
     this.save();
     this.hub.emit({ type: "action.updated", item: { ...item } });
-    this.hub.activity("agent.needs-input", fromId, `${this.hub.name(fromId)} added an action item${waiting ? " (waiting)" : ""}: ${clean}`);
+    this.hub.activity("agent.needs-input", fromId, `${this.hub.name(fromId)} added an action item${waiting ? " (waiting)" : ""}`, { quote: { author: this.hub.name(fromId), text: clean } });
     return item;
   }
 

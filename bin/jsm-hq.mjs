@@ -14,6 +14,8 @@ if (args.includes("--help") || args.includes("-h")) {
 
 Usage:
   npx @therealjsmastery/jsm-hq [options]          run inside a git repo
+  npx @therealjsmastery/jsm-hq reset-owner        on this machine, with HQ stopped: forget the owner's
+                                                  password, PIN and authenticator, and write a new setup code
 
 Options:
   --repo <path>   the git repo to manage (default: current folder)

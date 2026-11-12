@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { ActivityEvent, ActivityType } from "../../data/types";
 import { useOffice } from "../../store/office";
 import { ago, useNow } from "../kit";
+import { ActivityLine } from "../systemItems";
 
 const ICON: Record<ActivityType, [string, string]> = {
   "task.assigned": ["▸", "#c9b6ff"],
@@ -51,7 +52,7 @@ export function ActivityFeed() {
                   {icon}
                 </span>
                 <span className="min-w-0 flex-1 truncate" title={e.text}>
-                  {e.text}
+                  <ActivityLine event={e} />
                 </span>
                 <time className="shrink-0 text-[#7f8bb5]">{ago(e.at, now)}</time>
               </motion.li>

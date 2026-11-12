@@ -227,8 +227,12 @@ export interface ActivityEvent {
   type: ActivityType;
   agentId: string | null;
   text: string;
-  /** The text includes text an agent sent (a hook payload): untrusted, show it only as text. */
-  agentText?: true;
+  /**
+   * Words an agent (or a PR's author) wrote, kept out of HQ's own sentence in
+   * `text`. The dashboard shows them only as text, labelled with the author
+   * (SR-C-13).
+   */
+  quote?: { author: string; text: string };
 }
 
 /** What removing an agent would delete. Answer to `inspectWorkspace`. */

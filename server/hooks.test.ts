@@ -34,7 +34,9 @@ test("SR-B-20 [T-S2.5] hook text is cut, cleaned and flagged", async (t) => {
   assert.ok(!CONTROL.test(note));
   const activity = events.find((e) => e.type === "activity") as Extract<OfficeEvent, { type: "activity" }>;
   assert.ok(activity && !CONTROL.test(activity.event.text));
-  assert.equal(activity.event.agentText, true);
+  // The hook text travels as a labelled quote, cleaned too (M0-C, SR-C-13).
+  assert.equal(activity.event.quote?.author, "Ana");
+  assert.ok(activity.event.quote && !CONTROL.test(activity.event.quote.text) && activity.event.quote.text.length <= 200);
   const updated = events.filter((e) => e.type === "agent.updated") as Extract<OfficeEvent, { type: "agent.updated" }>[];
   assert.equal(updated[updated.length - 1].agent.noteIsAgentText, true);
 });

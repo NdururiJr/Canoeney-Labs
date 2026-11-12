@@ -3,12 +3,14 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { AgentRegistry, DASHBOARD_ACTOR, ProjectIdTakenError, companyAgentId } from "./agents";
+import { AgentRegistry, ProjectIdTakenError, companyAgentId } from "./agents";
 import { AgentSecrets } from "./agentSecrets";
 import { SqliteAuditSink } from "./audit";
 import { FakeClock } from "./clock";
 import { openCompanyDb } from "./db";
 
+/** A logged-in human, as dashboard commands pass it (M0-C). */
+const DASHBOARD_ACTOR = { kind: "human", id: "owner" } as const;
 const NOW = "2026-11-12T08:00:00.000Z";
 
 function fresh(t: { after(fn: () => void): void }, slugs = ["alpha"]) {
@@ -158,7 +160,7 @@ test("a role change is stored and audited with the actor", (t) => {
   assert.equal(agents.cto("alpha"), null);
   const row = audit.query({ action: "agent.role-changed" })[0];
   assert.equal(row.actorKind, "human");
-  assert.equal(row.actorId, "dashboard");
+  assert.equal(row.actorId, "owner");
   assert.deepEqual(row.data, { from: "cto", to: "builder" });
 });
 

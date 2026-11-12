@@ -1,5 +1,6 @@
 // 127.0.0.1 only. Routes:
-//   GET  /ws?token=…            browser WebSocket (browser token)
+//   GET  /ws                    browser WebSocket (an owner or supervisor session cookie, M0-C)
+//   *    /auth/…                login, enrollment and logout (ownerAuth.ts)
 //   POST /hook/<agent>/<event>  Claude Code hooks (the agent's own secret)
 //   POST /mcp                   the Team MCP (the agent's own secret)
 //   GET  /api/health
@@ -8,7 +9,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
-import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { OfficeEvent } from "../src/data/source";
 import type { AgentAuth, CheckResult } from "./agentAuth";
@@ -16,20 +16,16 @@ import type { Company } from "./company";
 import { handleHook } from "./hooks";
 import type { Hub } from "./hub";
 import type { Inbox } from "./inbox";
+import type { DashboardSession, OwnerAuth } from "./ownerAuth";
+import { viewFor, type CommandCtx, type CommandResult, type Dashboard } from "./dashboard";
 import { handleMcp } from "./mcp";
+import { securityHeaders } from "./securityHeaders";
 import type { Planner } from "./planner";
-import { log } from "./lib/log";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
   ".woff2": "font/woff2", ".woff": "font/woff", ".png": "image/png", ".json": "application/json",
 };
-
-function safeEqual(a: string, b: string) {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-}
 
 function readBody(req: IncomingMessage, limit = 256 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -50,13 +46,15 @@ interface Options {
   inbox: Inbox;
   planner: Planner;
   port: number;
-  browserToken: string;
+  /** Who is logged in to the dashboard (M0-C). */
+  ownerAuth: OwnerAuth;
   /** Resolves /mcp and /hook callers from their own secret (M0-B). */
   agentAuth: AgentAuth;
   company: Company;
   distDir: string | null;
   allowedOrigins: string[];
-  commands: Record<string, (...args: unknown[]) => unknown>;
+  /** The dashboard command table and its dispatcher (M0-C). */
+  dashboard: Dashboard;
 }
 
 export function startHttp(o: Options) {
@@ -86,8 +84,11 @@ export function startHttp(o: Options) {
   };
 
   const server = createServer(async (req, res) => {
+    // On every response, set before anything else so later writeHead calls keep them (SR-C-12).
+    for (const [k, v] of Object.entries(securityHeaders(req.headers.host))) res.setHeader(k, v);
     const url = parseUrl(req.url);
     if (!url) return send(res, 400, "bad request");
+    if (/^\/(auth|api|mcp|hook)(\/|$)/.test(url.pathname)) res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "POST" && url.pathname.startsWith("/hook/")) {
       const [, , claimed, event] = url.pathname.split("/");
@@ -124,6 +125,8 @@ export function startHttp(o: Options) {
       }
     }
 
+    if (await o.ownerAuth.handle(req, res, url)) return;
+
     if (url.pathname === "/api/health") return send(res, 200, JSON.stringify({ ok: true }), "application/json");
 
     if (req.method === "GET" && o.distDir) {
@@ -137,33 +140,90 @@ export function startHttp(o: Options) {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  /** Open sockets per session, so ending a session closes them (code 4401). */
+  const socketsBySession = new Map<string, Set<WebSocket>>();
+  o.ownerAuth.onEnd((sessionId) => {
+    for (const ws of socketsBySession.get(sessionId) ?? []) ws.close(4401, "session ended");
+    socketsBySession.delete(sessionId);
+  });
+  // Upgraded sockets are not HTTP connections any more: closing everything must end them too.
+  const closeHttp = server.closeAllConnections.bind(server);
+  server.closeAllConnections = () => {
+    for (const c of wss.clients) c.terminate();
+    closeHttp();
+  };
+  const sweep = setInterval(() => {
+    o.ownerAuth.sweep();
+    o.dashboard.flush();
+  }, 60_000);
+  sweep.unref();
+  server.on("close", () => clearInterval(sweep));
+
   server.on("upgrade", (req, socket, head) => {
     const url = parseUrl(req.url) ?? new URL("http://127.0.0.1/");
-    const origin = req.headers.origin ?? "";
-    const token = url.searchParams.get("token") ?? "";
-    // Token + origin: another website in your browser can't drive HQ.
-    if (url.pathname !== "/ws" || !safeEqual(token, o.browserToken) || (origin && !o.allowedOrigins.includes(origin))) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    const origin = req.headers.origin;
+    // A logged-in session and an allowed Origin: another website in the browser can't drive HQ (SR-C-01, SR-C-03).
+    const session = url.pathname === "/ws" && typeof origin === "string" && o.allowedOrigins.includes(origin) ? o.ownerAuth.sessionFor(req) : null;
+    if (!session) {
+      const headers = Object.entries(securityHeaders(req.headers.host)).map(([k, v]) => `${k}: ${v}\r\n`).join("");
+      socket.write(`HTTP/1.1 401 Unauthorized\r\n${headers}\r\n`);
       return socket.destroy();
     }
-    wss.handleUpgrade(req, socket, head, (ws) => onClient(ws));
+    // A session issued locally but replayed through a proxy is remote for this socket.
+    const remote = session.remote || o.ownerAuth.isRemote(req);
+    wss.handleUpgrade(req, socket, head, (ws) => onClient(ws, session, remote));
   });
 
-  function onClient(ws: WebSocket) {
-    const sendEvent = (e: OfficeEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(e));
+  function onClient(ws: WebSocket, session: DashboardSession, remote: boolean) {
+    const mine = socketsBySession.get(session.id) ?? new Set<WebSocket>();
+    mine.add(ws);
+    socketsBySession.set(session.id, mine);
+    // Each socket gets what its role may see (SR-C-09).
+    const sendEvent = (e: OfficeEvent) => {
+      // A remote socket gets no terminal output: the page has no terminal there (SR-C-08).
+      if (remote && e.type === "terminal.output") return;
+      const v = viewFor(session.role, e);
+      if (v && ws.readyState === ws.OPEN) ws.send(JSON.stringify(v));
+    };
     sendEvent({ type: "snapshot", snapshot: o.hub.snap });
     const unsub = o.hub.subscribe(sendEvent);
+    const ctx: CommandCtx = { actor: { kind: "human", id: session.humanId }, role: session.role, remote, sessionId: session.id };
+    const allowed = o.dashboard.limiter();
+    let limitedRowAt: number | null = null;
+    const reply = (id: unknown, r: CommandResult) => {
+      if (typeof id === "string" && id.length <= 40) sendEvent({ type: "command.result", id, ...r });
+    };
     ws.on("message", async (raw) => {
+      let msg: { cmd?: unknown; args?: unknown; pin?: unknown; id?: unknown } = {};
       try {
-        const msg = JSON.parse(String(raw)) as { cmd?: string; args?: unknown[] };
-        const fn = msg.cmd ? o.commands[msg.cmd] : undefined;
-        if (!fn) return log.warn("unknown command", msg.cmd);
-        await fn(...(Array.isArray(msg.args) ? msg.args : []));
-      } catch (err) {
-        log.warn("command failed:", err instanceof Error ? err.message : err);
+        const parsed: unknown = JSON.parse(String(raw));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) msg = parsed as typeof msg;
+      } catch {
+        /* not JSON: dispatched as an unknown command */
+      }
+      // Over the rate (SR-C-18): dropped, and one row per minute for this connection.
+      if (!allowed()) {
+        try {
+          limitedRowAt = o.dashboard.rateLimited(ctx, limitedRowAt);
+        } catch {
+          /* the drop stands without its row */
+        }
+        return reply(msg.id, { ok: false, error: "rate-limited" });
+      }
+      // A message from the client is activity; frames HQ pushes are not.
+      if (!o.ownerAuth.touch(session.id)) return ws.close(4401, "session ended");
+      try {
+        reply(msg.id, await o.dashboard.dispatch(ctx, msg));
+      } catch {
+        // dispatch does not throw; if it ever did, an unhandled rejection would end HQ.
+        reply(msg.id, { ok: false, error: "failed" });
       }
     });
-    ws.on("close", () => unsub());
+    ws.on("close", () => {
+      unsub();
+      mine.delete(ws);
+      if (!mine.size) o.dashboard.flush();
+    });
   }
 
   return new Promise<typeof server>((resolve, reject) => {

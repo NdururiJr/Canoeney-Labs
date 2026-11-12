@@ -46,7 +46,9 @@ export type OfficeEvent =
   | { type: "terminal.output"; agentId: string; data: string }
   | { type: "access.updated"; request: AccessRequest }
   | { type: "mcp.updated"; mcp: McpState }
-  | { type: "action.updated"; item: ActionItem };
+  | { type: "action.updated"; item: ActionItem }
+  /** The answer to one command, sent only to the socket that sent it (M0-C). */
+  | { type: "command.result"; id: string; ok: boolean; error?: string };
 
 export type SimSpeed = 1 | 2 | 4;
 
@@ -68,6 +70,9 @@ export interface DevControls {
 
 export interface OfficeDataSource {
   connect(onEvent: (e: OfficeEvent) => void, onStatus?: (s: ConnectionStatus) => void): () => void; // returns disconnect
+
+  /** Sends a command again with the approval PIN (real HQ only, M0-C). */
+  sendWithPin?(cmd: string, args: unknown[], pin: string): void;
 
   sendTerminalInput(agentId: string, data: string): void;
   resizeTerminal(agentId: string, cols: number, rows: number): void;

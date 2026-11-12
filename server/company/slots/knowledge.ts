@@ -21,6 +21,9 @@ export class SqliteKnowledgeStore {
     // transaction, and this joins a caller's transaction if one is open (open
     // it with mode "immediate"), so a wider owner action commits atomically.
     const write = (): KnowledgeDoc => {
+      // Only the owner changes company knowledge (SR-C-16).
+      const who = this.db.prepare("SELECT role FROM humans WHERE id = ? AND disabled_at IS NULL").get<{ role: string }>(byHumanId);
+      if (who?.role !== "owner") throw new Error("Only the owner can change company knowledge.");
       const at = this.clock.now().toISOString();
       const row = this.db
         .prepare(

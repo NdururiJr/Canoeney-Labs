@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
+import { HOST_TERMINAL } from "../../data/types";
 import { officeActions } from "../../store/office";
 import { readTerminal, subscribeTerminal } from "../../store/terminal";
 import { FONT_EVENT, savedFont, terminalFont, type FontStyle } from "../../theme/fonts";
@@ -55,6 +56,12 @@ export function TerminalView({ agentId, autoFocus = true }: { agentId: string; a
       // Links a program marks as links (OSC 8), e.g. with FORCE_HYPERLINK set: the full URL, however it wraps.
       linkHandler: { activate: (_e, uri) => openLink(uri), allowNonHttpProtocols: false },
     });
+    // A second layer under the server's filter (SR-C-14): xterm itself drops clipboard writes (OSC 52) and
+    // links with a hidden target (OSC 8) in every terminal but your own host shell.
+    if (agentId !== HOST_TERMINAL) {
+      term.parser.registerOscHandler(8, () => true);
+      term.parser.registerOscHandler(52, () => true);
+    }
     const fit = new FitAddon();
     term.loadAddon(fit);
     // Plain URLs in the output, including ones the terminal wrapped onto the next line.

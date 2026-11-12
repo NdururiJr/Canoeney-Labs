@@ -6,8 +6,12 @@ import { test } from "node:test";
 import { CODEX_CONFIG } from "./adapters";
 import { MCP_CONFIG } from "./agentFiles";
 import type { SessionBackend } from "./backends/types";
-import { DASHBOARD_ACTOR } from "./company/agents";
+/** A logged-in owner, as dashboard commands pass it (M0-C). */
+const DASHBOARD_ACTOR = { kind: "human", id: "owner" } as const;
 import { makeCommands } from "./commands";
+import type { CommandCtx } from "./dashboard";
+
+const OWNER_CTX: CommandCtx = { actor: { kind: "human", id: "owner" }, role: "owner", remote: false, sessionId: "s" };
 import { Sessions } from "./sessions";
 import { hook, makeHq, mcpCall, type Hq } from "./testing/hqFixture";
 import { withSessions } from "./testing/sessionFixture";
@@ -174,11 +178,11 @@ test("a new agent never reuses a retired agent's id", async (t) => {
   const { sessions } = withSessions(t, hq);
   const stub = { forget() {}, refresh: async () => {} } as never;
   const commands = makeCommands(hq.hub, sessions, hq.planner, hq.inbox, stub, stub, hq.company);
-  commands.addAgent({ name: "Cara", mode: "local" });
+  commands.addAgent.run(OWNER_CTX, { name: "Cara", mode: "local" });
   assert.equal(hq.company.agents.get(hq.slug, "cara")?.role, "builder");
-  await commands.removeAgent("cara", { deleteSandbox: false, deleteFolder: false });
+  await commands.removeAgent.run(OWNER_CTX, "cara", { deleteSandbox: false, deleteFolder: false });
   assert.equal(hq.company.agents.get(hq.slug, "cara")?.status, "retired");
-  commands.addAgent({ name: "Cara", mode: "local" });
+  commands.addAgent.run(OWNER_CTX, { name: "Cara", mode: "local" });
   assert.ok(hq.hub.cfg("cara-2"));
   assert.equal(hq.company.agents.get(hq.slug, "cara-2")?.status, "active");
 });
@@ -203,7 +207,7 @@ test("completing the welcome screen again keeps the earlier team usable", async 
   const oldTeam = hq.hub.snap.config.team;
   // A checkout without .jsmhq/config.json: the welcome screen shows, and a team is made.
   hq.hub.snap.welcome = true;
-  await commands.completeWelcome({ lead: { name: "Lead" }, workers: [{ name: "Ana", role: "Developer" }] });
+  await commands.completeWelcome.run(OWNER_CTX, { lead: { name: "Lead" }, workers: [{ name: "Ana", role: "Developer" }] });
   assert.deepEqual(hq.hub.snap.config.team.map((a) => a.id), ["lead-2", "ana-2"]);
   assert.equal(hq.planner.ctoId(), "lead-2");
   assert.equal(hq.company.agents.get(hq.slug, "lead-2")?.role, "cto");

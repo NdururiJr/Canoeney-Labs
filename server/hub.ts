@@ -2,10 +2,11 @@
 // OfficeEvent to all connected browsers, and config/plan changes are saved.
 
 import type { OfficeEvent } from "../src/data/source";
-import type { ActivityEvent, ActivityType, AgentConfig, AgentStatus, HqConfig, OfficeSnapshot, SessionInfo, SetupState } from "../src/data/types";
+import { HOST_TERMINAL, type ActivityEvent, type ActivityType, type AgentConfig, type AgentStatus, type HqConfig, type OfficeSnapshot, type SessionInfo, type SetupState } from "../src/data/types";
 import { writePlanExport } from "./planExport";
 import { saveConfig, savePlan, type PlanFile } from "./store";
 import type { RepoInfo } from "./repo";
+import { TerminalFilter } from "./terminalFilter";
 
 type Listener = (e: OfficeEvent) => void;
 
@@ -66,12 +67,13 @@ export class Hub {
   // ------------------------------------------------------------ mutations
 
   /** While an access request is open, the agent stays "needs you"; what hooks report meanwhile is kept for after. */
-  private held = new Map<string, { state: AgentStatus["state"]; note: string | null }>();
+  private held = new Map<string, { state: AgentStatus["state"]; note: string | null; noteIsAgentText?: true }>();
 
   /** Remember what the agent was doing before it asked, to return to it after the answer. */
   holdForAccess(agentId: string) {
     const s = this.status(agentId);
-    if (s && !this.held.has(agentId) && s.state !== "needs-input") this.held.set(agentId, { state: s.state, note: s.note });
+    if (s && !this.held.has(agentId) && s.state !== "needs-input")
+      this.held.set(agentId, { state: s.state, note: s.note, ...(s.noteIsAgentText ? { noteIsAgentText: true as const } : {}) });
   }
 
   pendingAccess(agentId: string) {
@@ -94,9 +96,14 @@ export class Hub {
     if (!s) return;
     const open = this.pendingAccess(id);
     if (open && patch.state !== undefined && patch.state !== "needs-input") {
-      // A patch without a note keeps the note from before the request, not the "Asking" one.
-      this.held.set(id, { state: patch.state, note: patch.note !== undefined ? patch.note : (this.held.get(id)?.note ?? null) });
-      patch = { ...patch, state: "needs-input", note: `Asking: access to ${open.domain}` };
+      // A patch without a note keeps the note from before the request, not the "Asking" one,
+      // and the held note keeps whether an agent wrote it.
+      const prev = this.held.get(id);
+      const keepsOld = patch.note === undefined;
+      const agentWords = keepsOld ? prev?.noteIsAgentText : patch.noteIsAgentText;
+      this.held.set(id, { state: patch.state, note: keepsOld ? (prev?.note ?? null) : patch.note!, ...(agentWords ? { noteIsAgentText: true as const } : {}) });
+      // HQ's own note, naming the domain the agent asked for: the whole note is flagged, since the domain is agent text.
+      patch = { ...patch, state: "needs-input", note: `Asking: access to ${open.domain}`, noteIsAgentText: true };
     }
     if (patch.state !== undefined && patch.state !== s.state) s.stateSince = now();
     // A note set without the flag is HQ's own text: it no longer holds agent text.
@@ -117,10 +124,13 @@ export class Hub {
     this.emit({ type: "setup.updated", setup });
   }
 
-  /** `agentText`: the text includes text an agent sent, which the dashboard shows only as text. */
-  activity(type: ActivityType, agentId: string | null, text: string, opts: { agentText?: true } = {}) {
+  /**
+   * `text` is HQ's own sentence. Words an agent wrote (a tool argument, a hook
+   * field, a PR title) go in `quote`, never in `text` (SR-C-13).
+   */
+  activity(type: ActivityType, agentId: string | null, text: string, opts: { quote?: { author: string; text: string } } = {}) {
     this.seq += 1;
-    const event: ActivityEvent = { id: `a${this.seq}`, at: now(), type, agentId, text, ...(opts.agentText ? { agentText: true as const } : {}) };
+    const event: ActivityEvent = { id: `a${this.seq}`, at: now(), type, agentId, text, ...(opts.quote ? { quote: opts.quote } : {}) };
     this.snap.activity = [event, ...this.snap.activity].slice(0, 50);
     this.emit({ type: "activity", event });
   }
@@ -136,7 +146,17 @@ export class Hub {
     if (this.snap.config.project.exportPlan) writePlanExport(this.repo.root, this.snap.config, plan);
   }
 
+  /** One filter per terminal: clipboard and hyperlink escapes are removed before the browser (SR-C-14). */
+  private terminalFilters = new Map<string, TerminalFilter>();
+
   terminal(agentId: string, data: string) {
+    // The host shell is the owner's own; every other terminal shows what an agent or a sandbox printed.
+    if (agentId !== HOST_TERMINAL) {
+      let f = this.terminalFilters.get(agentId);
+      if (!f) this.terminalFilters.set(agentId, (f = new TerminalFilter()));
+      data = f.push(data);
+      if (!data) return;
+    }
     this.emit({ type: "terminal.output", agentId, data });
   }
 }

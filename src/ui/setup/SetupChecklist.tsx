@@ -3,6 +3,7 @@ import type { SetupCheck, SetupStatus } from "../../data/types";
 import { officeActions, useOffice } from "../../store/office";
 import { ui } from "../../store/ui";
 import { TerminalView } from "../drawers/TerminalView";
+import { safeHref } from "../agentText";
 
 const ICON: Record<SetupStatus, [string, string]> = {
   ok: ["✓", "#00a83a"],
@@ -56,7 +57,7 @@ function CheckRow({ c, running, onRun }: { c: SetupCheck; running: boolean; onRu
                 </>
               )}
               {c.fix.docs && (
-                <a className="text-[13px] font-semibold underline" href={c.fix.docs} target="_blank" rel="noreferrer">
+                <a className="text-[13px] font-semibold underline" href={safeHref(c.fix.docs) ?? undefined} target="_blank" rel="noreferrer">
                   Docs ↗
                 </a>
               )}

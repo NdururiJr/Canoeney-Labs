@@ -23,16 +23,19 @@ function hitTest(s: OfficeScene, sx: number, sy: number): Target | null {
   return null;
 }
 
-function describe(hit: Hit): { title: string; sub?: string } {
+function describe(hit: Hit): { title: string; sub?: string; quote?: { author: string; text: string } } {
   const snap = useOffice.getState().snap;
   if (!snap) return { title: "" };
   if (hit.kind === "agent") {
     const a = snap.config.team.find((x) => x.id === hit.id);
     const st = snap.agents.find((x) => x.agentId === hit.id);
     const task = st?.currentTaskId ? snap.tasks.find((t) => t.id === st.currentTaskId) : null;
+    // HQ's words in sub; a task title or a flagged note travels as a quote (SR-C-13).
+    const agentNote = !task && st?.note && st.noteIsAgentText ? st.note : null;
     return {
       title: `${a?.name ?? hit.id} · ${a?.role ?? ""}`,
-      sub: [st ? stateStyle[st.state].label : "", task ? `${task.id} ${task.title}` : st?.note ?? ""].filter(Boolean).join(" — "),
+      sub: [st ? stateStyle[st.state].label : "", task ? task.id : agentNote ? "" : (st?.note ?? "")].filter(Boolean).join(" — "),
+      quote: task ? { author: "an agent", text: task.title } : agentNote ? { author: a?.name ?? hit.id, text: agentNote } : undefined,
     };
   }
   if (hit.kind === "plan") {

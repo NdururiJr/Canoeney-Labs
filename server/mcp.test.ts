@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PullRequest } from "../src/data/types";
 import { roleMd } from "./agentFiles";
-import { DASHBOARD_ACTOR } from "./company/agents";
+/** A logged-in owner, as dashboard commands pass it (M0-C). */
+const DASHBOARD_ACTOR = { kind: "human", id: "owner" } as const;
 import { HQ_TOOLS, TOOLS_BY_ROLE, type HqTool } from "./company/roleTools";
 import { GitHubSync } from "./githubSync";
 import { makeHq, mcpCall, mcpRequest, type Hq } from "./testing/hqFixture";
@@ -251,8 +252,10 @@ test("SR-B-21 [T-S1.12 T-S2.6] the per-secret limit counts calls, not requests",
   const batch = Array.from({ length: 100 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "send_message", arguments: { to: "ben", text: `m${i}` } } }));
   const statuses: number[] = [];
   for (let i = 0; i < 100; i++) statuses.push((await mcpRequest(hq, ana, batch)).status);
-  const ran = hq.hub.snap.messages.filter((m) => m.fromId === "ana").length;
+  // Counted from the audit trail: the message list keeps only 100, so it could never show more.
+  const ran = hq.company.audit.query({ action: "tool.called", limit: 100_000 }).filter((r) => r.data.outcome === "ok").length;
   assert.ok(ran <= 100, `${ran} calls ran`);
+  assert.ok(ran > 0, "the first batch ran");
   assert.ok(statuses.filter((s) => s === 429).length >= 99);
   assert.equal(hq.company.audit.query({ action: "auth.rate-limited", limit: 1000 }).length, 1);
   assert.ok(!(await mcpCall(hq, hq.secretFor("ben"), "get_my_task")).json?.error);

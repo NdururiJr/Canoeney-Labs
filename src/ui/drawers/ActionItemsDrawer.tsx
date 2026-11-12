@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { ActionItem } from "../../data/types";
 import { officeActions, selectAttention, useOffice } from "../../store/office";
 import { ui } from "../../store/ui";
 import { ago, Dot, SectionTitle, useNow } from "../kit";
 import { DrawerHeader } from "./Drawer";
+import { safeHref } from "../agentText";
+import { AgentMarkdown, AgentText } from "../agentText";
+import { NeedsYouRow } from "../systemItems";
 
 /** Everything waiting on the user: agents' action items first, then the other things that need them. */
 export function ActionItemsDrawer() {
@@ -47,7 +50,7 @@ export function ActionItemsDrawer() {
                 <Row key={`ask-${s.agentId}`} color={agent(s.agentId)?.color} text={`${agent(s.agentId)?.name ?? s.agentId} is asking you something in the terminal`} onOpen={() => ui.openAgent(s.agentId, "terminal")} />
               ))}
               {a.access.map((r) => (
-                <Row key={r.id} color={agent(r.agentId)?.color} text={`${agent(r.agentId)?.name ?? r.agentId} wants to reach ${r.domain}`} onOpen={() => ui.openAgent(r.agentId)} />
+                <Row key={r.id} color={agent(r.agentId)?.color} text={<NeedsYouRow before={`${agent(r.agentId)?.name ?? r.agentId} wants to reach`} quote={{ author: agent(r.agentId)?.name ?? r.agentId, text: r.domain }} />} onOpen={() => ui.openAgent(r.agentId)} />
               ))}
               {a.blocked.map((b) => (
                 <Row
@@ -61,14 +64,14 @@ export function ActionItemsDrawer() {
                 p.url ? (
                   <li key={`pr-${p.number}`} className="flex items-center gap-2 border-[3px] border-ink bg-white px-2.5 py-1.5">
                     <span className="flex-1">
-                      PR <b>#{p.number}</b> {p.title} passed review and is ready to merge
+                      PR <b>#{p.number}</b> <AgentText inline author="the PR's author" text={p.title} /> passed review and is ready to merge
                     </span>
-                    <a className="btn px-2 text-[12px]" href={p.url} target="_blank" rel="noreferrer">
+                    <a className="btn px-2 text-[12px]" href={safeHref(p.url) ?? undefined} target="_blank" rel="noreferrer">
                       Open ↗
                     </a>
                   </li>
                 ) : (
-                  <Row key={`pr-${p.number}`} text={`PR #${p.number} ${p.title} passed review and is ready to merge`} onOpen={() => ui.openPrs()} />
+                  <Row key={`pr-${p.number}`} text={<NeedsYouRow before={`PR #${p.number}`} quote={{ author: "the PR's author", text: p.title }} after="passed review and is ready to merge" />} onOpen={() => ui.openPrs()} />
                 ),
               )}
             </ul>
@@ -84,7 +87,7 @@ export function ActionItemsDrawer() {
               <ul className="mt-2 flex flex-col gap-1 text-[13px] text-muted">
                 {closed.map((i) => (
                   <li key={i.id} className="border-t-2 border-dashed border-cream-3 py-1">
-                    <span className={i.status === "dismissed" ? "line-through" : ""}>{i.title}</span> · {agent(i.fromId)?.name ?? i.fromId} ·{" "}
+                    <span className={i.status === "dismissed" ? "line-through" : ""}><AgentText inline author={agent(i.fromId)?.name ?? i.fromId} text={i.title} /></span> · {agent(i.fromId)?.name ?? i.fromId} ·{" "}
                     {i.status} {i.closedAt ? `${ago(i.closedAt, now)} ago` : ""}
                     {i.note && <div className="pl-3">“{i.note}”</div>}
                   </li>
@@ -98,7 +101,7 @@ export function ActionItemsDrawer() {
   );
 }
 
-function Row({ text, color, onOpen }: { text: string; color?: string; onOpen: () => void }) {
+function Row({ text, color, onOpen }: { text: ReactNode; color?: string; onOpen: () => void }) {
   return (
     <li className="flex items-center gap-2 border-[3px] border-ink bg-white px-2.5 py-1.5">
       {color && <Dot color={color} size={8} />}
@@ -117,7 +120,7 @@ function Item({ item, from, now }: { item: ActionItem; from?: { id: string; name
   return (
     <li className={`border-[3px] border-ink bg-white px-3 py-2 shadow-[0_3px_0_rgba(36,26,46,0.35)] ${item.waiting ? "outline outline-[3px] outline-orange" : ""}`}>
       <div className="flex items-start gap-2">
-        <b className="flex-1 text-[15px]">{item.title}</b>
+        <b className="flex-1 text-[15px]"><AgentText inline author={from?.name ?? item.fromId} text={item.title} /></b>
         {item.waiting && <span className="chip shrink-0 text-[11px]" style={{ background: "#fff1d6" }}>waiting</span>}
       </div>
       <div className="mb-1 flex items-center gap-1.5 text-[12px] text-muted">
@@ -129,7 +132,7 @@ function Item({ item, from, now }: { item: ActionItem; from?: { id: string; name
         <span>· {ago(item.at, now)} ago</span>
       </div>
       {item.details && (
-        <div className={`whitespace-pre-wrap text-[13px] ${long && !expanded ? "line-clamp-6" : ""}`}>{item.details}</div>
+        <AgentMarkdown author={from?.name ?? item.fromId} source={item.details} className={`text-[13px] ${long && !expanded ? "line-clamp-6" : ""}`} />
       )}
       {long && (
         <button className="text-[12px] underline" onClick={() => setExpanded(!expanded)}>

@@ -18,6 +18,15 @@ function fresh(t: { after(fn: () => void): void }) {
   return { db, clock, audit, addHuman, store: new SqliteKnowledgeStore(db, clock, audit) };
 }
 
+test("SR-C-16 [T-X1.8] knowledge.put refuses a caller who is not the owner", async (t) => {
+  const { store, audit, addHuman } = fresh(t);
+  addHuman("sup1");
+  const before = audit.query().length;
+  for (const who of ["sup1", "nobody"]) assert.throws(() => store.put({ id: "p", title: "T", body: "b" }, who), /owner/);
+  assert.equal(await store.reader().get("p"), null);
+  assert.equal(audit.query().length, before);
+});
+
 test("put creates version 1 then 2", async (t) => {
   const { store, clock } = fresh(t);
   const d1 = store.put({ id: "refund-policy", title: "Refunds", body: "first" }, "owner1");
@@ -44,10 +53,12 @@ test("put audits the id and version, never the body", (t) => {
 });
 
 test("put rolls back the document when the audit append fails", async (t) => {
-  const { store, audit, addHuman } = fresh(t);
+  const { store, audit, addHuman, db } = fresh(t);
   // SQLite stores a lone surrogate as U+FFFD, so give the FK a matching row;
-  // the failure then comes from the audit well-formedness guard.
-  addHuman("a�b");
+  // the failure then comes from the audit well-formedness guard. That row is
+  // the owner, so the owner check (SR-C-16) passes and the audit append fails.
+  db.prepare("UPDATE humans SET role = 'supervisor' WHERE id = 'owner1'").run();
+  addHuman("a�b", "owner");
   const head = audit.head();
   assert.throws(() => store.put({ id: "p", title: "T", body: "b" }, "a\uD800b"), TypeError);
   assert.equal(await store.reader().get("p"), null);

@@ -77,7 +77,6 @@ export function handleHook(hub: Hub, inbox: Inbox, company: Company, agentId: st
     message: cleanAgentText(payload?.message),
     notificationType: cleanAgentText(payload?.notification_type, 64),
   };
-  const agentText = { agentText: true as const };
 
   switch (event) {
     case "SessionStart":
@@ -106,7 +105,7 @@ export function handleHook(hub: Hub, inbox: Inbox, company: Company, agentId: st
       // Codex: an approval prompt is waiting in the terminal.
       if (body.toolName) {
         hub.setStatus(agentId, { state: "needs-input", note: `Asking: Approve ${body.toolName}?`, noteIsAgentText: true });
-        hub.activity("agent.needs-input", agentId, `${name} needs you: Approve ${body.toolName}?`, agentText);
+        hub.activity("agent.needs-input", agentId, `${name} needs you to approve a tool`, { quote: { author: name, text: body.toolName } });
       } else {
         hub.setStatus(agentId, { state: "needs-input", note: "Asking: Approval needed in the terminal" });
         hub.activity("agent.needs-input", agentId, `${name} needs you: Approval needed in the terminal`);
@@ -121,7 +120,7 @@ export function handleHook(hub: Hub, inbox: Inbox, company: Company, agentId: st
       }
       if (body.message) {
         hub.setStatus(agentId, { state: "needs-input", note: `Asking: ${clip(body.message)}`, noteIsAgentText: true });
-        hub.activity("agent.needs-input", agentId, `${name} needs you: ${clip(body.message, 60)}`, agentText);
+        hub.activity("agent.needs-input", agentId, `${name} needs you`, { quote: { author: name, text: clip(body.message, 200) } });
       } else {
         hub.setStatus(agentId, { state: "needs-input", note: "Asking: Needs your attention" });
         hub.activity("agent.needs-input", agentId, `${name} needs you: Needs your attention`);

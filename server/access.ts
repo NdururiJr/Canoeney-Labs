@@ -41,8 +41,8 @@ export function requestAccess(hub: Hub, agentId: string, rawDomain: string, reas
   const all = [req, ...(hub.snap.accessRequests ?? [])];
   hub.snap.accessRequests = [...all.filter((r) => r.status === "pending"), ...all.filter((r) => r.status !== "pending").slice(0, 50)];
   hub.emit({ type: "access.updated", request: { ...req } });
-  hub.setStatus(agentId, { state: "needs-input", note: `Asking: access to ${domain}` });
-  hub.activity("agent.needs-input", agentId, `${agent.name} needs you: access to ${domain}`);
+  hub.setStatus(agentId, { state: "needs-input", note: `Asking: access to ${domain}`, noteIsAgentText: true });
+  hub.activity("agent.needs-input", agentId, `${agent.name} needs you: access to a site`, { quote: { author: agent.name, text: domain } });
   return `Asked the user to allow ${domain}. Continue with other work if you can; HQ will message you as soon as they answer. Don't work around the block meanwhile.`;
 }
 
@@ -69,7 +69,7 @@ async function answer(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, d
 
   if (decision === "deny") {
     settle(req, "denied");
-    hub.activity("config", req.agentId, `You denied ${who} access to ${req.domain}`);
+    hub.activity("config", req.agentId, `You denied ${who} access to a site`, { quote: { author: who, text: req.domain } });
     planner.notify(req.agentId, `The user denied access to ${req.domain}. Continue without it. If you can't, say why in your reply${req.agentId === planner.ctoId() ? "" : " and call set_my_status blocked with the reason"}.`);
     return;
   }
@@ -102,12 +102,12 @@ async function answer(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, d
     hub.configChanged();
     // Remove any rule that did go through, and clear the stale error.
     await Promise.all(added.map((id) => sbx.syncRules(id).catch(() => {})));
-    hub.activity("config", req.agentId, `Couldn't allow ${req.domain} (${failure.slice(0, 160)}). The request is still open: try again or deny it.`);
+    hub.activity("config", req.agentId, `Couldn't allow the site ${who} asked for (${failure.slice(0, 160)}). The request is still open: try again or deny it.`, { quote: { author: who, text: req.domain } });
     return;
   }
 
   settle(req, "allowed");
-  hub.activity("config", req.agentId, `You allowed ${req.domain} for ${decision === "everyone" ? "every agent" : who}`);
+  hub.activity("config", req.agentId, `You allowed a site for ${decision === "everyone" ? "every agent" : who}`, { quote: { author: who, text: req.domain } });
   planner.notify(req.agentId, `The user allowed ${req.domain} for your sandbox. Try the request again.`);
   // Other agents waiting on the same domain are covered too.
   if (decision === "everyone")

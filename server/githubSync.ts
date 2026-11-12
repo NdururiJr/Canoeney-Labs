@@ -165,13 +165,14 @@ export class GitHubSync {
     const who = pr.authorId || null;
     const tool = label[hub.snap.config.workflow.review.tool];
     const leadId = this.planner.ctoId();
-    const ref = `#${pr.number} ${pr.title}`;
+    // The PR's title is its author's words: shown labelled, never inside HQ's sentence (SR-C-13).
+    const title = { quote: { author: hub.name(who), text: pr.title } };
 
-    if (!old && !pr.merged && !pr.closed) hub.activity("pr.opened", who, `${hub.name(who)} opened PR ${ref}`);
+    if (!old && !pr.merged && !pr.closed) hub.activity("pr.opened", who, `${hub.name(who)} opened PR #${pr.number}`, title);
     if (pr.closed && !old?.closed) return hub.activity("config", who, `PR #${pr.number} was closed without merging`);
 
     if (pr.merged && !old?.merged) {
-      hub.activity("pr.merged", null, `PR ${ref} was merged`);
+      hub.activity("pr.merged", null, `PR #${pr.number} was merged`, title);
       if (leadId) this.planner.notify(leadId, `PR #${pr.number} (${pr.title}) was merged${pr.taskId ? `; ${pr.taskId} is done` : ""}. Assign the next task if anything is waiting.`);
       return;
     }

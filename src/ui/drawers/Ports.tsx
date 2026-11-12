@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { AgentConfig, AgentStatus } from "../../data/types";
 import { officeActions, useOffice } from "../../store/office";
 import { dismissPort, usePorts } from "../../store/ports";
+import { safeHref } from "../agentText";
 
 const NO_PORTS: number[] = [];
 
@@ -92,7 +93,7 @@ export function PortsRow({ agent, running }: { agent: AgentConfig; running: bool
     <div className="flex flex-col gap-1.5">
       {forwarded.map((p) => (
         <div key={p.sandbox} className="flex items-center gap-2">
-          <a className="font-term text-[17px] underline" href={`http://localhost:${p.host}`} target="_blank" rel="noopener noreferrer">
+          <a className="font-term text-[17px] underline" href={safeHref(`http://localhost:${p.host}`) ?? undefined} target="_blank" rel="noopener noreferrer">
             localhost:{p.host}
           </a>
           {p.host !== p.sandbox && <span className="text-muted">→ sandbox :{p.sandbox}</span>}

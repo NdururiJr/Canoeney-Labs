@@ -1,6 +1,7 @@
 // jsm-hq — start HQ for the git repo you're in.
 //
 //   jsm-hq [--repo <path>] [--port 7420] [--dev] [--no-open]
+//   jsm-hq reset-owner        on the host: forget the owner's credentials and write a new setup code
 //
 // --dev: the UI is served by Vite (pnpm dev:hq); HQ prints/opens the Vite URL.
 
@@ -8,6 +9,7 @@ import { existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeCommands } from "./commands";
+import { Dashboard } from "./dashboard";
 import { companyHome, openCompany } from "./company";
 import { AgentAuth } from "./agentAuth";
 import { startHttp } from "./http";
@@ -21,7 +23,8 @@ import { SbxMcp } from "./sbxMcp";
 import { run } from "./lib/exec";
 import { log } from "./lib/log";
 import { ensurePtyHelperExecutable } from "./lib/ptyFix";
-import { browserToken, legacyAgentTokenFile } from "./paths";
+import { OwnerAuth } from "./ownerAuth";
+import { legacyAgentTokenFile, legacyDevTokenFile } from "./paths";
 import { detectRepo } from "./repo";
 import { Sessions } from "./sessions";
 import { runSetupChecks } from "./setup";
@@ -33,7 +36,22 @@ function arg(name: string): string | undefined {
 }
 const flag = (name: string) => process.argv.includes(`--${name}`);
 
+/** Recovery that needs the host (SR-C-18): the owner enrolls again with a new setup code. Run it with HQ stopped. */
+function resetOwner() {
+  const home = companyHome();
+  const company = openCompany({ home, repoRoot: null });
+  try {
+    company.humans.reset("owner");
+    const auth = new OwnerAuth({ accounts: company.humans, clock: company.clock, audit: company.audit, allowedOrigins: [], setupFile: join(home, "owner-setup.txt") });
+    const file = auth.prepareSetup();
+    log.info(`The owner's password, PIN and authenticator were forgotten. Start HQ and enroll again with the setup code in ${file}.`);
+  } finally {
+    company.close();
+  }
+}
+
 async function main() {
+  if (process.argv.includes("reset-owner")) return resetOwner();
   ensurePtyHelperExecutable();
   const dev = flag("dev");
   const port = Number(arg("port") ?? process.env.HQ_PORT ?? 7420);
@@ -47,7 +65,8 @@ async function main() {
   company.agents.ensureProject({ slug, name: config.project.name, root: repo.root });
   // The shared agent token from before M0-B is not used any more.
   rmSync(legacyAgentTokenFile(slug), { force: true });
-  const uiToken = browserToken(slug, dev);
+  // The dashboard has owner login now (M0-C): no token in a URL.
+  rmSync(legacyDevTokenFile(slug), { force: true });
 
   log.info(`repo   ${repo.root}${repo.github ? `  (github.com/${repo.github})` : ""}`);
   log.info(`company ${company.db.file}`);
@@ -101,17 +120,23 @@ async function main() {
   const uiOrigin = dev ? `http://localhost:${uiPort}` : `http://127.0.0.1:${port}`;
   if (!dev && !existsSync(join(distDir, "index.html"))) log.warn("No built UI found. Run `pnpm build` first, or use `pnpm dev:hq`.");
 
+  // Extra dashboard origins, such as the Tailscale name the phone uses (M0-G sets it).
+  const extraOrigins = (process.env.HQ_DASHBOARD_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const allowedOrigins = [uiOrigin, `http://127.0.0.1:${uiPort}`, `http://localhost:${port}`, `http://127.0.0.1:${port}`, ...extraOrigins];
+  const ownerAuth = new OwnerAuth({ accounts: company.humans, clock: company.clock, audit: company.audit, allowedOrigins, setupFile: join(company.home, "owner-setup.txt") });
+  const setupFile = ownerAuth.prepareSetup();
+
   await startHttp({
     hub,
     inbox,
     planner,
     port,
-    browserToken: uiToken,
+    ownerAuth,
     agentAuth: new AgentAuth({ projectSlug: slug, company, hub }),
     company,
     distDir: dev ? null : distDir,
-    allowedOrigins: [uiOrigin, `http://127.0.0.1:${uiPort}`, `http://localhost:${port}`, `http://127.0.0.1:${port}`],
-    commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp, company),
+    allowedOrigins,
+    dashboard: new Dashboard(makeCommands(hub, sessions, planner, inbox, sbx, mcp, company), { ownerAuth, audit: company.audit, clock: company.clock }),
   });
   // Only once HQ is serving: a port already in use must not record a start.
   company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });
@@ -120,10 +145,12 @@ async function main() {
   const github = new GitHubSync(hub, planner, repo.github);
   github.start();
 
-  const url = `${uiOrigin}/?token=${uiToken}`;
+  const url = `${uiOrigin}/`;
   log.info(`\n\n  JSM HQ is running → ${url}\n`);
+  // The setup code itself is never printed: whoever enrolls must be able to read the file on this machine.
+  if (setupFile) log.info(`  No owner yet. Open ${url} and enter the setup code from ${setupFile}\n`);
   if (!flag("no-open")) {
-    // Windows: rundll32 hands the URL to the default browser without a shell (the token has no special chars, but `&` would).
+    // Windows: rundll32 hands the URL to the default browser without a shell.
     const [opener, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["rundll32", ["url.dll,FileProtocolHandler", url]] : ["xdg-open", [url]];
     // Give Vite a moment in dev.
     setTimeout(() => void run(opener, args), dev ? 1500 : 0);

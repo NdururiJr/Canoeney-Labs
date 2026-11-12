@@ -40,6 +40,17 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 - A message is delivered right away if the agent is idle, or when it finishes its current step if it's busy.
 - You can message any agent from the **Messages** tab in its drawer.
 
+## Owner login
+
+- **A real login, not a link.** The dashboard asks for your password and a 6-digit code from your authenticator app. There is no token in any address or in HQ's output. On the first start HQ writes a one-time setup code to a file on its machine; you enter it once to set up the owner.
+- **What is stored.** Your password and PIN only as slow fingerprints (scrypt). The authenticator's secret is locked with a key kept in a separate file next to the company store, so a copy of the store alone opens nothing. A code works once.
+- **Sessions.** A login lasts until 30 minutes without activity, or 12 hours at most, or until you log out. Restarting HQ logs everyone out. Clicking and typing in the dashboard count as activity; the office updating by itself does not.
+- **The PIN.** Anything that grants or loosens something asks for your approval PIN again: adding or removing agents, storing a key, setting the proxy, adding an MCP server, allowing a site, changing an agent's mode or role file, or changing who merges. Denying, stopping and removing things never needs it.
+- **From your phone.** A session that does not come straight from this machine (for example through `tailscale serve`) is remote: the terminal, the sandbox shell and the host shell are switched off, by the server and in the page.
+- **Every dashboard action is recorded** in the audit trail under your name. Typing in a terminal is recorded once a minute as a count, never what you typed.
+- **Text agents wrote** (task titles, messages, notes, action items, PR titles, blocked sites) is always shown as text, marked as written by that agent. It never runs as code and never appears as part of HQ's own sentences or approval items. Links in it show their real address and open only if they are web or email links.
+- **Forgot something?** Stop HQ, run `jsm-hq reset-owner` on its machine, and set up the owner again.
+
 ## Agent identity
 
 - **One secret per agent.** Each time HQ starts an agent's session, it gives that agent a new secret and the previous one stops working. HQ writes it only into the agent's own MCP config and hook settings, which only you can read and which git ignores. HQ itself keeps only a fingerprint (a SHA-256 hash), so its records hold nothing an agent could use.

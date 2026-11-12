@@ -30,6 +30,7 @@ npx @therealjsmastery/jsm-hq@latest
 
 HQ opens in your browser and walks you through the rest:
 
+1. **Set up the owner (first start only):** HQ writes a one-time setup code to a file on this machine and prints where it is. Enter it with your name, a password (12 characters or more) and an approval PIN, then add HQ to an authenticator app (any TOTP app) with the key it shows. After that you log in with your password and the app's 6-digit code.
 1. **Welcome:** name the project and pick a lead and workers (Claude Code or Codex for each).
 2. **Setup checklist:** anything missing on your machine is listed with the command to fix it.
 3. **Start team** in the top bar, then message the lead, for example: *"Plan two small tasks for Dwight and assign the first one."*
@@ -51,7 +52,11 @@ jsm-hq --repo <path>   the repo to manage (default: current folder)
        --port <n>      HQ port (default: 7420)
        --no-open       don't open the browser
        --version, --help
+jsm-hq reset-owner     on this machine, with HQ stopped: forget the owner's password,
+                       PIN and authenticator, and write a new setup code
 ```
+
+`HQ_DASHBOARD_ORIGINS` adds addresses the dashboard may be opened from, comma-separated (for example your Tailscale name). Under `pnpm dev:hq` the page comes from Vite, which needs inline scripts, so the Content Security Policy applies only where HQ serves the page itself.
 
 Use it often? `npm install -g @therealjsmastery/jsm-hq`, then run `jsm-hq` in any repo.
 
@@ -89,6 +94,8 @@ More detail on workspaces, sandboxes, MCP servers, app variables and what HQ sav
 | Problem | Fix |
 | --- | --- |
 | A setup check shows "!" but the tool works | You may be on an old HQ. Run `npx @therealjsmastery/jsm-hq@latest` (npx can keep an old version cached). |
+| Forgot the password or PIN, or lost the authenticator | Stop HQ, run `jsm-hq reset-owner` on the machine HQ runs on, start HQ and enroll again with the new setup code. |
+| "Too many attempts" at login | Wrong passwords or codes from one address lock it for 15 minutes; other devices can still log in. Five wrong PINs lock the PIN step for 15 minutes. |
 | Start fails: "network policy has not been initialized" | A new Docker Sandboxes install needs a base policy once: `sbx policy init balanced`. |
 | Agents fail to start with a sign-in error | Your Docker sign-in expired. Run `sbx login`, then **Check again** in the setup checklist. |
 | Agents can't push or open PRs | Run `sbx secret set github --command "gh auth token"`, and check the repo has a GitHub `origin`. |
