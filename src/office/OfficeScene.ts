@@ -1,6 +1,8 @@
 // Owns the Pixi app. Reads the stores, never writes data — only UI state
 // (hover, selection) through the ui actions.
 
+// PixiJS without eval, so the page runs under script-src 'self' (SR-C-12).
+import "pixi.js/unsafe-eval";
 import { Application, Container, Graphics, Sprite, TextureStyle, type Texture } from "pixi.js";
 import type { AgentState, HqConfig, PullRequest, ReviewState } from "../data/types";
 import { mulberry32 } from "../lib/random";

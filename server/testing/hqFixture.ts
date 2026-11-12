@@ -78,6 +78,8 @@ export async function makeHq(
     team?: AgentConfig[];
     limits?: Partial<AuthLimits>;
     ownerLimits?: Partial<OwnerAuthLimits>;
+    /** A built UI folder to serve (default: none). */
+    distDir?: string;
     /** Builds the dashboard command table (default: none). */
     commands?: (p: { hub: Hub; planner: Planner; inbox: Inbox; company: Company }) => Record<string, CommandSpec>;
   } = {},
@@ -123,7 +125,7 @@ export async function makeHq(
       agentAuth: auth,
       ownerAuth: oa,
       port: 0,
-      distDir: null,
+      distDir: opts.distDir ?? null,
       allowedOrigins: [ORIGIN],
     });
   let server = await start(ownerAuth);

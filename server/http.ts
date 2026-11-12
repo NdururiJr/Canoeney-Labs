@@ -19,6 +19,7 @@ import type { Inbox } from "./inbox";
 import type { DashboardSession, OwnerAuth } from "./ownerAuth";
 import { viewFor, type CommandCtx, type CommandResult, type Dashboard } from "./dashboard";
 import { handleMcp } from "./mcp";
+import { securityHeaders } from "./securityHeaders";
 import type { Planner } from "./planner";
 
 const MIME: Record<string, string> = {
@@ -83,8 +84,11 @@ export function startHttp(o: Options) {
   };
 
   const server = createServer(async (req, res) => {
+    // On every response, set before anything else so later writeHead calls keep them (SR-C-12).
+    for (const [k, v] of Object.entries(securityHeaders(req.headers.host))) res.setHeader(k, v);
     const url = parseUrl(req.url);
     if (!url) return send(res, 400, "bad request");
+    if (/^\/(auth|api|mcp|hook)(\/|$)/.test(url.pathname)) res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "POST" && url.pathname.startsWith("/hook/")) {
       const [, , claimed, event] = url.pathname.split("/");
@@ -155,7 +159,8 @@ export function startHttp(o: Options) {
     // A logged-in session and an allowed Origin: another website in the browser can't drive HQ (SR-C-01, SR-C-03).
     const session = url.pathname === "/ws" && typeof origin === "string" && o.allowedOrigins.includes(origin) ? o.ownerAuth.sessionFor(req) : null;
     if (!session) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      const headers = Object.entries(securityHeaders(req.headers.host)).map(([k, v]) => `${k}: ${v}\r\n`).join("");
+      socket.write(`HTTP/1.1 401 Unauthorized\r\n${headers}\r\n`);
       return socket.destroy();
     }
     wss.handleUpgrade(req, socket, head, (ws) => onClient(ws, session));
