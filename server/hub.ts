@@ -2,7 +2,7 @@
 // OfficeEvent to all connected browsers, and config/plan changes are saved.
 
 import type { OfficeEvent } from "../src/data/source";
-import type { ActivityType, AgentConfig, AgentStatus, HqConfig, OfficeSnapshot, SessionInfo, SetupState } from "../src/data/types";
+import type { ActivityEvent, ActivityType, AgentConfig, AgentStatus, HqConfig, OfficeSnapshot, SessionInfo, SetupState } from "../src/data/types";
 import { writePlanExport } from "./planExport";
 import { saveConfig, savePlan, type PlanFile } from "./store";
 import type { RepoInfo } from "./repo";
@@ -99,6 +99,8 @@ export class Hub {
       patch = { ...patch, state: "needs-input", note: `Asking: access to ${open.domain}` };
     }
     if (patch.state !== undefined && patch.state !== s.state) s.stateSince = now();
+    // A note set without the flag is HQ's own text: it no longer holds agent text.
+    if (patch.note !== undefined && patch.noteIsAgentText === undefined) delete s.noteIsAgentText;
     Object.assign(s, patch);
     this.emit({ type: "agent.updated", agent: structuredClone(s) });
   }
@@ -115,9 +117,10 @@ export class Hub {
     this.emit({ type: "setup.updated", setup });
   }
 
-  activity(type: ActivityType, agentId: string | null, text: string) {
+  /** `agentText`: the text includes text an agent sent, which the dashboard shows only as text. */
+  activity(type: ActivityType, agentId: string | null, text: string, opts: { agentText?: true } = {}) {
     this.seq += 1;
-    const event = { id: `a${this.seq}`, at: now(), type, agentId, text };
+    const event: ActivityEvent = { id: `a${this.seq}`, at: now(), type, agentId, text, ...(opts.agentText ? { agentText: true as const } : {}) };
     this.snap.activity = [event, ...this.snap.activity].slice(0, 50);
     this.emit({ type: "activity", event });
   }

@@ -84,7 +84,7 @@ export function startHttp(o: Options) {
       if (!who.ok) return refuse(res, who);
       try {
         const body = await readBody(req);
-        const r = handleHook(o.hub, o.inbox, who.agent.agentId, event ?? "", body ? JSON.parse(body) : {});
+        const r = handleHook(o.hub, o.inbox, o.company, who.agent.agentId, event ?? "", body ? JSON.parse(body) : {});
         if (!r.ok) return send(res, 404, "");
         if (r.response) return send(res, 200, JSON.stringify(r.response), "application/json");
         res.writeHead(204);
