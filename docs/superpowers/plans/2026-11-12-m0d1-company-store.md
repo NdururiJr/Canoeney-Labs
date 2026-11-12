@@ -90,7 +90,7 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
 
 - Keep the existing stack (spec §7). No new packages.
 - Anti-goal §4: no secret value in a log, an alert or the audit trail. Grants record service names, domains and MCP server names, never values. The audit sink's value guard (M0-B) still applies.
-- Anti-goal §4: existing capabilities must not regress. On Ubuntu, macOS and Windows these must pass: `pnpm typecheck`, `pnpm test`, `pnpm build`, `npx tsx scripts/session-backend-test.ts` and `scripts/smoke-test.mjs`.
+- Anti-goal §4: existing capabilities must not regress. On Ubuntu and Windows these must pass (macOS dropped from CI by the owner on 2026-11-13, PR #7): `pnpm typecheck`, `pnpm test`, `pnpm build`, `npx tsx scripts/session-backend-test.ts` and `scripts/smoke-test.mjs`.
 - Every enforcement test follows the threat model's rules (§3 preamble):
   - the refusal is checked;
   - its audit row is checked, with the authenticated caller as the actor;
