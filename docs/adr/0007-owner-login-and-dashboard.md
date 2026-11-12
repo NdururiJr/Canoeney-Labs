@@ -58,6 +58,7 @@ The browser sends the PIN inside the command message it confirms. The server che
 
 - **Headers:** every response carries a CSP with `default-src 'self'`, `script-src 'self'` and `frame-ancestors 'none'`, plus `nosniff` and `no-referrer`.
   - `style-src` allows `'unsafe-inline'` for the `<style>` elements xterm.js adds; this allows no script.
+  - `font-src` and `img-src` allow `data:`: Vite inlines small fonts into the CSS as `data:` URLs. Neither a font nor an image runs script, and no other directive allows `data:`.
   - PixiJS is loaded through `pixi.js/unsafe-eval`, its build that needs no `eval`.
   - Violations are blocked, not reported. A report endpoint would be an unauthenticated write path into the audit trail.
 - **Agent text** is shown only through components that label its author and never parse it as HTML. The Owner Briefing's markdown (M1) and action-item details go through an allow-list renderer.
