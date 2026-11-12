@@ -114,7 +114,11 @@ export function startHttp(o: Options) {
       if (req.method === "GET" || req.method === "DELETE") return send(res, 405, "stateless server");
       try {
         const raw = await readBody(req, 1024 * 1024);
-        return await handleMcp(o.hub, o.planner, o.company, who.agent, req, res, raw ? JSON.parse(raw) : undefined);
+        const body: unknown = raw ? JSON.parse(raw) : undefined;
+        // The rate limit counts tool calls: a batch pays for each one (SR-B-21).
+        const calls = (Array.isArray(body) ? body : [body]).filter((m) => (m as { method?: unknown } | null)?.method === "tools/call").length;
+        if (!o.agentAuth.charge(who.agent, calls - 1)) return refuse(res, { ok: false, status: 429 });
+        return await handleMcp(o.hub, o.planner, o.company, who.agent, req, res, body);
       } catch {
         return res.headersSent ? void res.end() : send(res, 400, "bad request");
       }

@@ -399,3 +399,19 @@ test("hash uses the stored snapshot", (t) => {
   sink.append(ev({ data }));
   assert.equal(sink.verify().ok, true);
 });
+
+test("SR-B-11 [T-X1.4] the scan reads the stored snapshot, not the caller's object", (t) => {
+  const { sink } = fresh(t);
+  let reads = 0;
+  const data = {
+    get v() {
+      return ++reads === 1 ? "fine" : "ghp_" + "a".repeat(36);
+    },
+  };
+  try {
+    sink.append(ev({ data }));
+  } catch {
+    /* refusing is also right */
+  }
+  assert.ok(!JSON.stringify(sink.query()).includes("ghp_"));
+});

@@ -85,15 +85,32 @@ export class AgentAuth {
     return { ok: true, agent };
   }
 
+  /**
+   * Charges an authenticated agent for the extra tool calls in one request
+   * (check() charged the first). The limit counts calls, not requests, so a
+   * batch cannot multiply it. False (and one auth.rate-limited row per minute)
+   * when the bucket cannot cover them all: the whole request is refused.
+   */
+  charge(agent: RegisteredAgent, extraCalls: number): boolean {
+    try {
+      if (extraCalls <= 0) return true;
+      if (this.take(agent.companyId, extraCalls)) return true;
+      this.limitedRow(agent.companyId, { target: agent.companyId, data: { endpoint: "mcp", calls: extraCalls + 1 } });
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   /** Token bucket per secret (one live secret per agent, so per agent). */
-  private take(key: string): boolean {
+  private take(key: string, n = 1): boolean {
     const now = this.now();
     const b = this.buckets.get(key) ?? { tokens: this.limits.perSecretBurst, at: now };
     b.tokens = Math.min(this.limits.perSecretBurst, b.tokens + ((now - b.at) / 1000) * this.limits.perSecretPerSecond);
     b.at = now;
     this.buckets.set(key, b);
-    if (b.tokens < 1) return false;
-    b.tokens -= 1;
+    if (b.tokens < n) return false;
+    b.tokens -= n;
     return true;
   }
 

@@ -189,11 +189,11 @@ export class SqliteAuditSink implements AuditSink {
     }
     if (hasCredentialShape(e.action)) throw new AuditSecretError("action");
     if (typeof e.target === "string" && hasCredentialShape(e.target)) throw new AuditSecretError("target");
-    assertNoSecrets(e.data ?? {}, "data");
     const dataJson = canonicalJson(e.data ?? {}); // also rejects unsupported values early
-    // Hash the stored form, never the caller's object: a getter or a later
-    // mutation must not make the hash differ from the row that is stored.
+    // Scan and hash the stored form, never the caller's object: a getter or a
+    // later mutation must not make what is checked differ from what is stored.
     const data = JSON.parse(dataJson) as Record<string, unknown>;
+    assertNoSecrets(data, "data");
     const target = e.target ?? null;
     const decisionId = e.decisionId ?? null;
 

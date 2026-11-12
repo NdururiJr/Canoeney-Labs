@@ -321,8 +321,13 @@ function auditInvalidCalls(company: Company, agent: RegisteredAgent, schemas: Ma
     if (!schema || z.object(schema as z.ZodRawShape).safeParse(args).success) continue;
     const row = (target: string | null, data: Record<string, unknown>) =>
       company.audit.append({ actorKind: "agent", actorId: agent.companyId, action: "tool.called", target, data });
+    // Only the schema's keys are recorded (as recordArgs does); any other key is
+    // agent text of any length and number, so it is only counted.
+    const given = typeof args === "object" && args !== null && !Array.isArray(args) ? Object.keys(args) : [];
+    const known = Object.fromEntries(given.filter((k) => Object.hasOwn(schema, k)).map((k) => [k, (args as Record<string, unknown>)[k]]));
+    const otherKeys = given.length - Object.keys(known).length;
     try {
-      row(targetOf(args), { tool, outcome: "invalid", args: recordArgs(args) });
+      row(targetOf(known), { tool, outcome: "invalid", args: recordArgs(known), ...(otherKeys ? { otherKeys } : {}) });
     } catch {
       try {
         row(null, { tool, outcome: "invalid", reason: "unrecordable" });

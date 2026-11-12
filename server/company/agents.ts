@@ -123,11 +123,13 @@ export class AgentRegistry {
     by: Actor,
     source: "import" | "dashboard" | "config",
     extra: Record<string, unknown> = {},
+    /** A builder's manager; by default the project's CTO. */
+    managerId?: string | null,
   ): RegisteredAgent {
     const id = companyAgentId(projectSlug, a.id);
     return this.tx(() => {
       if (this.getById(id)) throw new Error(`Agent ${id} is already registered.`);
-      const manager = role === "builder" ? (this.cto(projectSlug)?.companyId ?? null) : null;
+      const manager = role !== "builder" ? null : managerId !== undefined ? managerId : (this.cto(projectSlug)?.companyId ?? null);
       this.db
         .prepare(
           `INSERT INTO agents(id, name, role_id, department_id, manager_id, project_id, cli, status, created_at)

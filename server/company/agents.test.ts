@@ -181,3 +181,11 @@ test("cto can be limited to agents in the current config", (t) => {
   assert.equal(agents.cto("alpha")?.agentId, "lead");
   assert.equal(agents.cto("alpha", (id) => id === "lead-2")?.agentId, "lead-2");
 });
+
+test("register can name the manager, so a new team's builders report to its own CTO", (t) => {
+  const { agents } = fresh(t);
+  agents.syncFromConfig("alpha", [member("lead", true)]);
+  agents.register("alpha", member("lead-2"), "cto", DASHBOARD_ACTOR, "dashboard");
+  const b = agents.register("alpha", member("ana-2"), "builder", DASHBOARD_ACTOR, "dashboard", {}, "alpha/lead-2");
+  assert.equal(b.managerId, "alpha/lead-2");
+});

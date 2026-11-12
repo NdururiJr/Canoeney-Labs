@@ -276,8 +276,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       // are, so that config still works where it exists. The CTO HQ talks to is
       // the one in the current config (planner.ctoId).
       company.db.transaction(() => {
-        company.agents.register(hub.slug, lead, "cto", DASHBOARD_ACTOR, "dashboard");
-        for (const w of workers) company.agents.register(hub.slug, w, "builder", DASHBOARD_ACTOR, "dashboard");
+        const cto = company.agents.register(hub.slug, lead, "cto", DASHBOARD_ACTOR, "dashboard");
+        for (const w of workers) company.agents.register(hub.slug, w, "builder", DASHBOARD_ACTOR, "dashboard", {}, cto.companyId);
       }, "immediate");
       const tools: ReviewTool[] = ["coderabbit", "greptile", "copilot", "human", "custom"];
       if (tools.includes(input.reviewTool as ReviewTool)) cfg.workflow.review.tool = input.reviewTool as ReviewTool;

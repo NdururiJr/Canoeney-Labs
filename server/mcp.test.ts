@@ -202,7 +202,7 @@ test("a large refused batch writes one bounded row and returns at once", async (
   const started = Date.now();
   const r = await mcpRequest(hq, ana, batch);
   assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
-  assert.ok(r.status === 200 || r.status === 400);
+  assert.ok([200, 400, 429].includes(r.status), String(r.status)); // refused, by the batch cap or the call limit
   assert.equal(chain(hq).length, before + 1);
   assert.ok(JSON.stringify(chain(hq).at(-1)).length < 1024);
   // A small batch with refused calls also writes one row.
@@ -227,4 +227,33 @@ test("SR-B-16 [T-S1.9] a call with invalid arguments is still audited", async (t
     assert.equal(after.at(-1)?.data.outcome, "invalid", tool);
     assert.equal(after.at(-1)?.actorId, `${hq.slug}/ana`);
   }
+});
+
+test("SR-B-16 [T-S1.9] an invalid call with hostile keys leaves one bounded row", async (t) => {
+  const hq = await makeHq(t);
+  const ana = hq.secretFor("ana");
+  const manyKeys = Object.fromEntries(Array.from({ length: 20_000 }, (_, i) => [`k${i}`, 1]));
+  for (const args of [{ ["x".repeat(500_000)]: 1, text: "hi" }, { ...manyKeys, text: "hi" }]) {
+    const before = chain(hq).length;
+    await mcpCall(hq, ana, "send_message", args); // no "to": invalid
+    const after = chain(hq);
+    assert.equal(after.length, before + 1);
+    assert.ok(JSON.stringify(after.at(-1)).length < 1024, `${JSON.stringify(after.at(-1)).length} bytes`);
+    assert.equal(after.at(-1)?.data.outcome, "invalid");
+    assert.deepEqual(after.at(-1)?.data.args, { text: { chars: 2 } });
+    assert.ok(Number(after.at(-1)?.data.otherKeys) >= 1);
+  }
+});
+
+test("SR-B-21 [T-S1.12 T-S2.6] the per-secret limit counts calls, not requests", async (t) => {
+  const hq = await makeHq(t);
+  const ana = hq.secretFor("ana");
+  const batch = Array.from({ length: 100 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "send_message", arguments: { to: "ben", text: `m${i}` } } }));
+  const statuses: number[] = [];
+  for (let i = 0; i < 100; i++) statuses.push((await mcpRequest(hq, ana, batch)).status);
+  const ran = hq.hub.snap.messages.filter((m) => m.fromId === "ana").length;
+  assert.ok(ran <= 100, `${ran} calls ran`);
+  assert.ok(statuses.filter((s) => s === 429).length >= 99);
+  assert.equal(hq.company.audit.query({ action: "auth.rate-limited", limit: 1000 }).length, 1);
+  assert.ok(!(await mcpCall(hq, hq.secretFor("ben"), "get_my_task")).json?.error);
 });
