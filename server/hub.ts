@@ -2,10 +2,11 @@
 // OfficeEvent to all connected browsers, and config/plan changes are saved.
 
 import type { OfficeEvent } from "../src/data/source";
-import type { ActivityEvent, ActivityType, AgentConfig, AgentStatus, HqConfig, OfficeSnapshot, SessionInfo, SetupState } from "../src/data/types";
+import { HOST_TERMINAL, type ActivityEvent, type ActivityType, type AgentConfig, type AgentStatus, type HqConfig, type OfficeSnapshot, type SessionInfo, type SetupState } from "../src/data/types";
 import { writePlanExport } from "./planExport";
 import { saveConfig, savePlan, type PlanFile } from "./store";
 import type { RepoInfo } from "./repo";
+import { TerminalFilter } from "./terminalFilter";
 
 type Listener = (e: OfficeEvent) => void;
 
@@ -145,7 +146,17 @@ export class Hub {
     if (this.snap.config.project.exportPlan) writePlanExport(this.repo.root, this.snap.config, plan);
   }
 
+  /** One filter per terminal: clipboard and hyperlink escapes are removed before the browser (SR-C-14). */
+  private terminalFilters = new Map<string, TerminalFilter>();
+
   terminal(agentId: string, data: string) {
+    // The host shell is the owner's own; every other terminal shows what an agent or a sandbox printed.
+    if (agentId !== HOST_TERMINAL) {
+      let f = this.terminalFilters.get(agentId);
+      if (!f) this.terminalFilters.set(agentId, (f = new TerminalFilter()));
+      data = f.push(data);
+      if (!data) return;
+    }
     this.emit({ type: "terminal.output", agentId, data });
   }
 }
