@@ -98,4 +98,5 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | M0-B final review (minor): weak tests. SR-B-03's file check is trivial; SR-B-19 flips state instead of listing who can read it; SR-B-10 does not cover `sessions.stop` | M0-D |
 | M0-B final review (minor): `send_message` to an unknown recipient lists the whole team in its error | M1 (message rules, M1.6) |
 | M0-C plan (SR-C-19): the TOTP seed is encrypted with `owner.key`, which sits in the company home next to `company.db`. The nightly off-host backup (M0.16) must carry `company.db` and never `owner.key`, or one stolen backup opens the seed. A test lists the backup's contents | M0-G |
+| PR #4 review (non-blocking): spec §2b says the PIN "can be rotated". In M0-C only `reset-owner` on the host does it, renewing every credential (ADR 0007). Add a `changePin` command that takes the current PIN and the new one | M1 |
 | M0-C plan (SR-C-15, partial): HQ no longer sets `BROWSER` for agents, but sbx's opener (`/usr/local/bin/xdg-open`) can still be called by name inside the sandbox. Check whether `sbx` can turn it off for company agents (ADR 0007) | M0-G, on the Linux host |

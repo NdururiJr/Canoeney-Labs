@@ -45,8 +45,15 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
 - **"Remote" means not provably local.** HQ listens on 127.0.0.1, so a phone reaches it through a local proxy (`tailscale serve`). The socket address cannot tell remote from local.
   - A session is local only when all three hold: the socket address is loopback; the request carries no `X-Forwarded-For`, `Forwarded` or `Tailscale-*` header; and `Host` is `127.0.0.1`, `localhost` or `[::1]`.
   - Anything else is remote. Separate listeners (SR-G-01) make this exact in M0-G.
-- **Lockouts are per source, and the source comes from the proxy when there is one.** For a loopback socket with `X-Forwarded-For`, the source is that header's first address; otherwise it is the socket address.
-  - A local process could vary the header to dodge the per-source lock. That process already runs on the owner's host, which §2b accepts. The PIN lock (per human) and the TOTP replay check do not depend on the source.
+- **Lockouts are per source, and the source is the address the proxy on this host saw.** For a loopback socket with `X-Forwarded-For`, the source is the header's **last** address, the one the local proxy added, and only when `net.isIP` accepts it. Otherwise the source is the socket address.
+  - The first address is whatever the client sent, so it is never used, whether the proxy appends to the header or replaces it.
+  - The header's text is never written anywhere: the audit rows hold the chosen address only.
+  - A local process can still vary the header. That process already runs on the owner's host, which §2b accepts. The PIN lock (per human) and the TOTP replay check do not depend on the source.
+- **`OwnerAuth.handle` never throws.** Anything that goes wrong inside it is the uniform refusal, as `AgentAuth.check` does in M0-B. It runs in the same `async` request handler as `/mcp`, where an unhandled rejection would end HQ, and its callers have not logged in.
+- **CSP violations are blocked, not reported.** The threat model's SR-C-12 test says "blocked and reported". The plan checks the block and leaves out `report-uri`.
+  - A report endpoint would be an unauthenticated write path into the audit trail for anyone who can reach the port.
+  - The block is the control, and the real-browser test proves it.
+- **The PIN is rotated by `reset-owner` in M0-C.** Spec §2b says the PIN "can be rotated". In M0-C that means `reset-owner` on the host, which renews every credential at once (ADR 0007). The overview carries a `changePin` command (current PIN plus new PIN) to M1.
 - **SR-C-10's "every agent-written field" is met in two layers.**
   1. A source scan fails the build if `src/` contains any way to turn a string into markup or code: `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `srcdoc`, `eval(`, `new Function`, or an `href={…}` that does not go through `safeHref`.
   2. A real-browser test renders the components that show agent text (`AgentText`, `AgentMarkdown` and the system items) with a payload set.
@@ -60,7 +67,8 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
 - **SR-C-14 (proposed) is built.** It is cheap and costs nothing visible: links in agent output are still matched by the web-links addon.
 - **Real-browser tests need Chrome or Edge.** `server/testing/browser.ts` finds one (`HQ_TEST_BROWSER`, then the usual install paths and `PATH`).
   - GitHub's Ubuntu, macOS and Windows runners all have Chrome, so these tests run in CI.
-  - With no browser they skip with a message naming `HQ_TEST_BROWSER`. Each such test also asserts something without the browser (headers present, markup escaped), so a skip never leaves the requirement untested.
+  - Locally, with no browser, they skip with a message naming `HQ_TEST_BROWSER`. Each such test also asserts something without the browser (headers present, markup escaped).
+  - **When `process.env.CI` is set, a missing browser fails the test**, so a runner image that drops Chrome turns the job red instead of quietly passing.
 - **The CSP applies where HQ serves the UI.** Under `pnpm dev:hq` the page comes from Vite, which needs inline scripts for hot reload. The development page therefore runs without the CSP, and the README says so.
 
 ## Global constraints
@@ -143,6 +151,7 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
   - `verifyLogin(account: string, password: string, code: string): Promise<{ ok: true; humanId: string; role: HumanRole } | { ok: false; reason: "password" | "code" | "replay" | "no-key" }>`:
     - `account` is the human id; the owner's is `owner`;
     - an unknown account still runs one `scrypt` against a fixed dummy hash, so timing does not reveal which accounts exist;
+    - a human whose `humans.disabled_at` is set gets the same `reason: "password"` failure, after the same `scrypt` (nothing sets the column in M0-C; this keeps the door shut for M1.11);
     - records the step it used.
   - `verifyPin(humanId: string, pin: string): Promise<boolean>`.
   - `reset(humanId: string): void`:
@@ -163,6 +172,7 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
   - `the key file is 0600` (POSIX only, as SR-B-23 does).
   - `password and PIN rules are enforced`: an 11-character password and a 5-digit PIN are refused, and nothing is written.
   - `verifyPin` returns true only for the right PIN.
+  - `a disabled human cannot log in`: set `disabled_at` directly; the right password and code give the same failure as a wrong password.
   - `a second owner cannot enroll` (the `one_owner` index).
   - Carry-forward, `SR-C-16 [T-X1.8] knowledge.put refuses a caller who is not the owner`. With a supervisor's id, and with an unknown id, `put` throws, and the document and the audit trail are unchanged.
 - [ ] **Step 2: Run them and confirm they fail.** Run: `pnpm test`. Expected: the new tests fail; the rest pass.
@@ -195,6 +205,9 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
   - Every POST needs an allowed `Origin` and `Content-Type: application/json`, and a body of at most 4 KiB. It returns `true` when it answered.
   - `sessionFor(req): DashboardSession | null`, where `DashboardSession = { id: string; humanId: string; role: HumanRole; remote: boolean; createdAt: number; lastSeenAt: number }`.
     - It checks both lifetimes and refreshes `lastSeenAt`.
+  - `touch(sessionId: string): boolean`. Checks both lifetimes, refreshes `lastSeenAt`, and returns false when the session has ended.
+    - **What counts as activity:** an HTTP request with the cookie, and a command message from the client (Task 3 calls `touch` before dispatching). Frames HQ pushes to the browser do not count, so an open tab nobody uses goes idle after 30 minutes.
+  - `handle` and `sessionFor` never throw (see "reads narrowly").
   - `onEnd(fn: (sessionId: string) => void)`: called on logout and on expiry, so the WebSocket server closes that session's sockets with code 4401.
   - `isRemote(req): boolean` and `sourceOf(req): string`, by the rules in "reads narrowly".
 - Audit rows:
@@ -214,6 +227,7 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
   - `SR-C-01 [T-S5.1] HQ's startup output contains no credential`. Run `main` in a child process on a temporary home, with no owner and then with an enrolled owner. The output contains no setup code, no `token=`, and no 20+ character base64url run.
   - `SR-C-02 [T-S5.5 T-X3.8] the session cookie is HttpOnly and SameSite=Strict, and ends after idle, absolute limit and logout`:
     - after 31 minutes idle, the upgrade gets 401;
+    - an open socket that only receives HQ's frames for 31 minutes is closed with 4401, while one that sends a command every 10 minutes stays open;
     - with activity every 10 minutes, the upgrade is refused after 12 hours;
     - after logout the same cookie gets 401;
     - an open socket is closed with code 4401 when its session ends.
@@ -222,6 +236,10 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
     - five failures from source A lock A (429), while source B still logs in;
     - after 15 minutes on the fast clock, A logs in;
     - one `auth.locked` row is written.
+  - `SR-C-18 [T-S5.11] the source is the address the local proxy saw, not one the client chose`:
+    - five failed logins from a loopback socket with `X-Forwarded-For: 9.9.9.<n>, 100.64.0.7`, for five values of `n`, lock `100.64.0.7`;
+    - they write one collapsed `auth.login.failed` row, and no row holds `9.9.9`;
+    - a header of `ghp_` followed by 36 letters, and one that is not an address at all, each get the uniform 401, and HQ still answers `/api/health`.
   - `a login through a local proxy is a remote session`: loopback socket, `X-Forwarded-For: 100.64.0.7`, `Host: hq.example.ts.net`, so `remote: true`. Plain `127.0.0.1` gives `remote: false`.
   - `a store with no owner reports enroll and writes the setup file 0600` (mode on POSIX). After enrollment the file is gone, and `/auth/enroll` is refused.
   - `enrollment needs the setup code`: a wrong code gets 401, nothing is written, and the attempt counts toward the source lock.
@@ -237,8 +255,8 @@ Requirements: `docs/security/threat-model-m0.md` §3.2, SR-C-01 to SR-C-19. Orde
     - credentials at rest (SR-C-19, D8's row);
     - sessions in memory, and why;
     - the remote rule;
-    - the PIN carried with its command;
-    - the CSP;
+    - the PIN carried with its command, and PIN rotation through `reset-owner` until M1's `changePin`;
+    - the CSP, and why violations are blocked but not reported;
     - the sbx opener limit (SR-C-15);
     - recovery through `reset-owner`.
 - [ ] **Step 4: Run them and confirm they pass.** Run: `pnpm test && pnpm typecheck && pnpm build`, then `npm pack --pack-destination pack && node scripts/smoke-test.mjs pack/*.tgz 7431`. Expected: all pass.
@@ -254,7 +272,7 @@ Carry-forward:
 
 **Files:**
 - Create: `server/dashboard.ts`, `server/dashboard.test.ts`
-- Modify: `server/commands.ts` (every command becomes a `CommandSpec`; `DASHBOARD_ACTOR` is removed), `server/http.ts` (`onClient` calls `dispatch`), `server/company/agents.ts` (remove `DASHBOARD_ACTOR`), `src/data/source.ts` (`command.result` event), `server/mcp.test.ts`
+- Modify: `server/commands.ts` (every command becomes a `CommandSpec`; `DASHBOARD_ACTOR` is removed), `server/sbxMcp.ts` (no `sbx` text in its failure lines, SR-C-17), `server/http.ts` (`onClient` calls `dispatch`), `server/company/agents.ts` (remove `DASHBOARD_ACTOR`), `src/data/source.ts` (`command.result` event), `server/mcp.test.ts`
 
 **Interfaces:**
 - Consumes: `HumanRole` (Task 1), `OwnerAuth` and `DashboardSession` (Task 2).
@@ -270,6 +288,7 @@ Carry-forward:
 - Message format: `{ cmd, args, pin?, id? }`. The reply goes only to the sending socket:
   - `{ type: "command.result"; id: string; ok: boolean; error?: "unknown" | "forbidden" | "remote" | "pin-required" | "pin-wrong" | "pin-locked" | "rate-limited" | "failed" }`.
 - `dispatch(spec, ctx, msg)` order:
+  0. `OwnerAuth.touch(ctx.sessionId)`. A session that has ended closes the socket with 4401, and nothing runs.
   1. A command missing from the table, or one with no `role`, is refused.
   2. Role check.
   3. `localOnly` against `ctx.remote`.
@@ -322,9 +341,13 @@ Carry-forward:
   - `SR-C-08 [T-S5.3] a remote session cannot use the host shell, the terminal or the sandbox shell`:
     - from a remote owner session, `openHostShell`, `sendTerminalInput` and `openShell` get `remote` and are audited;
     - the session backend received nothing.
-  - `SR-C-17 [T-S5.10] a secret value goes to its store and nowhere else`:
-    - `setSecret` with the marker `sk-marker-…`, once with sbx succeeding and once with sbx failing with an error whose message contains the value;
-    - the marker is in no emitted event, activity item, reply, audit row, or captured `log` output.
+  - `SR-C-17 [T-S5.10] a secret value goes to its store and nowhere else`. Three commands take a secret:
+    - `setSecret` with the value `sk-marker-…`;
+    - `setProxy` with `http://user:<marker>@proxy.example:8080`;
+    - `addMcp` with `apiKey: <marker>`.
+    - Each runs once with sbx succeeding and once with sbx failing with an error whose text contains the marker.
+    - The marker is in no emitted event, activity item, reply, audit row, or captured `log` output.
+    - On success, the `setProxy` activity line names `proxy.example:8080` only.
   - `SR-C-18 [T-S5.11] the socket limits message rate`:
     - 300 messages at once run 100;
     - one `dashboard.rate-limited` row is written;
@@ -334,7 +357,11 @@ Carry-forward:
 - [ ] **Step 2: Run them and confirm they fail.** Run: `pnpm test`.
 - [ ] **Step 3: Implement.**
   - Commands that wrote rows with `DASHBOARD_ACTOR` (`addAgent`, `removeAgent`, `completeWelcome`) now take `ctx.actor`.
-  - `attempt()` reports `Couldn't …` without the error text when the command is `setSecret`; for every command the error text goes only to `log.warn`, after `cleanAgentText`-style trimming.
+  - **The commands that take a secret are `setSecret`, `setProxy` and `addMcp`.** For these three, no text from `sbx` (stdout, stderr or an error message) reaches the activity feed, the reply or the log:
+    - `attempt()` reports `Couldn't …` and nothing more;
+    - `sbxMcp.add` drops the `firstLine(r.stderr …)` parts of its two failure lines (`sbxMcp.ts:96` and the key-store line after it).
+  - For other commands, error text goes only to `log.warn`, trimmed.
+  - `setProxy` shows and logs the proxy as `host:port` only (`new URL(u).host`). The user-info part, which can hold a password, is never shown, logged or audited. The value is passed to `sbx` unchanged.
   - The secret value is never part of the error text built by `sbx.setKey`; check `sbx.ts` and cut it out if present.
 - [ ] **Step 4: Run them and confirm they pass.** Run: `pnpm test && pnpm typecheck`.
 - [ ] **Step 5: Commit** `feat: dashboard commands check the human's role, ask the PIN for grants, and audit each call`.
@@ -407,10 +434,32 @@ Carry-forward:
 
 Carry-forward (CodeRabbit on PR #3; confirmed at `hub.ts:98`): a note held during an access request loses its `noteIsAgentText` flag. If a patch carries the flag while the access branch replaces the note with HQ's own "Asking: access to …", the flag stays on HQ's text.
 
+**Agent-written fields and where they are shown.** Every one is rendered through `AgentText` or `AgentMarkdown`, with the author named:
+
+| Field | Written by | Shown in | Rendered as |
+|---|---|---|---|
+| `Task.title`, `description`, `doneWhen`, `note` | the CTO (`create_task`), the owner, or the task's agent (`set_my_status` note) | `BoardsDrawer`, `AgentDrawer`, `TeamPanel`, `Tooltip` | `AgentText`, author = the agent that last wrote it, or "you" |
+| `Board.title` | the CTO or the owner | `BoardsDrawer`, `BoardsSettings`, `TopBar` | `AgentText` |
+| `AgentMessage.text` | the sending agent | `AgentDrawer` message list | `AgentText`, author = the sender |
+| `ActionItem.title`, `details` | the asking agent (`ask_user`) | `ActionItemsDrawer` | `AgentText`, and `AgentMarkdown` for `details` |
+| `AccessRequest.domain`, `reason` | the asking agent (`request_access`) | `ActionItemsDrawer`, `AgentDrawer` | `AgentText` |
+| `AgentStatus.note` when `noteIsAgentText` | the agent (hook payload, tool argument) | `TeamPanel`, `Tooltip`, `AgentDrawer` | the whole note inside `AgentText` |
+| `PullRequest.title` | the authoring agent, via GitHub | `PrDrawer`, `ActionItemsDrawer` ("passed review" row) | `AgentText`, author = the PR's agent |
+| Agent words inside an activity line | the agent (tool argument or hook payload) | `ActivityFeed` | `ActivityEvent.quote`, below |
+
+**Activity lines carry the agent's words separately.** Today HQ builds sentences that embed agent words: `planner.ts:148` is `"<name> finished <task>: <note>"`, and `planner.ts:173` is `"<from> → <to>: <message>"`. The feed then shows the whole line as HQ's.
+- `ActivityEvent` gains `quote?: { author: string; text: string }`.
+- `hub.activity(type, agentId, text, opts?: { quote?: { author: string; text: string } })`.
+- `text` is HQ's own sentence and never holds a tool argument, a hook field or a PR title. Those go in `quote`, and the feed renders `quote` through `AgentText` after the sentence. For example: `Ana finished P3-T02` followed by a labelled quote holding the note.
+- M0-B's `agentText` flag on activity events is replaced by `quote`: the hook lines that set it move their payload text into `quote`.
+- A status note that embeds an agent's words is flagged `noteIsAgentText` as a whole, including notes HQ composes around one (`Asking: <title>`), and is rendered wholly inside `AgentText`.
+- Every one of the 61 `hub.activity` call sites in `server/` is checked against this rule in Step 3. The test below catches any line that still embeds a tool argument.
+
 **Files:**
 - Create: `src/ui/agentText.tsx`, `src/ui/systemItems.tsx`
-- Create: `src/ui/agentText.test.tsx`, `src/ui/sourceScan.test.ts`, `tsconfig.test.json`
-- Modify: the drawers and HUD that show agent text (`ActionItemsDrawer`, `AgentDrawer`, `BoardsDrawer`, `PrDrawer`, `ActivityFeed`, `TeamPanel`, `Tooltip`), `src/ui/drawers/Ports.tsx` and `src/ui/setup/SetupChecklist.tsx` (`safeHref`), `server/hub.ts` (carry-forward)
+- Create: `src/ui/agentText.test.tsx`, `src/ui/sourceScan.test.ts`, `tsconfig.test.json`, `server/activityQuote.test.ts`
+- Modify: `src/data/types.ts` (`ActivityEvent.quote`, drop `agentText`), `server/hub.ts` (`activity` options; carry-forward), `server/planner.ts`, `server/hooks.ts`, `server/actionItems.ts`, `server/access.ts`, `server/githubSync.ts` (move agent words into `quote`)
+- Modify: the drawers and HUD that show agent text (`ActionItemsDrawer`, `AgentDrawer`, `BoardsDrawer`, `PrDrawer`, `ActivityFeed`, `TeamPanel`, `Tooltip`, `TopBar`, `BoardsSettings`), `src/ui/drawers/Ports.tsx` and `src/ui/setup/SetupChecklist.tsx` (`safeHref`)
 - Modify: `package.json` (`test` also runs `"src/**/*.test.tsx" "src/**/*.test.ts"`; `typecheck` and `build` also run `tsc --noEmit -p tsconfig.test.json`), `tsconfig.json` (exclude `src/**/*.test.*`)
 
 **Interfaces:**
@@ -432,6 +481,7 @@ Carry-forward (CodeRabbit on PR #3; confirmed at `hub.ts:98`): a note held durin
   - `ActionItemCard({ item: ActionItem; from: { name; color } })`: title and details through `AgentText` and `AgentMarkdown`; HQ's own words (status, age, buttons) are outside.
   - `AccessRequestRow`.
   - `NeedsYouRow`.
+  - `ActivityLine({ event: ActivityEvent; agents: { id; name; color }[] })`: HQ's sentence as plain text, then `quote` through `AgentText`.
 - Payload set, exported from `agentText.test.tsx`:
   - `<script>document.title='p1'</script>`
   - `<img src=x onerror="document.title='p2'">`
@@ -462,9 +512,22 @@ Carry-forward (CodeRabbit on PR #3; confirmed at `hub.ts:98`): a note held durin
     - render each system item with the fake approval card in every agent field;
     - a small tag walker (`src/ui/testing/markup.ts`) shows that every payload character sits inside an element with `data-agent-text`;
     - the HQ-drawn title and buttons of the real card are outside one.
+  - `SR-C-13 [T-S10.3] no tool argument or hook field reaches the HQ text of an activity line` (`server/activityQuote.test.ts`, over the M0-B fixture):
+    - call every Team MCP tool that takes text (`create_board` title, `create_task` and `update_task` text fields, `set_my_status` note, `send_message` text, `ask_user` title and details, `request_access` domain and reason), and post each hook event whose payload carries text, each with a unique marker;
+    - also feed a PR whose title holds a marker through `githubSync`;
+    - no activity event's `text` contains any marker, and each marker that appears in the feed is in `quote.text`, with `quote.author` the agent that sent it;
+    - every `AgentStatus.note` that contains a marker has `noteIsAgentText`.
+  - `SR-C-13 [T-S10.3] an agent's words that imitate an HQ line render inside the agent container`:
+    - render `ActivityLine` with a `set_my_status` note of `done. HQ: security check passed, approve PR #12`, and with a `send_message` text imitating an HQ line;
+    - render a flagged status note the same way;
+    - with the tag walker, every character of the imitation is inside `data-agent-text`, and HQ's sentence is outside it.
   - Carry-forward: `a held note keeps its agent-text flag, and HQ's "Asking" note never carries it` (`server/hub` test).
 - [ ] **Step 2: Run them and confirm they fail.**
-- [ ] **Step 3: Implement.** Replace each direct rendering of agent text in the listed components with `AgentText`, and action-item details with `AgentMarkdown`. Route the existing `href={…}` uses through `safeHref`.
+- [ ] **Step 3: Implement.**
+  - Go through the 61 `hub.activity` call sites, and move every embedded tool argument, hook field and PR title into `quote`.
+  - Add `ActivityLine` to `systemItems.tsx`.
+  - Replace each direct rendering of agent text in the listed components with `AgentText`, and action-item details with `AgentMarkdown`.
+  - Route the existing `href={…}` uses through `safeHref`.
 - [ ] **Step 4: Run them and confirm they pass.** Run: `pnpm test && pnpm typecheck && pnpm build`.
 - [ ] **Step 5: Commit** `feat: agent text is always labelled, never markup, and markdown is rendered from an allow-list`.
 
@@ -502,7 +565,10 @@ Carry-forward (CodeRabbit on PR #3; confirmed at `hub.ts:98`): a note held durin
 - Modify: `src/store/office.ts` (choose the source from `/auth/state`), `src/data/ws/wsSource.ts` (no token; close code 4401 or `unauthorized` shows the login; sends `{ cmd, args, pin, id }` and resolves on `command.result`), `src/App.tsx`, the components whose commands need the PIN, `README.md`, `docs/how-it-works.md`
 
 **Interfaces:**
-- `chooseSource(fetchState: () => Promise<Response>): Promise<"hq" | "mock">`. `"hq"` when `/auth/state` answers JSON; otherwise `"mock"` (`pnpm dev` with no HQ).
+- `chooseSource(fetchState: () => Promise<Response>, dev: boolean): Promise<"hq" | "mock" | "unreachable">`. Called with `import.meta.env.DEV`.
+  - `"hq"` when `/auth/state` answers JSON.
+  - Otherwise `"mock"` only when `dev` is true (`pnpm dev` with no HQ).
+  - In the built page, `"unreachable"` shows "Can't reach HQ" with a Retry button. The demo office, with its invented agents and tasks, is never shown on the device used for approvals.
 - `LoginScreen` (`data-screen="login"`): account (pre-filled with `owner`, remembered in `localStorage`), password, code, and a single error line.
 - `EnrollScreen`, in three steps:
   1. setup code, display name, password and PIN;
@@ -513,7 +579,7 @@ Carry-forward (CodeRabbit on PR #3; confirmed at `hub.ts:98`): a note held durin
 - A supervisor sees the office read-only, with Stop as the only control.
 
 - [ ] **Step 1: Write the failing tests**
-  - `the UI chooses the real source when /auth/state answers`, and the mock when the fetch fails or returns HTML.
+  - `the UI chooses the real source when /auth/state answers`. When the fetch fails or returns HTML, it chooses the mock in development and `"unreachable"` in the built page.
   - `an unauthorized socket shows the login screen`: `wsSource` reports `unauthorized` on close code 4401, and on three failed opens.
 - [ ] **Step 2: Run them and confirm they fail.**
 - [ ] **Step 3: Implement.**
