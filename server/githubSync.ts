@@ -164,7 +164,7 @@ export class GitHubSync {
     const hub = this.hub;
     const who = pr.authorId || null;
     const tool = label[hub.snap.config.workflow.review.tool];
-    const lead = hub.snap.config.team.find((a) => a.isLead);
+    const leadId = this.planner.ctoId();
     const ref = `#${pr.number} ${pr.title}`;
 
     if (!old && !pr.merged && !pr.closed) hub.activity("pr.opened", who, `${hub.name(who)} opened PR ${ref}`);
@@ -172,7 +172,7 @@ export class GitHubSync {
 
     if (pr.merged && !old?.merged) {
       hub.activity("pr.merged", null, `PR ${ref} was merged`);
-      if (lead) this.planner.notify(lead.id, `PR #${pr.number} (${pr.title}) was merged${pr.taskId ? `; ${pr.taskId} is done` : ""}. Assign the next task if anything is waiting.`);
+      if (leadId) this.planner.notify(leadId, `PR #${pr.number} (${pr.title}) was merged${pr.taskId ? `; ${pr.taskId} is done` : ""}. Assign the next task if anything is waiting.`);
       return;
     }
     if (pr.merged) return;
@@ -193,7 +193,7 @@ export class GitHubSync {
 
     if (pr.review === "passed" && old?.review !== "passed") {
       hub.activity("review.passed", who, `${tool} approved #${pr.number}`);
-      if (lead) this.planner.notify(lead.id, passedNotice(pr, hub.name(who), hub.snap.config.workflow.merge.by));
+      if (leadId) this.planner.notify(leadId, passedNotice(pr, hub.name(who), hub.snap.config.workflow.merge.by));
     }
 
     if (pr.conflict && !old?.conflict && who)

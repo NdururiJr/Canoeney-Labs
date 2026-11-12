@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import { AgentRegistry } from "./agents";
+import { AgentSecrets } from "./agentSecrets";
 import { SqliteAuditSink } from "./audit";
 import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
@@ -20,6 +22,10 @@ export interface Company {
   knowledge: SqliteKnowledgeStore;
   router: Router;
   channels: Record<string, Channel>;
+  /** Project agents, their roles and status (M0-B). */
+  agents: AgentRegistry;
+  /** Per-agent secrets, stored as hashes (M0-B). */
+  secrets: AgentSecrets;
   close(): void;
 }
 
@@ -33,7 +39,10 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
   const db = openCompanyDb(join(home, "company.db"));
   const audit = new SqliteAuditSink(db, clock);
   const dashboard = new DashboardChannel(db, clock);
+  const secrets = new AgentSecrets(db, clock, audit);
   return {
+    agents: new AgentRegistry(db, clock, audit, secrets),
+    secrets,
     db,
     clock,
     audit,

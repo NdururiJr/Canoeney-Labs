@@ -14,14 +14,14 @@ export interface Launch {
 
 export interface CliAdapter {
   /** Writes HQ's files into the agent's folder (all git-excluded). */
-  writeFiles(dir: string, agent: AgentConfig, cfg: HqConfig, token: string, extras?: RoleExtras): Promise<void>;
+  writeFiles(dir: string, agent: AgentConfig, cfg: HqConfig, token: string, extras: RoleExtras): Promise<void>;
   launch(agent: AgentConfig, dir: string): Launch;
 }
 
 // ---------------------------------------------------------------- Claude Code
 
 const claude: CliAdapter = {
-  async writeFiles(dir, agent, cfg, token, extras = {}) {
+  async writeFiles(dir, agent, cfg, token, extras) {
     const ownRole = await adoptRoleFile(dir);
     writeClaudeFiles(dir, agent, cfg, token, { ...extras, ownRole });
   },
@@ -41,7 +41,7 @@ const CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Permiss
 /** TOML basic string (JSON's escaping is valid TOML for these characters). */
 const t = (s: string) => JSON.stringify(s);
 
-export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, dir: string, extras: RoleExtras = {}): string {
+export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, dir: string, extras: RoleExtras): string {
   const url = hqUrl(agent, cfg.project.hqPort);
   const script = hookScriptFor(agent, dir);
   const lines = [
@@ -53,7 +53,7 @@ export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, di
     "",
     "[mcp_servers.hq]",
     `url = ${t(`${url}/mcp`)}`,
-    `http_headers = { Authorization = ${t(`Bearer ${token}`)}, "X-HQ-Agent" = ${t(agent.id)} }`,
+    `http_headers = { Authorization = ${t(`Bearer ${token}`)} }`,
   ];
   for (const event of CODEX_EVENTS)
     lines.push("", `[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"', `command = ${t(hookCommand(url, token, agent.id, event, script))}`);
@@ -61,7 +61,7 @@ export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, di
 }
 
 const codex: CliAdapter = {
-  async writeFiles(dir, agent, cfg, token, extras = {}) {
+  async writeFiles(dir, agent, cfg, token, extras) {
     // A repo that commits its own Codex config can't take HQ's without changing a tracked file.
     const tracked = await run("git", ["ls-files", "--error-unmatch", CODEX_CONFIG], { cwd: dir });
     if (tracked.ok) throw new Error(`This repo commits ${CODEX_CONFIG}, so HQ can't add its Codex settings without changing a tracked file. Use Claude Code for this agent, or remove that file from the repo.`);

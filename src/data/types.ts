@@ -133,6 +133,8 @@ export interface AgentStatus {
   currentTaskId: string | null;
   stateSince: string; // ISO time
   note: string | null; // e.g. "Asking: max PDF size 10 MB or 20 MB?"
+  /** The note holds text an agent sent (a hook payload): untrusted, show it only as text. */
+  noteIsAgentText?: true;
   session: SessionInfo;
 }
 
@@ -225,6 +227,8 @@ export interface ActivityEvent {
   type: ActivityType;
   agentId: string | null;
   text: string;
+  /** The text includes text an agent sent (a hook payload): untrusted, show it only as text. */
+  agentText?: true;
 }
 
 /** What removing an agent would delete. Answer to `inspectWorkspace`. */

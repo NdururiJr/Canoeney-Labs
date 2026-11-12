@@ -7,6 +7,8 @@ import { resolveAccess } from "./access";
 import { ensureSkillCache } from "./skills";
 import { run } from "./lib/exec";
 import { agentPalette } from "../src/theme/tokens";
+import type { Company } from "./company";
+import { DASHBOARD_ACTOR } from "./company/agents";
 import { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { Planner } from "./planner";
@@ -45,7 +47,7 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 const str = (v: unknown, max = 2000) => (typeof v === "string" ? v.slice(0, max) : "");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
-export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inbox: Inbox, sbx: Sbx, mcp: SbxMcp) {
+export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inbox: Inbox, sbx: Sbx, mcp: SbxMcp, company: Company) {
   /** Runs an sbx change and reports failures in the activity feed. */
   const attempt = async (agentId: string | null, what: string, fn: () => Promise<void>) => {
     try {
@@ -83,16 +85,19 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     addAgent: (raw) => {
       const input = (raw ?? {}) as Partial<NewAgentInput>;
       const name = str(input.name, 40).trim() || "Agent";
+      // Never an id the config or the company store has used: a retired agent's id is not given out again.
+      const taken = (id: string) => team().some((a) => a.id === id) || !!company.agents.get(hub.slug, id);
       let id = slug(name);
-      for (let i = 2; team().some((a) => a.id === id); i++) id = `${slug(name)}-${i}`;
+      for (let i = 2; taken(id); i++) id = `${slug(name)}-${i}`;
       const used = new Set(team().map((a) => a.color));
       const color = agentPalette.find((c) => !used.has(c)) ?? agentPalette[team().length % agentPalette.length];
       const agent = newAgent(id, name, str(input.role, 40).trim() || "Developer", color, false);
       agent.cli = input.cli === "codex" ? "codex" : "claude";
       agent.model = str(input.model, 60).trim();
       agent.mode = input.mode === "local" ? "local" : "sandbox";
-      const lead = team().find((a) => a.isLead);
+      const lead = hub.cfg(planner.ctoId() ?? "");
       if (lead) agent.sandbox = structuredClone(lead.sandbox);
+      company.agents.register(hub.slug, agent, "builder", DASHBOARD_ACTOR, "dashboard");
       team().push(agent);
       const status = Hub.freshStatus(id);
       hub.snap.agents.push(status);
@@ -128,11 +133,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
 
     removeAgent: async (id, opts) => {
       const agent = hub.cfg(str(id));
-      if (!agent || agent.isLead) return;
+      if (!agent || agent.id === planner.ctoId()) return;
       const o = (opts ?? {}) as Partial<RemoveAgentOptions>;
       const removed = await sessions.removeResources(agent.id, { deleteSandbox: o.deleteSandbox !== false, deleteFolder: o.deleteFolder === true });
       hub.snap.config.team = team().filter((a) => a.id !== agent.id);
       hub.snap.agents = hub.snap.agents.filter((a) => a.agentId !== agent.id);
+      // Retiring revokes the agent's secret, and its id is never given out again.
+      const reg = company.agents.get(hub.slug, agent.id);
+      if (reg && reg.status !== "retired") company.agents.setStatus(hub.slug, agent.id, "retired", DASHBOARD_ACTOR);
       inbox.forget(agent.id);
       mcp.forget(agent.id);
       for (const t of hub.snap.tasks)
@@ -246,10 +254,12 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const input = (raw ?? {}) as Partial<WelcomeInput>;
       const cli = (c: unknown): AgentCli => (c === "codex" ? "codex" : "claude");
       const used = new Set<string>();
+      // Ids an earlier team of this project used stay taken (the store keeps them).
+      const registered = new Set(company.agents.list(hub.slug).map((a) => a.agentId));
       const make = (name: string, role: string, agentCli: AgentCli, isLead: boolean): AgentConfig => {
         const clean = str(name, 40).trim() || (isLead ? "Lead" : "Agent");
         let id = slug(clean);
-        for (let i = 2; used.has(id); i++) id = `${slug(clean)}-${i}`;
+        for (let i = 2; used.has(id) || registered.has(id); i++) id = `${slug(clean)}-${i}`;
         used.add(id);
         const agent = newAgent(id, clean, isLead ? "Lead" : str(role, 40).trim() || "Developer", agentPalette[used.size - 1] ?? agentPalette[0], isLead);
         agent.cli = agentCli;
@@ -261,6 +271,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const cfg = hub.snap.config;
       if (typeof input.projectName === "string" && input.projectName.trim()) cfg.project.name = str(input.projectName, 80).trim();
       cfg.team = [lead, ...workers];
+      // The new team is registered with new ids; its lead is a CTO. An earlier
+      // team's rows (from a config this checkout does not have) are left as they
+      // are, so that config still works where it exists. The CTO HQ talks to is
+      // the one in the current config (planner.ctoId).
+      company.db.transaction(() => {
+        const cto = company.agents.register(hub.slug, lead, "cto", DASHBOARD_ACTOR, "dashboard");
+        for (const w of workers) company.agents.register(hub.slug, w, "builder", DASHBOARD_ACTOR, "dashboard", {}, cto.companyId);
+      }, "immediate");
       const tools: ReviewTool[] = ["coderabbit", "greptile", "copilot", "human", "custom"];
       if (tools.includes(input.reviewTool as ReviewTool)) cfg.workflow.review.tool = input.reviewTool as ReviewTool;
       if (typeof input.reviewEnabled === "boolean") cfg.workflow.review.enabled = input.reviewEnabled;
@@ -289,10 +307,10 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       Object.assign(wf.deploy, p.deploy ?? {});
       hub.configChanged();
       // The lead was told the old rule; tell it the new one now, so no restart is needed.
-      const lead = hub.snap.config.team.find((a) => a.isLead);
-      if (lead && wf.merge.by !== mergeBy) {
+      const leadId = planner.ctoId();
+      if (leadId && wf.merge.by !== mergeBy) {
         const waiting = hub.snap.pullRequests.filter((pr) => pr.review === "passed" && !pr.merged && !pr.closed).map((pr) => pr.number);
-        planner.notify(lead.id, mergeByNotice(wf.merge.by, waiting));
+        planner.notify(leadId, mergeByNotice(wf.merge.by, waiting));
       }
     },
 
