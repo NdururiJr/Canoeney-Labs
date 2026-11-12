@@ -2,6 +2,7 @@ import type { CompanyDb } from "./db";
 import { m001 } from "./schema/001_company";
 import { m002 } from "./schema/002_memory_knowledge";
 import { m003 } from "./schema/003_channel_outbox";
+import { m004 } from "./schema/004_agent_secrets";
 
 export interface Migration {
   version: number;
@@ -11,7 +12,7 @@ export interface Migration {
 
 // Migrations are TypeScript modules so the server bundle carries them.
 // A migration is never edited after it merges; add a new one instead.
-export const MIGRATIONS: readonly Migration[] = [m001, m002, m003];
+export const MIGRATIONS: readonly Migration[] = [m001, m002, m003, m004];
 
 export class SchemaTooNewError extends Error {
   constructor(

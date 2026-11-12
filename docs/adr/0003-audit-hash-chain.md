@@ -38,17 +38,33 @@ hashed but never used for ordering or verification.
 
 **Secret-key guard.** Before anything is written, `append` throws
 `AuditSecretError` if any key at any depth of `data`, through objects and
-arrays, looks like a secret value. A key is normalised (lower-cased, with `-`,
-`_` and whitespace removed) and refused if it ends with one of `secret`,
-`token`, `password`, `passwordhash`, `passphrase`, `apikey`, `authorization`,
-`cookie`, `privatekey`, `privkey`, `bearer`, `credential`, `credentials`,
-`pin`, `pinhash`, `pincode`, `otp`, `totp`, `recoverycode`, `recoverycodes`.
-So `access_token`, `client_secret`, `x-api-key`, `AWS_CREDENTIALS`,
-`approvalPin` and `recovery_codes` are refused. `token` is singular on purpose: usage keys such
-as `inputTokens` and `tokenCount` are allowed, and so are `secretName` and
-`pinned`, because secret names may be logged and secret values may not
-(spec section 4). This guards key names only. It cannot spot a secret placed
-under an innocent key, so callers still must not log values.
+arrays, looks like a secret value, or if a value holds a known credential
+shape (M0-B, PR #1 finding 1).
+
+- *Key names.* A key is normalised (lower-cased, with `-`, `_` and whitespace
+  removed). A key ending with `name`, `names`, `id` or `ids` names a secret
+  without holding one and is allowed (`secretName`, `tokenId`). Otherwise it is
+  refused if it **contains** `secret`, `password`, `passphrase`, `apikey`,
+  `accesskey`, `privatekey`, `privkey`, `authorization`, `authheader`,
+  `bearer`, `credential`, `cookie` or `jwt`; or contains `token` not followed
+  by `s` or `count` (so usage keys such as `inputTokens` and `tokenCount` stay
+  allowed); or **ends with** one of the short words `pin`, `pinhash`,
+  `pincode`, `otp`, `totp`, `recoverycode`, `recoverycodes`, `pat`, `auth`,
+  `signature`, which would match too much anywhere (`pinned`, `author`).
+- *Values.* Every string in `data`, every key, the `target` and the `action`
+  are scanned for `CREDENTIAL_SHAPES`: GitHub tokens, `sk-` keys, Slack
+  `xox` tokens, AWS `AKIA` keys, PEM headers, JWTs, `Bearer` values and HQ
+  agent secrets (`hqa_`).
+- The error names the field (`data.headers.auth`, `target`) and never the
+  matched text.
+
+This catches accidents. It cannot stop a caller that reshapes a secret on
+purpose, so callers still must not log values.
+
+**Snapshot.** The hash is computed from `JSON.parse(data_json)`, the stored
+form, not from the caller's object, so a getter or a later mutation cannot
+make the stored row fail verification. The time `at` is read inside the write
+transaction, so another writer cannot store a later `seq` with an earlier time.
 
 **Well-formed text.** `actorId`, `action`, `target` and `decisionId` are hashed
 as JS strings but stored as SQLite TEXT, which turns a lone surrogate into
