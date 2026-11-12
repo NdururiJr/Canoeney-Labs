@@ -257,7 +257,9 @@ export class Sbx {
     const byAgent = new Map<string, string[]>();
     for (const f of fresh) byAgent.set(f.agentId, [...(byAgent.get(f.agentId) ?? []), f.host]);
     for (const [id, hosts] of byAgent)
-      this.hub.activity("agent.needs-input", id, `${this.hub.name(id)}'s sandbox blocked ${hosts.slice(0, 3).join(", ")}${hosts.length > 3 ? ` and ${hosts.length - 3} more` : ""}. Allow or dismiss in the agent's drawer.`);
+      this.hub.activity("agent.needs-input", id, `${this.hub.name(id)}'s sandbox blocked ${hosts.length === 1 ? "a site" : `${hosts.length} sites`}. Allow or dismiss in the agent's drawer.`, {
+        quote: { author: this.hub.name(id), text: `${hosts.slice(0, 3).join(", ")}${hosts.length > 3 ? ` and ${hosts.length - 3} more` : ""}` },
+      });
   }
 
   startApprovalPolling(ms = 5000) {
@@ -308,8 +310,9 @@ export class Sbx {
       // Same for anything but TCP (sbx rules are TCP; a UDP request would stay blocked).
       const tcp = !target.protocol || target.protocol === "TCP";
       if (/required by policy|organi[sz]ation/i.test(target.detail) || target.hostWide === false || !tcp) {
-        if (await respond(target.id, "allow")) this.hub.activity("config", agentId, `You approved ${target.host} for ${who}'s sandbox`);
-        else this.hub.activity("config", agentId, `Couldn't approve ${target.host}: sbx refused it.`);
+        const host = { quote: { author: who, text: target.host } };
+        if (await respond(target.id, "allow")) this.hub.activity("config", agentId, `You approved a site for ${who}'s sandbox`, host);
+        else this.hub.activity("config", agentId, "Couldn't approve the site: sbx refused it.", host);
         return this.refreshApprovals();
       }
       const agent = this.hub.cfg(agentId);
@@ -331,12 +334,12 @@ export class Sbx {
           await this.syncRules(agentId);
         }
         const why = err ? err.slice(0, 160) : agent.mode !== "sandbox" ? `${who} isn't in Sandbox mode` : "sbx didn't apply the rule";
-        this.hub.activity("config", agentId, `Couldn't allow ${target.host}: ${why}. The request is still listed.`);
+        this.hub.activity("config", agentId, `Couldn't allow the site: ${why}. The request is still listed.`, { quote: { author: who, text: target.host } });
         return;
       }
       // The rule covers TCP to that host:port: clear those entries only (a UDP one stays listed).
       for (const a of list.filter((x) => x.host === target.host && (!x.protocol || x.protocol === "TCP") && x.hostWide !== false)) await respond(a.id, "dismiss");
-      this.hub.activity("config", agentId, `You allowed ${target.host} for ${who}'s sandbox`);
+      this.hub.activity("config", agentId, `You allowed a site for ${who}'s sandbox`, { quote: { author: who, text: target.host } });
     } else {
       for (const a of approvalId === "all" ? list : [target!]) await respond(a.id, "dismiss");
     }
@@ -377,7 +380,9 @@ export class Sbx {
     if (ok) this.hub.activity("config", agentId, `You allowed ${ok} site${ok === 1 ? "" : "s"} for ${who}'s sandbox`);
     if (failed.length) {
       const why = agent.mode !== "sandbox" ? `${who} isn't in Sandbox mode` : st?.syncError?.slice(0, 120) || "sbx didn't apply them";
-      this.hub.activity("config", agentId, `Couldn't allow ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}: ${why}. They're still listed.`);
+      this.hub.activity("config", agentId, `Couldn't allow ${failed.length === 1 ? "a site" : `${failed.length} sites`}: ${why}. They're still listed.`, {
+        quote: { author: who, text: `${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}` },
+      });
     }
     await this.refreshApprovals();
   }

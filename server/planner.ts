@@ -96,7 +96,7 @@ export class Planner {
     };
     this.snap.tasks.push(task);
     this.hub.emit({ type: "task.updated", task: { ...task } });
-    this.hub.activity("task.created", byId === "you" ? null : byId, `${this.hub.name(byId)} added ${task.id} ${task.title}`);
+    this.hub.activity("task.created", byId === "you" ? null : byId, `${this.hub.name(byId)} added ${task.id}`, { quote: { author: this.hub.name(byId), text: task.title } });
     this.hub.planChanged();
     return task;
   }
@@ -125,7 +125,7 @@ export class Planner {
     this.hub.emit({ type: "task.updated", task: { ...task } });
     this.hub.setStatus(agentId, { currentTaskId: task.id });
     this.hub.planChanged();
-    this.hub.activity("task.assigned", byId === "you" ? null : byId, `${this.hub.name(byId)} assigned ${task.id} ${task.title} to ${agent.name}`);
+    this.hub.activity("task.assigned", byId === "you" ? null : byId, `${this.hub.name(byId)} assigned ${task.id} to ${agent.name}`, { quote: { author: this.hub.name(byId), text: task.title } });
     const by = byId === "you" ? "The user (your human)" : this.hub.name(byId);
     const text = `${by} assigned you ${task.id} (${task.title}). Pull main, start ${task.id}. Call the hq get_my_task tool for the details.`;
     this.record(byId, agentId, `Start ${task.id}: ${task.title}`);
@@ -145,7 +145,7 @@ export class Planner {
     this.hub.planChanged();
     const name = this.hub.name(agentId);
     const words = { "in-progress": "started", blocked: "is blocked on", "in-review": "sent for review", done: "finished" }[status];
-    this.hub.activity(status === "blocked" ? "agent.needs-input" : "task.started", agentId, `${name} ${words} ${task.id}${note ? `: ${note}` : ""}`);
+    this.hub.activity(status === "blocked" ? "agent.needs-input" : "task.started", agentId, `${name} ${words} ${task.id}`, note ? { quote: { author: name, text: note } } : {});
     // Let the lead know when work is blocked or ready for review.
     const leadId = this.ctoId();
     if (leadId && leadId !== agentId && (status === "blocked" || status === "in-review" || status === "done"))
@@ -170,7 +170,7 @@ export class Planner {
     const clean = text.trim().slice(0, 2000);
     if (!clean) throw new Error("Empty message");
     this.record(fromId, toId, clean);
-    this.hub.activity("message", fromId === "you" ? null : fromId, `${this.hub.name(fromId)} → ${this.hub.name(toId)}: ${clean.slice(0, 80)}`);
+    this.hub.activity("message", fromId === "you" ? null : fromId, `${this.hub.name(fromId)} → ${this.hub.name(toId)}`, { quote: { author: this.hub.name(fromId), text: clean.slice(0, 200) } });
     this.inbox.push(toId, { fromId, kind: "message", text: clean });
     return toId;
   }
