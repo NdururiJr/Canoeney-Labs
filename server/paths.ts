@@ -1,5 +1,4 @@
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { HQ_DIRNAME } from "./company/home";
@@ -36,15 +35,5 @@ export const sessionName = (projectSlug: string, agentId: string) => `hq-${proje
  */
 export const legacyAgentTokenFile = (projectSlug: string): string => join(projectHome(projectSlug), "agent-token");
 
-/**
- * Browser token, required by the UI's WebSocket. New on every start — except in
- * dev, where it survives server reloads so the open tab keeps working.
- */
-export function browserToken(projectSlug: string, dev: boolean): string {
-  if (!dev) return randomBytes(24).toString("hex");
-  const file = join(projectHome(projectSlug), "dev-browser-token");
-  if (existsSync(file)) return readFileSync(file, "utf8").trim();
-  const tok = randomBytes(24).toString("hex");
-  writeFileSync(file, tok, { mode: 0o600 });
-  return tok;
-}
+/** Before M0-C the UI connected with a per-start token; the dev copy lived here. HQ removes it at startup. */
+export const legacyDevTokenFile = (projectSlug: string): string => join(projectHome(projectSlug), "dev-browser-token");

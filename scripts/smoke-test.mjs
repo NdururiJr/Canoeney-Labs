@@ -7,7 +7,8 @@
 //   node scripts/smoke-test.mjs <path/to/package.tgz> [port]
 
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -104,11 +105,10 @@ const startHq = () =>
   spawn(process.execPath, [bin, "--repo", repo, "--port", String(port), "--no-open"], { stdio: ["ignore", "pipe", "pipe"], env: hqEnv });
 hq = startHq();
 let log = "";
-const token = await within(60_000, () => `HQ didn't start in 60s:\n${log}`, (done) => {
+await within(60_000, () => `HQ didn't start in 60s:\n${log}`, (done) => {
   const onData = (d) => {
     log += d;
-    const m = log.match(/token=([a-f0-9]+)/);
-    if (m) done(m[1]);
+    if (/No owner yet/.test(log)) done();
   };
   hq.stdout.on("data", onData);
   hq.stderr.on("data", onData);
@@ -138,14 +138,56 @@ store.close();
 if (starts !== 1) fail(`expected 1 hq.started event, found ${starts}: a start that never served was recorded`);
 step("a second HQ on a busy port exits without recording a start");
 
-const page = await fetch(`http://127.0.0.1:${port}/?token=${token}`);
+const origin = `http://127.0.0.1:${port}`;
+const page = await fetch(`${origin}/`);
 const html = await page.text();
 if (!page.ok || !html.includes("<div id=")) fail(`page: HTTP ${page.status}`);
 step("page served");
 
+// Owner login (M0-C): no credential in HQ's output, enrollment with the setup code from the file.
+const setupCode = readFileSync(join(companyHome, "owner-setup.txt"), "utf8").trim();
+if (/token=/.test(log) || log.includes(setupCode)) fail(`HQ printed a credential:\n${log}`);
 const WebSocket = req("ws");
+const refused = await within(15_000, "the WebSocket answered nothing in 15s", (done) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Origin: origin } });
+  ws.on("unexpected-response", (_req, res) => done(res.statusCode));
+  ws.on("open", () => done(101));
+  ws.on("error", () => {});
+});
+if (refused !== 401) fail(`a WebSocket with no session got ${refused}, expected 401`);
+step("the WebSocket refuses a browser with no session");
+
+const authPost = async (path, body) => {
+  const res = await fetch(`${origin}${path}`, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify(body) });
+  return { res, json: await res.json().catch(() => null) };
+};
+const enrolled = await authPost("/auth/enroll", { setupCode, displayName: "Smoke", password: "smoke test password", pin: "135790" });
+if (enrolled.res.status !== 200) fail(`enroll: HTTP ${enrolled.res.status} ${JSON.stringify(enrolled.json)}`);
+const base32 = (s) => {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0, value = 0;
+  const out = [];
+  for (const ch of s) {
+    value = (value << 5) | A.indexOf(ch);
+    bits += 5;
+    if (bits >= 8) (out.push((value >>> (bits - 8)) & 0xff), (bits -= 8));
+  }
+  return Buffer.from(out);
+};
+const totp = (seed) => {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const mac = createHmac("sha1", seed).update(counter).digest();
+  const o = mac[mac.length - 1] & 15;
+  return String((mac.readUInt32BE(o) & 0x7fffffff) % 1e6).padStart(6, "0");
+};
+const confirmed = await authPost("/auth/enroll/confirm", { code: totp(base32(enrolled.json.secret)) });
+const cookie = (confirmed.res.headers.get("set-cookie") ?? "").split(";")[0];
+if (confirmed.res.status !== 200 || !cookie.startsWith("hq_session=")) fail(`enroll confirm: HTTP ${confirmed.res.status}`);
+step("owner enrolled and logged in");
+
 const snap = await within(15_000, "no snapshot in 15s", (done) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${token}`, { headers: { Origin: `http://127.0.0.1:${port}` } });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Origin: origin, Cookie: cookie } });
   ws.on("message", (raw) => {
     const e = JSON.parse(String(raw));
     if (e.type === "snapshot") {

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import WebSocket from "ws";
-import { hook, makeHq, mcpCall, type Hq } from "./testing/hqFixture";
+import { hook, makeHq, mcpCall, ORIGIN, type Hq } from "./testing/hqFixture";
 
 const rows = (hq: Hq, action: string) => hq.company.audit.query({ action, limit: 1000 });
 
@@ -164,9 +164,12 @@ test("SR-B-24 [T-S5.12] an agent secret opens no WebSocket", async (t) => {
   const hq = await makeHq(t);
   const ana = hq.secretFor("ana");
   const ws = hq.url.replace("http", "ws");
-  assert.equal(await wsStatus(`${ws}/ws?token=${ana}`), 401);
-  assert.equal(await wsStatus(`${ws}/ws`, { authorization: `Bearer ${ana}` }), 401);
-  assert.equal(await wsStatus(`${ws}/ws?token=browser-token`), 101); // the browser token still works
+  const origin = ORIGIN;
+  assert.equal(await wsStatus(`${ws}/ws?token=${ana}`, { origin }), 401);
+  assert.equal(await wsStatus(`${ws}/ws`, { origin, authorization: `Bearer ${ana}` }), 401);
+  assert.equal(await wsStatus(`${ws}/ws`, { origin, cookie: `hq_session=${ana}` }), 401);
+  // A logged-in owner's session does open it (M0-C).
+  assert.equal(await wsStatus(`${ws}/ws`, { origin, cookie: await hq.sessionCookie() }), 101);
 });
 
 test("a request HQ cannot parse gets 400 and HQ keeps serving", async (t) => {
