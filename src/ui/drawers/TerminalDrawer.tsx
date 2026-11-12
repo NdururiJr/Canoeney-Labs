@@ -3,6 +3,7 @@ import { HOST_TERMINAL } from "../../data/types";
 import { officeActions, useOffice } from "../../store/office";
 import { DrawerHeader } from "./Drawer";
 import { TerminalView } from "./TerminalView";
+import { useRemote } from "../../store/auth";
 
 const OTHER = "\u0000other";
 // The folder the shell is in, kept while HQ is open so reopening the panel shows the same shell.
@@ -13,6 +14,22 @@ let lastDir = "";
  * folder, or any folder you type.
  */
 export function TerminalDrawer() {
+  // A remote session has no shell on this machine (SR-C-08; the server refuses it too).
+  return useRemote() ? <RemoteNotice /> : <HostTerminal />;
+}
+
+function RemoteNotice() {
+  return (
+    <>
+      <DrawerHeader>
+        <b className="text-[18px]">Terminal</b>
+      </DrawerHeader>
+      <p className="p-4 text-[14px]">The terminal works only on the machine HQ runs on, not from a remote session.</p>
+    </>
+  );
+}
+
+function HostTerminal() {
   const snap = useOffice((s) => s.snap);
   const [dir, setDir] = useState(lastDir);
   const [other, setOther] = useState("");

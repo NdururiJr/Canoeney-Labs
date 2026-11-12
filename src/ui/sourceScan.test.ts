@@ -34,8 +34,8 @@ test("SR-C-10 [T-S10.2] no source file can turn a string into markup or code", (
     const text = readFileSync(f, "utf8");
     const where = relative(SRC, f);
     for (const [re, name] of FORBIDDEN) if (re.test(text)) found.push(`${where}: ${name}`);
-    // A link target from data goes through safeHref; a string literal is HQ's own.
-    for (const m of text.matchAll(/href=\{(?!safeHref\()/g)) found.push(`${where}: href={${text.slice(m.index! + 6, m.index! + 40)}`);
+    // A link target from data goes through safeHref (or otpauthHref, the enrollment link).
+    for (const m of text.matchAll(/href=\{(?!(safeHref|otpauthHref)\()/g)) found.push(`${where}: href={${text.slice(m.index! + 6, m.index! + 40)}`);
   }
   assert.deepEqual(found, []);
 });

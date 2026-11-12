@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import { createMockSource } from "../data/mock/mockSource";
 import type { ConnectionStatus, DataPreset, OfficeDataSource, OfficeEvent, SimSpeed } from "../data/source";
+import { chosenSource } from "../data/authState";
 import { createWsSource } from "../data/ws/wsSource";
 import type { StackConfig } from "../data/stack";
 import type { AccessDecision, NewMcpServer, AgentConfig, AgentStatus, OfficeSnapshot, RemoveAgentOptions, SetupCheckId, WelcomeInput, WorkspaceInfo } from "../data/types";
@@ -29,31 +30,10 @@ interface OfficeState {
 }
 
 /**
- * HQ opens the UI with `?token=…`. With a token we talk to the real server;
- * without one (plain `pnpm dev`) the UI runs on the mock.
+ * main.tsx decides before this module loads: the real HQ when /auth/state
+ * answers, the demo only under `pnpm dev` with no HQ (M0-C; data/authState.ts).
  */
-function hqToken(): string | null {
-  const url = new URL(location.href);
-  const fromUrl = url.searchParams.get("token");
-  if (fromUrl) {
-    try {
-      sessionStorage.setItem("hq-token", fromUrl);
-    } catch {
-      /* private mode */
-    }
-    url.searchParams.delete("token");
-    history.replaceState(null, "", url.toString()); // keep the token out of history and screenshots
-    return fromUrl;
-  }
-  try {
-    return sessionStorage.getItem("hq-token");
-  } catch {
-    return null;
-  }
-}
-
-const token = hqToken();
-const source: OfficeDataSource = token ? createWsSource(token) : createMockSource();
+const source: OfficeDataSource = chosenSource() === "hq" ? createWsSource() : createMockSource();
 
 export const useOffice = create<OfficeState>(() => ({
   snap: null,
@@ -62,7 +42,7 @@ export const useOffice = create<OfficeState>(() => ({
   terminalChunks: 0,
   speed: 1,
   presets: source.dev?.presets ?? null,
-  live: token !== null,
+  live: chosenSource() === "hq",
   workspaceInfo: {},
   connection: "connecting",
   source,
@@ -159,6 +139,8 @@ export function connectOffice() {
 // ---------------------------------------------------------------- actions
 
 export const officeActions = {
+  /** Sends a command again with the approval PIN (the PIN dialog). */
+  sendWithPin: (cmd: string, args: unknown[], pin: string) => source.sendWithPin?.(cmd, args, pin),
   sendTerminalInput: (agentId: string, data: string) => source.sendTerminalInput(agentId, data),
   resizeTerminal: (agentId: string, cols: number, rows: number) => source.resizeTerminal(agentId, cols, rows),
   startAgent: (id: string) => source.startAgent(id),

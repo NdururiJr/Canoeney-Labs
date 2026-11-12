@@ -17,6 +17,9 @@ function assertHeaders(h: Headers | Record<string, string>, where: string) {
   assert.match(csp, /frame-ancestors 'none'/, where);
   assert.match(csp, /object-src 'none'/, where);
   assert.doesNotMatch(csp, /unsafe-eval/, where);
+  // Built fonts are inlined as data: URLs; data: is allowed for fonts and images only.
+  assert.match(csp, /font-src 'self' data:/, where);
+  assert.doesNotMatch(csp, /(script|default|connect)-src[^;]*data:/, where);
   assert.equal(get("x-content-type-options"), "nosniff", where);
   assert.equal(get("referrer-policy"), "no-referrer", where);
   assert.equal(get("x-frame-options"), "DENY", where);
@@ -91,4 +94,19 @@ test("SR-C-12 [T-S10.4] an inline script is blocked in a real browser", async (t
   const blocked = await dumpDom(bin, url);
   assert.match(blocked, /id="x">before</);
   assert.doesNotMatch(blocked, />ran</);
+});
+
+test("SR-C-12 [T-S10.4] the built page loads and renders under the CSP", async (t) => {
+  const dist = join(process.cwd(), "dist");
+  const { existsSync } = await import("node:fs");
+  if (!existsSync(join(dist, "index.html"))) {
+    if (process.env.CI) throw new Error("dist/ is missing in CI: run pnpm build before pnpm test");
+    return t.skip("no dist/: run pnpm build first");
+  }
+  const bin = browserFor(t);
+  if (!bin) return;
+  const hq = await makeHq(t, { distDir: dist });
+  // No owner yet, so the page shows enrollment: proof that its script and styles ran under the policy.
+  const dom = await dumpDom(bin, `${hq.url}/`);
+  assert.match(dom, /data-screen="(enroll|login)"/);
 });

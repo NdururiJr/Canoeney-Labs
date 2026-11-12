@@ -17,7 +17,8 @@ export function securityHeaders(host: string | undefined): Record<string, string
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    "font-src 'self'",
+    // Vite inlines small font files into the CSS as data: URLs. A font runs no script.
+    "font-src 'self' data:",
     `connect-src 'self'${ws}`,
     "worker-src 'self' blob:",
     "object-src 'none'",

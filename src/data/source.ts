@@ -71,6 +71,9 @@ export interface DevControls {
 export interface OfficeDataSource {
   connect(onEvent: (e: OfficeEvent) => void, onStatus?: (s: ConnectionStatus) => void): () => void; // returns disconnect
 
+  /** Sends a command again with the approval PIN (real HQ only, M0-C). */
+  sendWithPin?(cmd: string, args: unknown[], pin: string): void;
+
   sendTerminalInput(agentId: string, data: string): void;
   resizeTerminal(agentId: string, cols: number, rows: number): void;
   assignTask(taskId: string, agentId: string): void;

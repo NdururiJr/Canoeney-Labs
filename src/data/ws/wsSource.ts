@@ -1,16 +1,41 @@
 // The real data source: a WebSocket to the local HQ server.
-// Server → browser: OfficeEvent JSON. Browser → server: { cmd, args }.
+// Server → browser: OfficeEvent JSON. Browser → server: { cmd, args, id, pin? }.
+// The socket rides on the owner's session cookie (M0-C): no token in the URL.
+// A command that needs the approval PIN is answered "pin-required", and the
+// PIN dialog sends it again with the PIN.
 
-import type { OfficeDataSource, OfficeEvent } from "../source";
+import { askPin } from "../../store/auth";
+import type { ConnectionStatus, OfficeDataSource, OfficeEvent } from "../source";
 
-export function createWsSource(token: string): OfficeDataSource {
+/** What a closed socket means. HQ closes a socket whose session ended with 4401; a refused upgrade never opens. */
+export function statusAfterClose(o: { code: number; opened: boolean; retry: number }): ConnectionStatus {
+  if (o.code === 4401) return "unauthorized";
+  return !o.opened && o.retry > 2 ? "unauthorized" : "reconnecting";
+}
+
+const PIN_ERRORS = new Set(["pin-required", "pin-wrong", "pin-locked"]);
+
+export function createWsSource(): OfficeDataSource {
   let ws: WebSocket | null = null;
   const queue: string[] = [];
+  const pending = new Map<string, { cmd: string; args: unknown[] }>();
+  let seq = 0;
 
-  const send = (cmd: string, ...args: unknown[]) => {
-    const msg = JSON.stringify({ cmd, args });
+  const transmit = (cmd: string, args: unknown[], pin?: string) => {
+    const id = `c${++seq}`;
+    if (pending.size > 500) pending.clear();
+    pending.set(id, { cmd, args });
+    const msg = JSON.stringify({ cmd, args, id, ...(pin ? { pin } : {}) });
     if (ws?.readyState === WebSocket.OPEN) ws.send(msg);
-    else if (queue.length < 200) queue.push(msg);
+    // A PIN is never queued: it goes with a live connection or not at all.
+    else if (!pin && queue.length < 200) queue.push(msg);
+  };
+  const send = (cmd: string, ...args: unknown[]) => transmit(cmd, args);
+  /** HQ's answer to one command: ask for the PIN when it needs one. */
+  const onResult = (e: { id: string; ok: boolean; error?: string }) => {
+    const sent = pending.get(e.id);
+    pending.delete(e.id);
+    if (sent && !e.ok && e.error && PIN_ERRORS.has(e.error)) askPin({ ...sent, reason: e.error as "pin-required" });
   };
 
   const source: OfficeDataSource = {
@@ -25,7 +50,7 @@ export function createWsSource(token: string): OfficeDataSource {
         if (!active) return;
         onStatus?.(retry ? "reconnecting" : "connecting");
         const proto = location.protocol === "https:" ? "wss" : "ws";
-        const sock = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(token)}`);
+        const sock = new WebSocket(`${proto}://${location.host}/ws`);
         socket = sock;
         let opened = false;
         sock.onopen = () => {
@@ -39,16 +64,20 @@ export function createWsSource(token: string): OfficeDataSource {
         sock.onmessage = (m) => {
           if (!active) return;
           try {
-            onEvent(JSON.parse(String(m.data)) as OfficeEvent);
+            const e = JSON.parse(String(m.data)) as OfficeEvent;
+            if (e.type === "command.result") onResult(e);
+            onEvent(e);
           } catch {
             /* ignore malformed frames */
           }
         };
-        sock.onclose = () => {
+        sock.onclose = (ev) => {
           if (ws === sock) ws = null;
           if (!active) return;
-          // Never opened, several times in a row: the token was rejected (HQ restarted).
-          onStatus?.(!opened && retry > 2 ? "unauthorized" : "reconnecting");
+          const status = statusAfterClose({ code: ev.code, opened, retry });
+          onStatus?.(status);
+          // The session ended: the login screen takes over, no retry loop.
+          if (status === "unauthorized") return;
           retry += 1;
           timer = window.setTimeout(open, Math.min(5000, 400 * retry));
         };
@@ -63,6 +92,7 @@ export function createWsSource(token: string): OfficeDataSource {
         if (ws === socket) ws = null;
       };
     },
+    sendWithPin: (cmd, args, pin) => transmit(cmd, args, pin),
     sendTerminalInput: (id, data) => send("sendTerminalInput", id, data),
     resizeTerminal: (id, cols, rows) => send("resizeTerminal", id, cols, rows),
     assignTask: (taskId, agentId) => send("assignTask", taskId, agentId),

@@ -8,11 +8,14 @@ import { PortBanner, PortsRow } from "./Ports";
 import { TerminalView } from "./TerminalView";
 import { AgentMarkdown, AgentText } from "../agentText";
 import { StatusNote } from "../systemItems";
+import { useRemote } from "../../store/auth";
 
 
 export function AgentDrawer({ id, initialTab }: { id: string; initialTab?: AgentTab }) {
   const snap = useOffice((s) => s.snap);
-  const [tab, setTab] = useState<AgentTab>(initialTab ?? "terminal");
+  // A remote session has no terminal or shell (SR-C-08; the server refuses them too).
+  const remote = useRemote();
+  const [tab, setTab] = useState<AgentTab>(initialTab && !(remote && (initialTab === "terminal" || initialTab === "shell")) ? initialTab : remote ? "task" : "terminal");
   const agent = snap?.config.team.find((a) => a.id === id);
   const status = snap?.agents.find((a) => a.agentId === id);
   if (!snap || !agent || !status) {
@@ -59,8 +62,7 @@ export function AgentDrawer({ id, initialTab }: { id: string; initialTab?: Agent
           value={tab}
           onChange={setTab}
           tabs={[
-            { id: "terminal", label: "Terminal" },
-            { id: "shell", label: "Shell" },
+            ...(remote ? [] : ([{ id: "terminal", label: "Terminal" }, { id: "shell", label: "Shell" }] as const)),
             { id: "task", label: "Task" },
             { id: "sandbox", label: "Sandbox" },
             { id: "messages", label: `Messages${unread ? ` · ${unread}` : ""}` },
@@ -68,13 +70,13 @@ export function AgentDrawer({ id, initialTab }: { id: string; initialTab?: Agent
         />
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === "terminal" &&
+        {tab === "terminal" && !remote &&
           (status.session.state === "running" ? (
             <TerminalView agentId={id} />
           ) : (
             <NotRunning agent={agent} status={status} />
           ))}
-        {tab === "shell" && <ShellTab agent={agent} status={status} />}
+        {tab === "shell" && !remote && <ShellTab agent={agent} status={status} />}
         {tab === "task" && <TaskTab snap={snap} agent={agent} taskId={status.currentTaskId} />}
         {tab === "sandbox" && <SandboxTab snap={snap} agent={agent} />}
         {tab === "messages" && <MessagesTab snap={snap} agent={agent} />}
