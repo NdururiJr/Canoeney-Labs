@@ -76,8 +76,13 @@ export function createWsSource(): OfficeDataSource {
           if (!active) return;
           const status = statusAfterClose({ code: ev.code, opened, retry });
           onStatus?.(status);
-          // The session ended: the login screen takes over, no retry loop.
-          if (status === "unauthorized") return;
+          // The session ended: the login screen takes over, no retry loop. Nothing typed or
+          // asked before is sent on a later session.
+          if (status === "unauthorized") {
+            queue.length = 0;
+            pending.clear();
+            return;
+          }
           retry += 1;
           timer = window.setTimeout(open, Math.min(5000, 400 * retry));
         };

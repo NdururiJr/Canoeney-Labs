@@ -1,6 +1,7 @@
 import type { SimSpeed } from "../../data/source";
 import { officeActions, selectAttention, useOffice } from "../../store/office";
 import { ui, useUi } from "../../store/ui";
+import { LogoutButton } from "../auth/AuthScreens";
 
 const SPEEDS: SimSpeed[] = [1, 2, 4];
 
@@ -132,6 +133,7 @@ export function TopBar() {
       <button className="btn text-[14px]" onClick={() => ui.openSettings("team")}>
         Settings
       </button>
+      <LogoutButton />
       <button className="btn text-[14px]" aria-pressed={debugOpen} onClick={() => ui.toggleDebug()} title="Debug panel (D)">
         Debug
       </button>

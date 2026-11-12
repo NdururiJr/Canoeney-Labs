@@ -181,7 +181,7 @@ const totp = (seed) => {
   const o = mac[mac.length - 1] & 15;
   return String((mac.readUInt32BE(o) & 0x7fffffff) % 1e6).padStart(6, "0");
 };
-const confirmed = await authPost("/auth/enroll/confirm", { code: totp(base32(enrolled.json.secret)) });
+const confirmed = await authPost("/auth/enroll/confirm", { code: totp(base32(enrolled.json.secret)), enrollToken: enrolled.json.enrollToken });
 const cookie = (confirmed.res.headers.get("set-cookie") ?? "").split(";")[0];
 if (confirmed.res.status !== 200 || !cookie.startsWith("hq_session=")) fail(`enroll confirm: HTTP ${confirmed.res.status}`);
 step("owner enrolled and logged in");

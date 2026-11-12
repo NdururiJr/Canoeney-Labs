@@ -89,7 +89,7 @@ export function EnrollScreen() {
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [pin, setPin] = useState("");
-  const [secret, setSecret] = useState<{ secret: string; otpauth: string } | null>(null);
+  const [secret, setSecret] = useState<{ secret: string; otpauth: string; enrollToken: string } | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -100,12 +100,12 @@ export function EnrollScreen() {
     setPassword("");
     setPin("");
     setError(null);
-    setSecret({ secret: String(r.json.secret), otpauth: String(r.json.otpauth) });
+    setSecret({ secret: String(r.json.secret), otpauth: String(r.json.otpauth), enrollToken: String(r.json.enrollToken) });
     setStep("secret");
   };
   const confirm = async (e: FormEvent) => {
     e.preventDefault();
-    const r = await authPost("/auth/enroll/confirm", { code: code.trim() });
+    const r = await authPost("/auth/enroll/confirm", { code: code.trim(), enrollToken: secret?.enrollToken });
     if (r.status !== 200) return setError("That code didn't match. Check the app shows HQ, and try the next code.");
     setSecret(null);
     await refreshAuth();
@@ -200,6 +200,21 @@ export function PinDialog() {
         </div>
       </form>
     </div>
+  );
+}
+
+/** Ends the session on the server; HQ closes its sockets and the login screen comes back. */
+export function LogoutButton() {
+  const session = useAuth((s) => s.state?.session);
+  if (!session) return null;
+  const logout = async () => {
+    await authPost("/auth/logout", {});
+    await refreshAuth();
+  };
+  return (
+    <button className="btn text-[14px]" onClick={() => void logout()} title={`Logged in as ${session.humanId}`}>
+      Log out
+    </button>
   );
 }
 

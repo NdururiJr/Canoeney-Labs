@@ -146,6 +146,12 @@ export function startHttp(o: Options) {
     for (const ws of socketsBySession.get(sessionId) ?? []) ws.close(4401, "session ended");
     socketsBySession.delete(sessionId);
   });
+  // Upgraded sockets are not HTTP connections any more: closing everything must end them too.
+  const closeHttp = server.closeAllConnections.bind(server);
+  server.closeAllConnections = () => {
+    for (const c of wss.clients) c.terminate();
+    closeHttp();
+  };
   const sweep = setInterval(() => {
     o.ownerAuth.sweep();
     o.dashboard.flush();
@@ -163,10 +169,12 @@ export function startHttp(o: Options) {
       socket.write(`HTTP/1.1 401 Unauthorized\r\n${headers}\r\n`);
       return socket.destroy();
     }
-    wss.handleUpgrade(req, socket, head, (ws) => onClient(ws, session));
+    // A session issued locally but replayed through a proxy is remote for this socket.
+    const remote = session.remote || o.ownerAuth.isRemote(req);
+    wss.handleUpgrade(req, socket, head, (ws) => onClient(ws, session, remote));
   });
 
-  function onClient(ws: WebSocket, session: DashboardSession) {
+  function onClient(ws: WebSocket, session: DashboardSession, remote: boolean) {
     const mine = socketsBySession.get(session.id) ?? new Set<WebSocket>();
     mine.add(ws);
     socketsBySession.set(session.id, mine);
@@ -177,7 +185,7 @@ export function startHttp(o: Options) {
     };
     sendEvent({ type: "snapshot", snapshot: o.hub.snap });
     const unsub = o.hub.subscribe(sendEvent);
-    const ctx: CommandCtx = { actor: { kind: "human", id: session.humanId }, role: session.role, remote: session.remote, sessionId: session.id };
+    const ctx: CommandCtx = { actor: { kind: "human", id: session.humanId }, role: session.role, remote, sessionId: session.id };
     const allowed = o.dashboard.limiter();
     let limitedRowAt: number | null = null;
     const reply = (id: unknown, r: CommandResult) => {
@@ -202,7 +210,12 @@ export function startHttp(o: Options) {
       }
       // A message from the client is activity; frames HQ pushes are not.
       if (!o.ownerAuth.touch(session.id)) return ws.close(4401, "session ended");
-      reply(msg.id, await o.dashboard.dispatch(ctx, msg));
+      try {
+        reply(msg.id, await o.dashboard.dispatch(ctx, msg));
+      } catch {
+        // dispatch does not throw; if it ever did, an unhandled rejection would end HQ.
+        reply(msg.id, { ok: false, error: "failed" });
+      }
     });
     ws.on("close", () => {
       unsub();

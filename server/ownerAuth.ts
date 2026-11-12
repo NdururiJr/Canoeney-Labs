@@ -55,6 +55,7 @@ export const DEFAULT_OWNER_AUTH_LIMITS: OwnerAuthLimits = {
 export const SESSION_COOKIE = "hq_session";
 export const OWNER_ID = "owner";
 const MINUTE = 60_000;
+const ENROLL_TTL_MS = 10 * MINUTE;
 const BODY_LIMIT = 4 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const WRONG = { error: "wrong password or code" };
@@ -108,6 +109,8 @@ export class OwnerAuth {
   private failures = new Map<string, { start: number; count: number; lockedUntil: number }>();
   private failureRows = new Map<string, { start: number; pending: number }>();
   private pinFailures = new Map<string, { count: number; lockedUntil: number }>();
+  /** The enrollment in progress: the confirm step must bring back its token before it expires. */
+  private enrollment: { tokenHash: string; expiresAt: number } | null = null;
 
   constructor(o: { accounts: HumanAccounts; clock: Clock; audit: AuditSink; allowedOrigins: string[]; setupFile: string; limits?: Partial<OwnerAuthLimits> }) {
     this.accounts = o.accounts;
@@ -217,6 +220,28 @@ export class OwnerAuth {
     }
 
     const source = this.sourceOf(req);
+    // One login or enrollment step at a time per source, so a burst cannot get
+    // past the lock before the earlier failures are counted.
+    return this.serial(source, () => this.step(req, res, path, source));
+  }
+
+  private sourceQueues = new Map<string, Promise<void>>();
+
+  private serial(source: string, fn: () => Promise<void>): Promise<void> {
+    const run = (this.sourceQueues.get(source) ?? Promise.resolve()).then(fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.sourceQueues.set(source, tail);
+    // The queue entry goes once nothing is waiting behind it.
+    void tail.then(() => {
+      if (this.sourceQueues.get(source) === tail) this.sourceQueues.delete(source);
+    });
+    return run;
+  }
+
+  private async step(req: IncomingMessage, res: ServerResponse, path: string, source: string): Promise<void> {
     if (this.isLocked(source)) throw new HttpError(429, LOCKED);
     const body = await this.body(req);
 
@@ -248,14 +273,20 @@ export class OwnerAuth {
         // The password and PIN rules: safe to show, they hold no input.
         throw new HttpError(400, { error: err instanceof Error ? err.message : "invalid" });
       }
-      return this.json(res, 200, { secret: base32Encode(seed), otpauth: otpauthUrl(seed, OWNER_ID) });
+      // Confirming needs this token, which only the browser that started enrollment has, within 10 minutes.
+      const enrollToken = randomBytes(24).toString("base64url");
+      this.enrollment = { tokenHash: sha256(enrollToken), expiresAt: this.now() + ENROLL_TTL_MS };
+      return this.json(res, 200, { secret: base32Encode(seed), otpauth: otpauthUrl(seed, OWNER_ID), enrollToken });
     }
 
     if (path === "/auth/enroll/confirm") {
-      if (this.accounts.hasOwner() || !(await this.accounts.confirmEnrollment(OWNER_ID, String(body.code ?? "")))) {
-        this.failed(source, "code");
+      const e = this.enrollment;
+      const tokenOk = !!e && this.now() < e.expiresAt && this.same(String(body.enrollToken ?? ""), "", e.tokenHash);
+      if (!tokenOk || this.accounts.hasOwner() || !(await this.accounts.confirmEnrollment(OWNER_ID, String(body.code ?? "")))) {
+        this.failed(source, tokenOk ? "code" : "enroll-token");
         throw new HttpError(401, WRONG);
       }
+      this.enrollment = null;
       rmSync(this.setupFile, { force: true });
       this.clearFailures(source);
       return this.startSession(req, res, OWNER_ID, "owner");
@@ -328,8 +359,26 @@ export class OwnerAuth {
     }
   }
 
-  /** The PIN step for one human: checked on the server, locked after repeated failures (SR-C-05). */
-  async checkPin(humanId: string, pin: unknown): Promise<"ok" | "wrong" | "locked"> {
+  /**
+   * The PIN step for one human: checked on the server, locked after repeated
+   * failures (SR-C-05). Checks for one human run one at a time, so guesses sent
+   * together cannot all read the lock before any of them counts.
+   */
+  checkPin(humanId: string, pin: unknown): Promise<"ok" | "wrong" | "locked"> {
+    const run = (this.pinQueues.get(humanId) ?? Promise.resolve()).then(() => this.checkPinNow(humanId, pin));
+    this.pinQueues.set(
+      humanId,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
+
+  private pinQueues = new Map<string, Promise<void>>();
+
+  private async checkPinNow(humanId: string, pin: unknown): Promise<"ok" | "wrong" | "locked"> {
     const now = this.now();
     const p = this.pinFailures.get(humanId);
     if (p && now < p.lockedUntil) return "locked";
@@ -354,10 +403,11 @@ export class OwnerAuth {
     return /^[A-Za-z0-9_-]{22}$/.test(code) ? code : null;
   }
 
-  private same(a: string, b: string): boolean {
+  /** Compares a with b in constant time; or a's hash with a stored hash when one is given. */
+  private same(a: string, b: string, bHash?: string): boolean {
     const x = Buffer.from(sha256(a));
-    const y = Buffer.from(sha256(b));
-    return timingSafeEqual(x, y);
+    const y = Buffer.from(bHash ?? sha256(b));
+    return x.length === y.length && timingSafeEqual(x, y);
   }
 
   private body(req: IncomingMessage): Promise<Record<string, unknown>> {

@@ -296,3 +296,48 @@ test("SR-C-09 [T-S5.7] a supervisor's snapshot and event stream hold no owner-on
   sup.close();
   owner.close();
 });
+
+test("SR-C-05 [T-S5.6] PIN guesses sent at once still lock the step after five", async (t) => {
+  const d = await makeDashboardHq(t);
+  let checks = 0;
+  const real = d.hq.company.humans.verifyPin.bind(d.hq.company.humans);
+  d.hq.company.humans.verifyPin = async (id, pin) => (checks++, real(id, pin));
+  const c = await d.connect();
+  const results = await Promise.all(Array.from({ length: 20 }, () => c.send("setProxy", [null], "111111")));
+  assert.ok(results.every((r) => r.error === "pin-wrong" || r.error === "pin-locked"));
+  assert.deepEqual(await c.send("setProxy", [null], OWNER_PIN), { ok: false, error: "pin-locked" });
+  assert.ok(checks <= 5, `${checks} PIN checks ran`);
+  assert.equal(d.calls.length, 0);
+});
+
+test("a remote replay of a locally issued session is treated as remote", async (t) => {
+  const d = await makeDashboardHq(t);
+  const cookie = await d.hq.sessionCookie(); // logged in locally
+  const { openWs } = await import("./testing/hqFixture");
+  const { ws, frames } = await openWs(d.hq, { cookie, origin: ORIGIN, "x-forwarded-for": "100.64.0.9" });
+  assert.ok(ws);
+  t.after(() => ws.close());
+  ws.send(JSON.stringify({ cmd: "openHostShell", args: [d.hq.repoRoot, false], id: "r1" }));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(frames.find((f) => f.type === "command.result"), { type: "command.result", id: "r1", ok: false, error: "remote" });
+  assert.equal(d.calls.length, 0);
+});
+
+test("dispatch never throws: a failing PIN check is a refusal, and a PIN rule that throws asks for the PIN", async () => {
+  const { Dashboard } = await import("./dashboard");
+  const { FakeClock } = await import("./company/clock");
+  let ran = 0;
+  const ctx = { actor: { kind: "human" as const, id: "owner" }, role: "owner" as const, remote: false, sessionId: "s" };
+  const audit = { append: () => {} } as never;
+  const broken = new Dashboard(
+    { x: { role: "owner", pin: true, run: () => void ran++ } },
+    { ownerAuth: { checkPin: async () => { throw new Error("store busy"); } } as never, audit, clock: new FakeClock("2026-11-12T00:00:00.000Z") },
+  );
+  assert.deepEqual(await broken.dispatch(ctx, { cmd: "x", pin: "123456" }), { ok: false, error: "failed" });
+  const throwingRule = new Dashboard(
+    { y: { role: "owner", pin: () => { throw new Error("odd args"); }, run: () => void ran++ } },
+    { ownerAuth: { checkPin: async () => "ok" } as never, audit, clock: new FakeClock("2026-11-12T00:00:00.000Z") },
+  );
+  assert.deepEqual(await throwingRule.dispatch(ctx, { cmd: "y", args: [] }), { ok: false, error: "pin-required" });
+  assert.equal(ran, 0);
+});

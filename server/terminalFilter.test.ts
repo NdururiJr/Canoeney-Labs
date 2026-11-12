@@ -49,3 +49,12 @@ test("SR-C-15 [T-S10.6] a company agent's launch does not point BROWSER at the s
   assert.deepEqual(args.slice(0, 3), ["run", "--name", "hq-p-ana"]);
   assert.ok(args.includes("--env-file"));
 });
+
+test("SR-C-14 [T-S10.5] an OSC number with leading zeros, or the one-byte OSC introducer, is still removed", () => {
+  for (const seq of [`${ESC}]08;;https://evil.example${BEL}Open PR${ESC}]08;;${BEL}`, `\u009d8;;https://evil.example${BEL}Open PR\u009d8;;\u009c`, `\u009d052;c;cm0gLXJm${BEL}Open PR`]) {
+    const out = all([`x${seq}y`]);
+    assert.equal(out, "xOpen PRy", JSON.stringify(seq));
+    // Split anywhere, same result.
+    for (let cut = 1; cut < seq.length; cut++) assert.equal(all([`x${seq.slice(0, cut)}`, `${seq.slice(cut)}y`]), "xOpen PRy");
+  }
+});

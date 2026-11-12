@@ -12,6 +12,18 @@ import { log } from "./lib/log";
 import { projectHome, sessionName } from "./paths";
 import { policyVerdict } from "./setup";
 
+/** A proxy URL without its user name or password; "(set)" when it does not parse, null when empty. */
+export function redactProxy(raw: string): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    if (!/^(https?|socks5?h?):$/.test(u.protocol) || !u.host) return "(set)";
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "(set)";
+  }
+}
+
 interface RawRule {
   id: string;
   applies_to: string;
@@ -102,7 +114,8 @@ export class Sbx {
       /* sbx down */
     }
     this.state.basePolicy = base;
-    this.state.proxy = proxyOut.stdout.trim() || null;
+    // The browser sees the proxy without its user-info part, which can hold a password (SR-C-17).
+    this.state.proxy = redactProxy(proxyOut.stdout.trim());
     this.state.globalKeys = secrets.filter((s) => s.type === "service" && s.scope === "global").map((s) => s.name);
     const prevErrors = this.state.agents;
     this.state.agents = {};

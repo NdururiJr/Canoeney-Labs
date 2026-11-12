@@ -6,19 +6,25 @@
 // see. Both are removed (an OSC 8 link keeps its visible text). Everything
 // else, colours and cursor moves included, passes unchanged.
 //
+// The filter reads an OSC the way xterm.js does: it may start with ESC ] or
+// the one-byte U+009D, end with BEL, ESC \ or U+009C, and its number is read
+// as a number (so "08" is 8).
+//
 // Output arrives in chunks, so a sequence cut at the end of one is held until
 // the next. A sequence that never ends is dropped after 64 KiB, never passed
 // through.
 
 const ESC = "\x1b";
 const BEL = "\x07";
+const OSC_C1 = "\u009d";
+const ST_C1 = "\u009c";
 const HOLD_LIMIT = 64 * 1024;
-const REMOVED = new Set(["52", "8"]);
+const REMOVED = new Set([52, 8]);
 
-/** The index just past the terminator (BEL or ESC \) from `from`, or -1 when the input ends first. */
+/** The index just past the terminator from `from`, or -1 when the input ends first. */
 function terminatorEnd(s: string, from: number): number {
   for (let i = from; i < s.length; i++) {
-    if (s[i] === BEL) return i + 1;
+    if (s[i] === BEL || s[i] === ST_C1) return i + 1;
     if (s[i] === ESC) {
       if (i + 1 >= s.length) return -1;
       if (s[i + 1] === "\\") return i + 2;
@@ -36,28 +42,39 @@ export class TerminalFilter {
     let out = "";
     let i = 0;
     while (i < s.length) {
-      const esc = s.indexOf(ESC, i);
-      if (esc < 0) return out + s.slice(i);
-      out += s.slice(i, esc);
-      // Not enough input to tell what follows the ESC.
-      if (esc + 1 >= s.length) return out + this.hold(s.slice(esc));
-      if (s[esc + 1] !== "]") {
-        out += ESC;
-        i = esc + 1;
-        continue;
+      // The next place an OSC could start.
+      let at = -1;
+      for (let j = i; j < s.length; j++) {
+        if (s[j] === ESC || s[j] === OSC_C1) {
+          at = j;
+          break;
+        }
       }
-      // An OSC sequence: its number decides.
-      let k = esc + 2;
+      if (at < 0) return out + s.slice(i);
+      out += s.slice(i, at);
+      let body: number; // where the OSC number starts
+      if (s[at] === OSC_C1) body = at + 1;
+      else {
+        // Not enough input to tell what follows the ESC.
+        if (at + 1 >= s.length) return out + this.hold(s.slice(at));
+        if (s[at + 1] !== "]") {
+          out += ESC;
+          i = at + 1;
+          continue;
+        }
+        body = at + 2;
+      }
+      let k = body;
       while (k < s.length && s[k] >= "0" && s[k] <= "9") k++;
-      if (k >= s.length) return out + this.hold(s.slice(esc));
-      const code = s.slice(esc + 2, k);
+      if (k >= s.length) return out + this.hold(s.slice(at));
+      const code = k > body ? Number(s.slice(body, k)) : NaN;
       if (!REMOVED.has(code) || s[k] !== ";") {
-        out += s.slice(esc, k);
+        out += s.slice(at, k);
         i = k;
         continue;
       }
       const end = terminatorEnd(s, k + 1);
-      if (end < 0) return out + this.hold(s.slice(esc));
+      if (end < 0) return out + this.hold(s.slice(at));
       i = end; // removed
     }
     return out;

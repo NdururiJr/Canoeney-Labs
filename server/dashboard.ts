@@ -101,10 +101,16 @@ export class Dashboard {
     const target = this.targetOf(spec, args);
     if (rank(ctx.role) < rank(spec.role)) return this.refuse(ctx, cmd, target, "forbidden");
     if (spec.localOnly && ctx.remote) return this.refuse(ctx, cmd, target, "remote");
-    const needsPin = typeof spec.pin === "function" ? safe(() => (spec.pin as (a: unknown[]) => boolean)(args)) : spec.pin === true;
+    // A PIN rule that fails asks for the PIN: a check that breaks refuses, it never lets through.
+    const needsPin = typeof spec.pin === "function" ? (safe(() => (spec.pin as (a: unknown[]) => boolean)(args)) ?? true) : spec.pin === true;
     if (needsPin) {
       if (msg.pin === undefined || msg.pin === null || msg.pin === "") return this.refuse(ctx, cmd, target, "pin-required");
-      const pin = await this.o.ownerAuth.checkPin(ctx.actor.id, msg.pin);
+      let pin: "ok" | "wrong" | "locked";
+      try {
+        pin = await this.o.ownerAuth.checkPin(ctx.actor.id, msg.pin);
+      } catch {
+        return this.refuse(ctx, cmd, target, "failed");
+      }
       if (pin === "locked") return this.refuse(ctx, cmd, target, "pin-locked");
       if (pin === "wrong") return this.refuse(ctx, cmd, target, "pin-wrong");
     }

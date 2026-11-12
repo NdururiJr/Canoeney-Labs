@@ -164,7 +164,7 @@ test("a store with no owner reports enroll and writes the setup file 0600", asyn
   assert.equal(start.status, 200);
   const seed = base32Decode(String(start.json?.secret));
   assert.match(String(start.json?.otpauth), /^otpauth:\/\/totp\//);
-  const confirm = await post(hq, "/auth/enroll/confirm", { code: totpAt(seed, stepOf(hq.clock.now())) });
+  const confirm = await post(hq, "/auth/enroll/confirm", { code: totpAt(seed, stepOf(hq.clock.now())), enrollToken: start.json?.enrollToken });
   assert.equal(confirm.status, 200);
   assert.match(confirm.setCookie ?? "", /hq_session=/);
   assert.equal(existsSync(hq.setupFile), false);
@@ -207,4 +207,30 @@ test("a failed login writes no password or code", async (t) => {
   const all = JSON.stringify(hq.company.audit.query());
   for (const m of ["marker-password-123", "another-marker-pw", "987654"]) assert.ok(!all.includes(m));
   assert.ok(rows(hq, "auth.login.failed").length >= 1);
+});
+
+test("SR-C-18 [T-S5.11] wrong logins sent at once still lock their source after five", async (t) => {
+  const hq = await makeHq(t);
+  await hq.enroll();
+  let checks = 0;
+  const real = hq.company.humans.verifyLogin.bind(hq.company.humans);
+  hq.company.humans.verifyLogin = async (...a) => (checks++, real(...a));
+  const headers = { "x-forwarded-for": "10.9.9.9" };
+  const statuses = await Promise.all(Array.from({ length: 20 }, () => hq.login({ password: "wrong password!", code: "000000", headers }).then((r) => r.status)));
+  assert.equal(statuses.filter((s) => s === 401).length, 5);
+  assert.equal(statuses.filter((s) => s === 429).length, 15);
+  assert.equal(checks, 5);
+});
+
+test("enrollment is confirmed only with the token from its own start, within ten minutes", async (t) => {
+  const hq = await makeHq(t);
+  const setupCode = readFileSync(hq.setupFile, "utf8").trim();
+  const start = await post(hq, "/auth/enroll", { setupCode, displayName: "J", password: OWNER_PASSWORD, pin: "583920" });
+  const seed = base32Decode(String(start.json?.secret));
+  const code = () => totpAt(seed, stepOf(hq.clock.now()));
+  assert.equal((await post(hq, "/auth/enroll/confirm", { code: code() })).status, 401);
+  assert.equal((await post(hq, "/auth/enroll/confirm", { code: code(), enrollToken: "x".repeat(32) })).status, 401);
+  hq.clock.advance(11 * MINUTE);
+  assert.equal((await post(hq, "/auth/enroll/confirm", { code: code(), enrollToken: start.json?.enrollToken })).status, 401);
+  assert.equal(hq.company.humans.hasOwner(), false);
 });
