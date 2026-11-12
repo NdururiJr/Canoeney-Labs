@@ -145,7 +145,7 @@ export class Sessions {
         const hasEnvFile = !!this.envFileFor(id) && (agent.mode === "sandbox" || this.backend.persistent);
         const secret = this.company.secrets.issue(reg.companyId);
         issued = true;
-        const ctoId = this.company.agents.cto(hub.slug)?.agentId ?? null;
+        const ctoId = this.company.agents.cto(hub.slug, (cid) => !!hub.cfg(cid))?.agentId ?? null;
         await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId });
         const specs = stackSkills(hub.snap.config.stack);
         if (specs.length || hasHqSkills(hub.slug, dir)) {

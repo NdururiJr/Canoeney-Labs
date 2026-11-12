@@ -271,10 +271,11 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const cfg = hub.snap.config;
       if (typeof input.projectName === "string" && input.projectName.trim()) cfg.project.name = str(input.projectName, 80).trim();
       cfg.team = [lead, ...workers];
-      // The new team is the project's team in the company store: the lead is its
-      // CTO. Agents of an earlier team (whose config is gone) are retired.
+      // The new team is registered with new ids; its lead is a CTO. An earlier
+      // team's rows (from a config this checkout does not have) are left as they
+      // are, so that config still works where it exists. The CTO HQ talks to is
+      // the one in the current config (planner.ctoId).
       company.db.transaction(() => {
-        for (const old of company.agents.list(hub.slug)) if (old.status !== "retired") company.agents.setStatus(hub.slug, old.agentId, "retired", DASHBOARD_ACTOR);
         company.agents.register(hub.slug, lead, "cto", DASHBOARD_ACTOR, "dashboard");
         for (const w of workers) company.agents.register(hub.slug, w, "builder", DASHBOARD_ACTOR, "dashboard");
       }, "immediate");

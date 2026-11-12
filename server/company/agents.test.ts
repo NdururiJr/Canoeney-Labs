@@ -161,3 +161,23 @@ test("a role change is stored and audited with the actor", (t) => {
   assert.equal(row.actorId, "dashboard");
   assert.deepEqual(row.data, { from: "cto", to: "builder" });
 });
+
+test("sync reports config agents whose rows are paused or retired", (t) => {
+  const { agents } = fresh(t);
+  agents.syncFromConfig("alpha", [member("lead", true), member("ana"), member("ben")]);
+  agents.setStatus("alpha", "ana", "paused", DASHBOARD_ACTOR);
+  agents.setStatus("alpha", "ben", "retired", DASHBOARD_ACTOR);
+  const r = agents.syncFromConfig("alpha", [member("lead", true), member("ana"), member("ben")]);
+  assert.deepEqual(r.inactive, [
+    { id: "ana", status: "paused" },
+    { id: "ben", status: "retired" },
+  ]);
+});
+
+test("cto can be limited to agents in the current config", (t) => {
+  const { agents } = fresh(t);
+  agents.syncFromConfig("alpha", [member("lead", true)]);
+  agents.register("alpha", member("lead-2"), "cto", DASHBOARD_ACTOR, "dashboard");
+  assert.equal(agents.cto("alpha")?.agentId, "lead");
+  assert.equal(agents.cto("alpha", (id) => id === "lead-2")?.agentId, "lead-2");
+});

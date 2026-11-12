@@ -75,8 +75,19 @@ export function startHttp(o: Options) {
     }
   };
 
+  // A request line Node accepts can still be a URL that new URL() refuses; an
+  // error thrown here would be an unhandled rejection, which ends HQ.
+  const parseUrl = (raw: string | undefined): URL | null => {
+    try {
+      return new URL(raw ?? "/", "http://127.0.0.1");
+    } catch {
+      return null;
+    }
+  };
+
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const url = parseUrl(req.url);
+    if (!url) return send(res, 400, "bad request");
 
     if (req.method === "POST" && url.pathname.startsWith("/hook/")) {
       const [, , claimed, event] = url.pathname.split("/");
@@ -123,7 +134,7 @@ export function startHttp(o: Options) {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   server.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const url = parseUrl(req.url) ?? new URL("http://127.0.0.1/");
     const origin = req.headers.origin ?? "";
     const token = url.searchParams.get("token") ?? "";
     // Token + origin: another website in your browser can't drive HQ.

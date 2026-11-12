@@ -193,3 +193,25 @@ test("a reattached agent with no live secret gets a restart notice", async (t) =
   assert.equal(notices.length, 1);
   assert.match(notices[0].text, /Restart Ana once/);
 });
+
+test("completing the welcome screen again keeps the earlier team usable", async (t) => {
+  const hq = await makeHq(t);
+  const { sessions } = withSessions(t, hq);
+  const stub = { forget() {}, refresh: async () => {} } as never;
+  (sessions as unknown as { recheckSetup: () => Promise<void> }).recheckSetup = async () => {};
+  const commands = makeCommands(hq.hub, sessions, hq.planner, hq.inbox, stub, stub, hq.company);
+  const oldTeam = hq.hub.snap.config.team;
+  // A checkout without .jsmhq/config.json: the welcome screen shows, and a team is made.
+  hq.hub.snap.welcome = true;
+  await commands.completeWelcome({ lead: { name: "Lead" }, workers: [{ name: "Ana", role: "Developer" }] });
+  assert.deepEqual(hq.hub.snap.config.team.map((a) => a.id), ["lead-2", "ana-2"]);
+  assert.equal(hq.planner.ctoId(), "lead-2");
+  assert.equal(hq.company.agents.get(hq.slug, "lead-2")?.role, "cto");
+  // Back on the branch with the committed config: the earlier team still works.
+  hq.hub.snap.config.team = oldTeam;
+  hq.hub.snap.agents = oldTeam.map((a) => ({ ...hq.hub.status("lead-2")!, agentId: a.id, session: { state: "stopped", detail: null, workspace: null, sandbox: null } }));
+  for (const id of ["lead", "ana", "ben"]) assert.equal(hq.company.agents.get(hq.slug, id)?.status, "active", id);
+  assert.equal(hq.planner.ctoId(), "lead");
+  await sessions.start("ana");
+  assert.equal(hq.hub.status("ana")?.session.state, "running", hq.hub.status("ana")?.session.detail ?? "");
+});

@@ -193,3 +193,38 @@ test("message rules follow the role", async (t) => {
   const r = await mcpCall(hq, lead, "send_message", { to: "ana", text: "go" });
   assert.ok(!r.json?.result?.isError, resultText(r));
 });
+
+test("a large refused batch writes one bounded row and returns at once", async (t) => {
+  const hq = await makeHq(t);
+  const ana = hq.secretFor("ana");
+  const before = chain(hq).length;
+  const batch = Array.from({ length: 12_000 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "x" } }));
+  const started = Date.now();
+  const r = await mcpRequest(hq, ana, batch);
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  assert.ok(r.status === 200 || r.status === 400);
+  assert.equal(chain(hq).length, before + 1);
+  assert.ok(JSON.stringify(chain(hq).at(-1)).length < 1024);
+  // A small batch with refused calls also writes one row.
+  const small = [0, 1, 2].map((i) => ({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "create_task", arguments: {} } }));
+  await mcpRequest(hq, ana, small);
+  assert.equal(chain(hq).length, before + 2);
+  assert.deepEqual(chain(hq).at(-1)?.data, { count: 3, tools: ["create_task"] });
+});
+
+test("SR-B-16 [T-S1.9] a call with invalid arguments is still audited", async (t) => {
+  const hq = await makeHq(t);
+  const ana = hq.secretFor("ana");
+  for (const [tool, args] of [
+    ["set_my_status", { status: "bogus" }],
+    ["send_message", { to: "ben" }],
+    ["request_access", { domain: 5, reason: "x" }],
+  ] as const) {
+    const before = chain(hq).length;
+    await mcpCall(hq, ana, tool, args as Record<string, unknown>);
+    const after = chain(hq);
+    assert.equal(after.length, before + 1, tool);
+    assert.equal(after.at(-1)?.data.outcome, "invalid", tool);
+    assert.equal(after.at(-1)?.actorId, `${hq.slug}/ana`);
+  }
+});

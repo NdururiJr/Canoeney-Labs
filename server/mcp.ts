@@ -22,8 +22,9 @@ const fail = (msg: string): Result => ({ content: [{ type: "text", text: msg }],
 export const COULD_NOT_RECORD = "HQ could not record this action, so it was not done.";
 const NOT_YOURS = "That tool is not available to your role.";
 
-function buildServer(hub: Hub, planner: Planner, company: Company, agent: RegisteredAgent): McpServer {
+function buildServer(hub: Hub, planner: Planner, company: Company, agent: RegisteredAgent): { server: McpServer; schemas: Map<string, Record<string, unknown>> } {
   const server = new McpServer({ name: "hq", version: "0.1.0" });
+  const schemas = new Map<string, Record<string, unknown>>();
   const me = agent.agentId;
   const ctoId = planner.ctoId();
   const record = (target: string | null, data: Record<string, unknown>) =>
@@ -70,6 +71,7 @@ function buildServer(hub: Hub, planner: Planner, company: Company, agent: Regist
   /** Registers a tool only when the agent's role has it. */
   const tool = <A>(name: HqTool, config: ToolConfig, fn: (args: A) => Result) => {
     if (!roleHas(agent.role, name)) return;
+    if (config.inputSchema) schemas.set(name, config.inputSchema);
     const run = audited(name, fn);
     // A tool without an input schema is called with the SDK's request context
     // first; that is not the agent's arguments.
@@ -261,30 +263,41 @@ function buildServer(hub: Hub, planner: Planner, company: Company, agent: Regist
     }),
   );
 
-  return server;
+  return { server, schemas };
 }
 
 type ToolConfig = { description: string; inputSchema?: Record<string, unknown> };
 
-type RpcMessage = { jsonrpc?: string; id?: string | number | null; method?: string; params?: { name?: unknown } };
+type RpcMessage = { jsonrpc?: string; id?: string | number | null; method?: string; params?: { name?: unknown; arguments?: unknown } };
+
+/** The most messages HQ takes in one request (the MCP SDK's own batch limit). */
+const MAX_BATCH = 100;
 
 /**
  * Refuses, before the MCP SDK sees it, a tools/call (alone or in a batch) for
  * a tool outside the agent's role (SR-B-13). Returns true when it answered.
  */
 function refuseOutsideRole(company: Company, agent: RegisteredAgent, res: ServerResponse, body: unknown): boolean {
-  const messages = (Array.isArray(body) ? body : [body]) as RpcMessage[];
-  const denied = messages.filter((m) => m?.method === "tools/call" && !roleHas(agent.role, String(m.params?.name ?? "")));
-  if (denied.length === 0) return false;
-  for (const m of denied) {
+  const deny = (target: string | null, data: Record<string, unknown>) => {
     try {
-      // The requested name is agent text: kept only when it is one of HQ's tools.
-      const name = m.params?.name;
-      company.audit.append({ actorKind: "agent", actorId: agent.companyId, action: "tool.denied", target: isHqTool(name) ? name : "unknown" });
+      company.audit.append({ actorKind: "agent", actorId: agent.companyId, action: "tool.denied", target, data });
     } catch {
       /* still refused */
     }
+  };
+  // Checked before anything is audited: one request is one row, whatever it holds.
+  if (Array.isArray(body) && body.length > MAX_BATCH) {
+    deny("unknown", { count: body.length, reason: "batch-too-large" });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: `At most ${MAX_BATCH} messages per request.` } }));
+    return true;
   }
+  const messages = (Array.isArray(body) ? body : [body]) as RpcMessage[];
+  const denied = messages.filter((m) => m?.method === "tools/call" && !roleHas(agent.role, String(m.params?.name ?? "")));
+  if (denied.length === 0) return false;
+  // The requested names are agent text: kept only when they are HQ's tools.
+  const names = [...new Set(denied.map((m) => (isHqTool(m.params?.name) ? m.params.name : "unknown")))].slice(0, 5);
+  deny(names.length === 1 ? names[0] : null, { count: denied.length, tools: names });
   const error = (m: RpcMessage, message: string) => ({ jsonrpc: "2.0", id: m?.id ?? null, error: { code: -32601, message } });
   const reply = Array.isArray(body)
     ? messages.filter((m) => m?.id !== undefined).map((m) => error(m, denied.includes(m) ? NOT_YOURS : "Not run: this batch holds a refused call."))
@@ -294,11 +307,38 @@ function refuseOutsideRole(company: Company, agent: RegisteredAgent, res: Server
   return true;
 }
 
+/**
+ * The MCP SDK checks a call's arguments against the tool's schema before the
+ * tool runs, and answers a bad one itself. Such calls are recorded here, so
+ * every call leaves a row (SR-B-16).
+ */
+function auditInvalidCalls(company: Company, agent: RegisteredAgent, schemas: Map<string, Record<string, unknown>>, body: unknown) {
+  for (const m of (Array.isArray(body) ? body : [body]) as RpcMessage[]) {
+    if (m?.method !== "tools/call") continue;
+    const tool = String(m.params?.name ?? "");
+    const schema = schemas.get(tool);
+    const args = m.params?.arguments ?? {};
+    if (!schema || z.object(schema as z.ZodRawShape).safeParse(args).success) continue;
+    const row = (target: string | null, data: Record<string, unknown>) =>
+      company.audit.append({ actorKind: "agent", actorId: agent.companyId, action: "tool.called", target, data });
+    try {
+      row(targetOf(args), { tool, outcome: "invalid", args: recordArgs(args) });
+    } catch {
+      try {
+        row(null, { tool, outcome: "invalid", reason: "unrecordable" });
+      } catch {
+        /* the SDK refuses the call anyway */
+      }
+    }
+  }
+}
+
 /** Handles one MCP HTTP request for an already-authenticated agent. The role is read from the store now, not cached. */
 export async function handleMcp(hub: Hub, planner: Planner, company: Company, who: RegisteredAgent, req: IncomingMessage, res: ServerResponse, body: unknown) {
   const agent = company.agents.getById(who.companyId) ?? who;
   if (refuseOutsideRole(company, agent, res, body)) return;
-  const server = buildServer(hub, planner, company, agent);
+  const { server, schemas } = buildServer(hub, planner, company, agent);
+  auditInvalidCalls(company, agent, schemas, body);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
     void transport.close();

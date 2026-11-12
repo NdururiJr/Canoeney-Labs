@@ -64,6 +64,8 @@ async function main() {
     const sync = company.agents.syncFromConfig(slug, config.team);
     for (const id of sync.ignoredLead)
       hub.activity("config", id, `${hub.name(id)} is marked lead in .jsmhq/config.json, but roles come from the company store; it was added as a builder.`);
+    for (const { id, status } of sync.inactive)
+      hub.activity("config", id, `${hub.name(id)} is ${status} in the company store, so it can't start.`);
     for (const id of sync.skipped)
       hub.activity("config", null, `The agent id ${JSON.stringify(id.slice(0, 40))} in .jsmhq/config.json is not a plain id (lower-case letters, digits and "-"), so it was not registered.`);
   }
@@ -90,7 +92,7 @@ async function main() {
   };
   void sbx.refresh();
   void mcp.refresh();
-  const planner = new Planner(hub, inbox, () => company.agents.cto(slug)?.agentId ?? null);
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null);
   planner.actions = new ActionItems(hub, planner);
 
   const root = dirname(dirname(fileURLToPath(import.meta.url)));

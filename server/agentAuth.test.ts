@@ -168,3 +168,19 @@ test("SR-B-24 [T-S5.12] an agent secret opens no WebSocket", async (t) => {
   assert.equal(await wsStatus(`${ws}/ws`, { authorization: `Bearer ${ana}` }), 401);
   assert.equal(await wsStatus(`${ws}/ws?token=browser-token`), 101); // the browser token still works
 });
+
+test("a request HQ cannot parse gets 400 and HQ keeps serving", async (t) => {
+  const hq = await makeHq(t);
+  const { connect } = await import("node:net");
+  const port = Number(new URL(hq.url).port);
+  const reply = await new Promise<string>((resolve) => {
+    const s = connect(port, "127.0.0.1", () => s.write("GET http://[ HTTP/1.1\r\nHost: x\r\n\r\n"));
+    let out = "";
+    s.on("data", (d) => (out += d));
+    s.on("end", () => resolve(out));
+    s.on("error", () => resolve(out));
+    setTimeout(() => (s.destroy(), resolve(out)), 2000);
+  });
+  assert.match(reply, /^HTTP\/1\.1 400/);
+  assert.equal((await hook(hq, hq.secretFor("ana"), "ana", "PostToolUse")).status, 204);
+});

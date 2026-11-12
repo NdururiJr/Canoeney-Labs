@@ -148,11 +148,12 @@ export class AgentRegistry {
   syncFromConfig(
     projectSlug: string,
     team: readonly (ConfigAgent & { isLead: boolean })[],
-  ): { registered: RegisteredAgent[]; ignoredLead: string[]; skipped: string[] } {
+  ): { registered: RegisteredAgent[]; ignoredLead: string[]; skipped: string[]; inactive: { id: string; status: AgentStatus }[] } {
     const skipped = team.filter((a) => !PLAIN_ID.test(a.id)).map((a) => a.id);
     const valid = team.filter((a) => PLAIN_ID.test(a.id));
     const registered: RegisteredAgent[] = [];
     const ignoredLead: string[] = [];
+    const inactive: { id: string; status: AgentStatus }[] = [];
     this.tx(() => {
       const firstImport = !this.db.prepare("SELECT 1 AS x FROM agents WHERE project_id = ? LIMIT 1").get(projectSlug);
       if (firstImport) {
@@ -166,12 +167,17 @@ export class AgentRegistry {
         return;
       }
       for (const a of valid) {
-        if (this.get(projectSlug, a.id)) continue;
+        const row = this.get(projectSlug, a.id);
+        if (row) {
+          // In the config but paused or retired in the store: it cannot start.
+          if (row.status !== "active") inactive.push({ id: a.id, status: row.status });
+          continue;
+        }
         if (a.isLead) ignoredLead.push(a.id);
         registered.push(this.register(projectSlug, a, "builder", HQ_ACTOR, "config", a.isLead ? { ignoredIsLead: true } : {}));
       }
     });
-    return { registered, ignoredLead, skipped };
+    return { registered, ignoredLead, skipped, inactive };
   }
 
   get(projectSlug: string, agentId: string): RegisteredAgent | null {
@@ -191,12 +197,17 @@ export class AgentRegistry {
       .map(toAgent);
   }
 
-  /** The project's CTO that is not retired (a paused one still receives its messages), or null. */
-  cto(projectSlug: string): RegisteredAgent | null {
-    const r = this.db
-      .prepare(`SELECT ${COLUMNS} FROM agents WHERE project_id = ? AND role_id = 'cto' AND status <> 'retired' ORDER BY created_at, rowid LIMIT 1`)
-      .get<Row>(projectSlug);
-    return r ? toAgent(r) : null;
+  /**
+   * The project's CTO that is not retired (a paused one still receives its
+   * messages), or null. `among` limits it to some agent ids, such as the team
+   * in the current config: a store can hold the CTO of an earlier team too.
+   */
+  cto(projectSlug: string, among?: (agentId: string) => boolean): RegisteredAgent | null {
+    const rows = this.db
+      .prepare(`SELECT ${COLUMNS} FROM agents WHERE project_id = ? AND role_id = 'cto' AND status <> 'retired' ORDER BY created_at, rowid`)
+      .all<Row>(projectSlug)
+      .map(toAgent);
+    return rows.find((a) => !among || among(a.agentId)) ?? null;
   }
 
   setRole(projectSlug: string, agentId: string, role: RoleId, by: Actor): void {
