@@ -11,39 +11,57 @@ import { ACTOR_KINDS, type ActorKind } from "./types";
 
 export const GENESIS_HASH = "0".repeat(64);
 
-// Key names that look like secret values (spec section 4: a secret value never
-// enters the audit trail). A key is normalised (lower-cased, "-", "_" and
-// whitespace removed) and refused if it ends with one of these words. "token"
-// is singular on purpose, so usage keys such as inputTokens or tokenCount stay
-// allowed, as do names such as secretName; "pin" refuses approvalPin but not
-// pinned.
-const SECRET_SUFFIXES = [
-  "pin",
-  "pinhash",
-  "pincode",
-  "otp",
-  "totp",
-  "recoverycode",
-  "recoverycodes",
-  "privkey",
+// Spec section 4: a secret value never enters the audit trail. Two guards:
+//
+// 1. Key names. A key is normalised (lower-cased, "-", "_" and whitespace
+//    removed). A key that names a secret without holding one (ends with name,
+//    names, id or ids: secretName, tokenId) is allowed. Otherwise it is refused
+//    if it contains a secret word anywhere, or contains "token" not followed by
+//    "s" or "count" (inputTokens and tokenCount are usage), or ends with one of
+//    the short words, which would match too much inside other words (pinned).
+// 2. Values. Every string in data, every key, the target and the action are
+//    scanned for known credential shapes.
+const SECRET_WORDS = [
   "secret",
-  "token",
   "password",
-  "passwordhash",
   "passphrase",
   "apikey",
-  "authorization",
-  "cookie",
+  "accesskey",
   "privatekey",
+  "privkey",
+  "authorization",
+  "authheader",
   "bearer",
   "credential",
-  "credentials",
+  "cookie",
+  "jwt",
 ];
+const SECRET_SUFFIXES = ["pin", "pinhash", "pincode", "otp", "totp", "recoverycode", "recoverycodes", "pat", "auth", "signature"];
+const NAMING_SUFFIXES = ["name", "names", "id", "ids"];
+const TOKEN_WORD = /token(?!s|count)/;
 
 function isSecretKey(key: string): boolean {
   const k = key.toLowerCase().replace(/[-_\s]/g, "");
-  return SECRET_SUFFIXES.some((s) => k.endsWith(s));
+  if (NAMING_SUFFIXES.some((s) => k.endsWith(s))) return false;
+  return SECRET_WORDS.some((w) => k.includes(w)) || TOKEN_WORD.test(k) || SECRET_SUFFIXES.some((s) => k.endsWith(s));
 }
+
+// Known credential shapes. The distinctive prefixes have no leading \b, so a
+// credential glued to a letter, digit or "_" (xghp_..., key_hqa_...) still
+// matches; sk- keeps it so ordinary words (task-..., disk-...) do not.
+export const CREDENTIAL_SHAPES: readonly RegExp[] = [
+  /gh[pousr]_[A-Za-z0-9]{20,}/,
+  /github_pat_[A-Za-z0-9_]{20,}/,
+  /\bsk-[A-Za-z0-9_-]{20,}/,
+  /xox[abposr]-[A-Za-z0-9-]{10,}/,
+  /AKIA[0-9A-Z]{16}/,
+  /-----BEGIN [A-Z ]*-----/,
+  /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
+  /\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/i,
+  /hqa_[A-Za-z0-9_-]{43}/,
+];
+
+export const hasCredentialShape = (s: string): boolean => CREDENTIAL_SHAPES.some((r) => r.test(s));
 
 // A lone surrogate (category Cs in unicode mode). String.prototype.isWellFormed
 // would do, but the ES2022 lib in tsconfig does not declare it.
@@ -53,9 +71,10 @@ const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 const VERIFY_PAGE = 1000;
 
+/** `where` names the field ("data.headers.auth", "target"); it never holds the matched text. */
 export class AuditSecretError extends Error {
-  constructor(key: string) {
-    super(`audit data has a secret-shaped key: ${key}`);
+  constructor(where: string) {
+    super(`audit refused a secret-shaped key or value at ${where}`);
     this.name = "AuditSecretError";
   }
 }
@@ -84,17 +103,22 @@ interface HashFields {
   data: Record<string, unknown>;
 }
 
-function assertNoSecretKeys(value: unknown, seen: Set<object> = new Set()): void {
+function assertNoSecrets(value: unknown, where: string, seen: Set<object> = new Set()): void {
+  if (typeof value === "string") {
+    if (hasCredentialShape(value)) throw new AuditSecretError(where);
+    return;
+  }
   if (typeof value !== "object" || value === null) return;
   if (seen.has(value)) return; // cycles are rejected later by canonicalJson
   seen.add(value);
   if (Array.isArray(value)) {
-    for (const v of value) assertNoSecretKeys(v, seen);
+    value.forEach((v, i) => assertNoSecrets(v, `${where}[${i}]`, seen));
     return;
   }
   for (const [key, v] of Object.entries(value)) {
-    if (isSecretKey(key)) throw new AuditSecretError(key);
-    assertNoSecretKeys(v, seen);
+    if (hasCredentialShape(key)) throw new AuditSecretError(`${where}.<key>`);
+    if (isSecretKey(key)) throw new AuditSecretError(`${where}.${key}`);
+    assertNoSecrets(v, `${where}.${key}`, seen);
   }
 }
 
@@ -163,14 +187,20 @@ export class SqliteAuditSink implements AuditSink {
     ] as const) {
       if (typeof v === "string" && LONE_SURROGATE.test(v)) throw new TypeError(`audit ${name} is not well-formed unicode`);
     }
-    const data = e.data ?? {};
-    assertNoSecretKeys(data);
-    const dataJson = canonicalJson(data); // also rejects unsupported values early
+    if (hasCredentialShape(e.action)) throw new AuditSecretError("action");
+    if (typeof e.target === "string" && hasCredentialShape(e.target)) throw new AuditSecretError("target");
+    assertNoSecrets(e.data ?? {}, "data");
+    const dataJson = canonicalJson(e.data ?? {}); // also rejects unsupported values early
+    // Hash the stored form, never the caller's object: a getter or a later
+    // mutation must not make the hash differ from the row that is stored.
+    const data = JSON.parse(dataJson) as Record<string, unknown>;
     const target = e.target ?? null;
     const decisionId = e.decisionId ?? null;
-    const at = this.clock.now().toISOString();
 
     const write = (): AuditEvent => {
+      // Read inside the write transaction, so another writer can never store a
+      // later seq with an earlier time.
+      const at = this.clock.now().toISOString();
       const last = this.head();
       const seq = last ? last.seq + 1 : 1;
       const prevHash = last ? last.hash : GENESIS_HASH;

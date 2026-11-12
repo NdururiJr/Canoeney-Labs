@@ -326,3 +326,76 @@ test("refuses non-string actorId or action, non-string target or decisionId, and
   for (const actorKind of ["agent", "human", "hq"] as const) sink.append(ev({ actorKind }));
   assert.equal(sink.verify().ok, true);
 });
+
+// --- M0-B Task 1: credential shapes, key rule, clock and hash snapshot ---
+
+const SHAPES = [
+  "ghp_" + "a".repeat(36),
+  "github_pat_" + "B".repeat(30),
+  "sk-ant-" + "c".repeat(30),
+  "xoxb-" + "1".repeat(12),
+  "AKIA" + "ABCDEFGHIJKLMNOP",
+  "-----BEGIN RSA PRIVATE KEY-----",
+  "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4fw",
+  "Bearer abcdefghijklmnop1234",
+  "hqa_" + "d".repeat(43),
+  "xghp_" + "e".repeat(36),
+  "key_hqa_" + "f".repeat(43),
+];
+
+test("SR-B-11 [T-X1.4] refuses a credential shape in a data value, target or action", (t) => {
+  const { sink } = fresh(t);
+  for (const s of SHAPES) {
+    for (const over of [{ data: { a: [{ b: `see ${s} here` }] } }, { target: s }, { action: `x ${s}` }, { data: { [s]: 1 } }]) {
+      let err: unknown;
+      try {
+        sink.append(ev(over));
+      } catch (e) {
+        err = e;
+      }
+      assert.ok(err instanceof AuditSecretError, `${s} in ${Object.keys(over)[0]}`);
+      assert.ok(!(err as Error).message.includes(s), "message must not hold the sample");
+    }
+  }
+  assert.equal(sink.query().length, 0);
+  sink.append(ev({ data: { note: "task-0123456789abcdefghij" } }));
+  assert.equal(sink.head()?.seq, 1);
+});
+
+test("SR-B-11 [T-X1.4] refuses secret words anywhere in a key", (t) => {
+  const { sink } = fresh(t);
+  for (const key of ["secretValue", "tokenValue", "apiKeyValue", "authHeader", "githubPat", "accessKey", "jwt", "signature", "privateKeyPem"]) {
+    assert.throws(() => sink.append(ev({ data: { [key]: "x" } })), AuditSecretError, key);
+  }
+  assert.equal(sink.head(), null);
+});
+
+test("SR-B-11 [T-X1.4] still allows usage and naming keys", (t) => {
+  const { sink } = fresh(t);
+  const ok = ["inputTokens", "outputTokens", "tokenCount", "secretName", "secretNames", "pinned", "idempotencyKey", "dedupeKey", "key", "author", "footprint", "path"];
+  for (const key of ok) sink.append(ev({ data: { [key]: "ok" } }));
+  assert.equal(sink.head()?.seq, ok.length);
+});
+
+test("at is read inside the write transaction", (t) => {
+  const db = openCompanyDb(":memory:");
+  t.after(() => db.close());
+  const seen: boolean[] = [];
+  const clock = { now: () => (seen.push(db.inTransaction), new Date(START)) };
+  const sink = new SqliteAuditSink(db, clock);
+  sink.append(ev());
+  sink.append(ev());
+  assert.deepEqual(seen, [true, true]);
+});
+
+test("hash uses the stored snapshot", (t) => {
+  const { sink } = fresh(t);
+  let i = 0;
+  const data = {
+    get n() {
+      return ++i;
+    },
+  };
+  sink.append(ev({ data }));
+  assert.equal(sink.verify().ok, true);
+});
