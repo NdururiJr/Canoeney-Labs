@@ -7,11 +7,13 @@ on:
 
 jobs:
   # Build once per OS, then install the packed tarball like a new user and start HQ.
+  # No macOS: production runs on Linux and the owner's desktop is Windows
+  # (owner decision, 2026-11-13).
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
