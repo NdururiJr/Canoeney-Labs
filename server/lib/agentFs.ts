@@ -4,7 +4,7 @@
 // symlinked folder on the way is refused, a symlinked file is replaced (writes)
 // or treated as missing (reads).
 
-import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteFileOptions } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteFileOptions } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 const lstat = (p: string) => {
@@ -42,6 +42,9 @@ export function agentWrite(root: string, rel: string, data: string, opts?: Write
   agentPath(root, rel);
   if (lstat(abs)?.isSymbolicLink()) rmSync(abs);
   writeFileSync(abs, data, opts);
+  // writeFileSync applies a mode only when it creates the file: an existing
+  // file (say 0644) keeps its mode unless it is set here.
+  if (typeof opts === "object" && opts?.mode !== undefined) chmodSync(abs, opts.mode);
 }
 
 /** Reads a file inside the agent's folder; a missing file or a symlink reads as null. */

@@ -29,6 +29,10 @@ export interface Hq {
   auth: AgentAuth;
   slug: string;
   repoRoot: string;
+  /** The fixture's company home (HQ_COMPANY_HOME while the test runs). */
+  companyHomeDir: string;
+  /** Where temporary folders for this test may go; removed with the fixture. */
+  scratch: string;
   url: string;
   /** The agent's current secret, issued on first use. */
   secretFor(agentId: string): string;
@@ -49,7 +53,11 @@ export async function makeHq(t: TestContext, opts: { team?: AgentConfig[]; limit
   ];
   const slug = config.project.id;
   const clock = new FakeClock(FIXTURE_START);
-  const company = openCompany({ home: join(dir, "company home"), repoRoot, clock });
+  const companyHomeDir = join(dir, "company home");
+  // Code that asks for the company home (workspaceFor) gets this one, never the real ~/.jsmhq/_company.
+  const previousHome = process.env.HQ_COMPANY_HOME;
+  process.env.HQ_COMPANY_HOME = companyHomeDir;
+  const company = openCompany({ home: companyHomeDir, repoRoot, clock });
   company.agents.ensureProject({ slug, name: config.project.name, root: repoRoot });
   company.agents.syncFromConfig(slug, config.team);
 
@@ -74,6 +82,8 @@ export async function makeHq(t: TestContext, opts: { team?: AgentConfig[]; limit
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
     company.close();
+    if (previousHome === undefined) delete process.env.HQ_COMPANY_HOME;
+    else process.env.HQ_COMPANY_HOME = previousHome;
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -92,6 +102,8 @@ export async function makeHq(t: TestContext, opts: { team?: AgentConfig[]; limit
     auth,
     slug,
     repoRoot,
+    companyHomeDir,
+    scratch: dir,
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     secretFor: (agentId) => secrets.get(agentId) ?? rotate(agentId),
     rotate,

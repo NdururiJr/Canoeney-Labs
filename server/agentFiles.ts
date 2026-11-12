@@ -212,14 +212,15 @@ export function writeSettings(dir: string, agent: AgentConfig, port: number, tok
   }
   // Let the agent use the Team MCP without a permission prompt for every call.
   const allow = new Set([...(settings.permissions?.allow ?? []), "mcp__hq"]);
-  agentWrite(dir, file, JSON.stringify({ ...settings, hooks, permissions: { ...(settings.permissions ?? {}), allow: [...allow] } }, null, 2) + "\n");
+  // The hook commands carry the agent's secret: owner-only, like the MCP config.
+  agentWrite(dir, file, JSON.stringify({ ...settings, hooks, permissions: { ...(settings.permissions ?? {}), allow: [...allow] } }, null, 2) + "\n", { mode: 0o600 });
 }
 
-/** Team MCP config: HQ's URL plus this agent's identity and token. */
+/** Team MCP config: HQ's URL plus this agent's own secret, which is all HQ needs to know who it is. */
 export function writeMcpConfig(dir: string, agent: AgentConfig, port: number, token: string) {
   const config = {
     mcpServers: {
-      hq: { type: "http", url: `${hqUrl(agent, port)}/mcp`, headers: { Authorization: `Bearer ${token}`, "X-HQ-Agent": agent.id } },
+      hq: { type: "http", url: `${hqUrl(agent, port)}/mcp`, headers: { Authorization: `Bearer ${token}` } },
     },
   };
   agentWrite(dir, MCP_CONFIG, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });

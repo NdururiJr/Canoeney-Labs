@@ -8,8 +8,10 @@ import { homedir } from "node:os";
 import { stackSkills } from "../src/data/stack";
 import { hasHqSkills, prepareSkills } from "./skills";
 import { resolve, sep } from "node:path";
-import { HOST_TERMINAL, type AgentCli, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
+import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
 import { adapters, localBinary } from "./adapters";
+import type { Company } from "./company";
+import { companyAgentId } from "./company/agents";
 import type { Hub } from "./hub";
 import { sessionBackend, type LaunchSpec, type TermHandle } from "./backends";
 import { resolveCommand } from "./backends/pty";
@@ -71,10 +73,33 @@ export class Sessions {
   /** Consecutive polls that saw a "working" agent's screen sitting idle. */
   private idleScreens = new Map<string, number>();
 
-  constructor(private hub: Hub, private agentToken: string) {}
+  /** `company`: the registry decides who may start, and issues each session its own secret (M0-B). */
+  constructor(private hub: Hub, private company: Company) {}
 
   private name(agentId: string) {
     return sessionName(this.hub.slug, agentId);
+  }
+
+  /** Revokes the agent's live secret: HQ ended its session, so no one should use it any more. */
+  private revokeSecret(agentId: string) {
+    try {
+      this.company.secrets.revoke(companyAgentId(this.hub.slug, agentId), "stopped");
+    } catch (err) {
+      log.warn(`could not revoke ${agentId}'s secret: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** HQ found a session it did not start. One started before per-agent secrets still holds the old shared key. */
+  private noteOldKey(agentId: string) {
+    let live = true;
+    try {
+      live = this.company.secrets.hasLive(companyAgentId(this.hub.slug, agentId));
+    } catch {
+      /* an id the registry refuses: nothing to say */
+    }
+    if (live) return;
+    const name = this.hub.name(agentId);
+    this.hub.activity("session", agentId, `${name} is running with an old HQ key. Restart ${name} once so it gets its own.`);
   }
 
   // ------------------------------------------------------------ lifecycle
@@ -98,23 +123,36 @@ export class Sessions {
     if (agent.mode === "sandbox" && agent.cli === "codex" && check("openai-secret") !== "ok")
       return fail("Codex needs an OpenAI key in sbx. Run `sbx secret set openai --oauth` (Setup checklist → Run in terminal).");
 
+    // Who may start, and as what, comes from the company store (M0-B).
+    const reg = this.company.agents.get(hub.slug, id);
+    if (!reg) return fail("This agent is not registered in the company store. Restart HQ to register it.");
+    if (reg.status === "paused") return fail("This agent is paused.");
+    if (reg.status === "retired") return fail("This agent was retired.");
+
     const name = this.name(id);
     this.onSessionDown(id);
+    let issued = false;
     try {
       hub.setSession(id, { state: "starting", detail: "Preparing folder…", workspace: workspaceFor(agent, hub.slug) });
       const dir = await ensureWorkspace(agent, hub.slug, hub.repo);
       const adapter = adapters[agent.cli];
-      // App variables reach the agent in sandbox mode and in Local mode with tmux (not Local on Windows).
-      const hasEnvFile = !!this.envFileFor(id) && (agent.mode === "sandbox" || this.backend.persistent);
-      // Interim (M0-B Task 5): Task 7 takes the role and the CTO from the company store.
-      await adapter.writeFiles(dir, agent, hub.snap.config, this.agentToken, { hasEnvFile, role: agent.isLead ? "cto" : "builder", ctoId: null });
-      const specs = stackSkills(hub.snap.config.stack);
-      if (specs.length || hasHqSkills(hub.slug, dir)) {
-        hub.setSession(id, { detail: "Installing agent skills…" });
-        const skills = await prepareSkills(hub.slug, dir, specs);
-        if (skills.error) hub.activity("session", id, `${agent.name}: some agent skills didn't install (${skills.error.slice(0, 120)}). Starting anyway.`);
-      }
-      if (!(await this.backend.exists(name))) {
+      // A session that is still running (tmux outlives HQ) keeps the secret and the
+      // files it was started with. HQ keeps only a hash of the secret, so it could
+      // not write the same one again (ADR 0005): reattach and write nothing.
+      if (await this.backend.exists(name)) this.noteOldKey(id);
+      else {
+        // App variables reach the agent in sandbox mode and in Local mode with tmux (not Local on Windows).
+        const hasEnvFile = !!this.envFileFor(id) && (agent.mode === "sandbox" || this.backend.persistent);
+        const secret = this.company.secrets.issue(reg.companyId);
+        issued = true;
+        const ctoId = this.company.agents.cto(hub.slug)?.agentId ?? null;
+        await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId });
+        const specs = stackSkills(hub.snap.config.stack);
+        if (specs.length || hasHqSkills(hub.slug, dir)) {
+          hub.setSession(id, { detail: "Installing agent skills…" });
+          const skills = await prepareSkills(hub.slug, dir, specs);
+          if (skills.error) hub.activity("session", id, `${agent.name}: some agent skills didn't install (${skills.error.slice(0, 120)}). Starting anyway.`);
+        }
         const launch = adapter.launch(agent, dir);
         const envFile = this.envFileFor(id);
         // Local mode: the agent gets the env file's variables (tmux only: there's no shell to load them into otherwise).
@@ -145,6 +183,9 @@ export class Sessions {
         void this.whenSandboxExists(id).then((ok) => ok && this.onSandboxReady(id));
       }
     } catch (err) {
+      // A secret this call issued has no session to use it. A reattached
+      // session's secret is left alone: that agent is still running.
+      if (issued) this.revokeSecret(id);
       fail(err instanceof Error ? err.message : String(err));
     }
   }
@@ -158,6 +199,7 @@ export class Sessions {
     this.detach(id);
     this.closeShell(id);
     await this.backend.kill(name);
+    this.revokeSecret(id);
     // Stop (not remove) the VM so it can resume later with its state.
     if (agent.mode === "sandbox") void run("sbx", ["stop", name], { timeoutMs: 30_000 });
     hub.setSession(id, { state: "stopped", detail: null });
@@ -380,50 +422,68 @@ export class Sessions {
 
   /** Keeps session state honest: picks up sessions from before a restart, notices crashes. */
   startPolling() {
-    const tick = async () => {
-      if (this.hub.snap.setup.checks.find((c) => c.id === "tmux")?.status !== "ok") return;
-      for (const agent of this.hub.snap.config.team) {
-        const st = this.hub.status(agent.id);
-        if (!st || st.session.state === "starting") continue;
-        const name = this.name(agent.id);
-        const alive = await this.backend.exists(name);
-        if (alive) {
-          const pane = await this.backend.exitInfo(name);
-          if (pane?.dead) {
-            const detail = (await this.backend.screenText(name, 6)) || `Exited with code ${pane.exitStatus}`;
-            await this.backend.kill(name);
-            this.detach(agent.id);
-            this.closeShell(agent.id);
-            this.onSessionDown(agent.id);
-            this.hub.setSession(agent.id, { state: "failed", detail });
-            this.hub.setStatus(agent.id, { state: "idle", note: "Session ended" });
-            this.hub.activity("session", agent.id, `${agent.name}'s session ended`);
-            continue;
-          }
-          this.attach(agent.id);
-          if (st.session.state !== "running") {
-            this.hub.setSession(agent.id, { state: "running", detail: null, workspace: workspaceFor(agent, this.hub.slug) });
-            this.hub.setStatus(agent.id, { note: "Reattached" });
-            this.onSessionReattached(agent.id);
-          }
-          if (agent.cli === "codex") await this.watchCodexScreen(agent.id, name);
-          await this.reconcileFromScreen(agent.id, agent.cli, name);
-        } else if (st.session.state === "running") {
-          this.detach(agent.id);
-          this.closeShell(agent.id);
-          this.onSessionDown(agent.id);
-          this.hub.setSession(agent.id, { state: "stopped", detail: null });
-          this.hub.setStatus(agent.id, { state: "idle", note: "Stopped" });
-        }
-      }
-    };
-    void tick();
+    void this.pollOnce().catch((e) => log.warn("poll:", e));
     let n = 0;
     this.polling = setInterval(() => {
-      void tick().catch((e) => log.warn("poll:", e));
+      void this.pollOnce().catch((e) => log.warn("poll:", e));
       // Sandbox sizes change rarely; check every ~30s (and right after a start).
       if (n++ % 10 === 0 && this.hub.snap.setup.sandboxReady) void this.refreshSandboxSizes();
     }, 3000);
+  }
+
+  /**
+   * One pass over the team. A failure for one agent (a refused workspace, a
+   * tmux error) marks that agent failed and the pass goes on (SR-B-22).
+   */
+  async pollOnce() {
+    if (this.hub.snap.setup.checks.find((c) => c.id === "tmux")?.status !== "ok") return;
+    for (const agent of [...this.hub.snap.config.team]) {
+      try {
+        await this.pollAgent(agent);
+      } catch (err) {
+        if (this.hub.status(agent.id)) this.hub.setSession(agent.id, { state: "failed", detail: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
+  private async pollAgent(agent: AgentConfig) {
+    const st = this.hub.status(agent.id);
+    if (!st || st.session.state === "starting") return;
+    const name = this.name(agent.id);
+    const alive = await this.backend.exists(name);
+    if (alive) {
+      const pane = await this.backend.exitInfo(name);
+      if (pane?.dead) {
+        const detail = (await this.backend.screenText(name, 6)) || `Exited with code ${pane.exitStatus}`;
+        // HQ ends this session itself, so its secret goes with it. (A session
+        // that merely looks gone keeps its secret: an exists() check can
+        // fail on a timeout, and revoking would lock out a running agent.)
+        await this.backend.kill(name);
+        this.revokeSecret(agent.id);
+        this.detach(agent.id);
+        this.closeShell(agent.id);
+        this.onSessionDown(agent.id);
+        this.hub.setSession(agent.id, { state: "failed", detail });
+        this.hub.setStatus(agent.id, { state: "idle", note: "Session ended" });
+        this.hub.activity("session", agent.id, `${agent.name}'s session ended`);
+        return;
+      }
+      this.attach(agent.id);
+      if (st.session.state !== "running") {
+        this.hub.setSession(agent.id, { state: "running", detail: null, workspace: workspaceFor(agent, this.hub.slug) });
+        this.hub.setStatus(agent.id, { note: "Reattached" });
+        this.onSessionReattached(agent.id);
+        this.noteOldKey(agent.id);
+      }
+      if (agent.cli === "codex") await this.watchCodexScreen(agent.id, name);
+      await this.reconcileFromScreen(agent.id, agent.cli, name);
+    } else if (st.session.state === "running") {
+      this.detach(agent.id);
+      this.closeShell(agent.id);
+      this.onSessionDown(agent.id);
+      this.hub.setSession(agent.id, { state: "stopped", detail: null });
+      this.hub.setStatus(agent.id, { state: "idle", note: "Stopped" });
+    }
   }
 
   /**

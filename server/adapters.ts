@@ -53,7 +53,7 @@ export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, di
     "",
     "[mcp_servers.hq]",
     `url = ${t(`${url}/mcp`)}`,
-    `http_headers = { Authorization = ${t(`Bearer ${token}`)}, "X-HQ-Agent" = ${t(agent.id)} }`,
+    `http_headers = { Authorization = ${t(`Bearer ${token}`)} }`,
   ];
   for (const event of CODEX_EVENTS)
     lines.push("", `[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"', `command = ${t(hookCommand(url, token, agent.id, event, script))}`);

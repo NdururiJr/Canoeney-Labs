@@ -5,6 +5,7 @@ What HQ does behind the office: where agents work, how they talk, what reaches G
 - [The team](#the-team)
 - [Workspaces and sessions](#workspaces-and-sessions)
 - [Messages between agents](#messages-between-agents)
+- [Agent identity](#agent-identity)
 - [GitHub and reviews](#github-and-reviews)
 - [Sandboxes and network access](#sandboxes-and-network-access)
 - [Terminals, links and ports](#terminals-links-and-ports)
@@ -38,6 +39,16 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 - The lead uses it to create boards and tasks and to assign them. Any agent can send a message.
 - A message is delivered right away if the agent is idle, or when it finishes its current step if it's busy.
 - You can message any agent from the **Messages** tab in its drawer.
+
+## Agent identity
+
+- **One secret per agent.** Each time HQ starts an agent's session, it gives that agent a new secret and the previous one stops working. HQ writes it only into the agent's own MCP config and hook settings, which only you can read and which git ignores. HQ itself keeps only a fingerprint (a SHA-256 hash), so its records hold nothing an agent could use.
+- **Who is calling comes from the secret.** HQ decides which agent made a request from its secret alone. An agent name in a hook's address or an `X-HQ-Agent` header must match it, or the request is refused. Every refusal looks the same, whatever went wrong, and failed attempts are recorded.
+- **Stopping, pausing or removing an agent** ends its secret at once. If HQ restarts while agents keep running in tmux, it reconnects to them and leaves their secrets and files as they are. An agent started by an HQ from before per-agent secrets is shown in the activity feed: restart it once so it gets its own.
+- **Roles come from the company store.** The lead is the project's CTO and the others are builders. The first time HQ registers a project's team, the agent marked lead in `.jsmhq/config.json` becomes the CTO. After that, editing `isLead` in that file changes nothing: it is shown in the UI only.
+- **Each role has its own tools.** The CTO plans and assigns (boards, tasks, the team's status). Builders work on their own task: `get_my_task`, `set_my_status`, `send_message`, `ask_user` and `request_access`. A tool outside the role is refused before it runs.
+- **Every tool call is recorded** in the company store's audit trail, with the agent that made it. If HQ can't record a call, it doesn't carry it out. Free text (messages, notes, descriptions) is recorded as its length, not its content.
+- **Two repos with the same project id** can't share one company store: the second HQ stops and asks you to change `project.id` in one repo's `.jsmhq/config.json`. A repo you moved is recognised as the same project.
 
 ## GitHub and reviews
 

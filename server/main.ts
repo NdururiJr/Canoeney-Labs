@@ -43,6 +43,8 @@ async function main() {
   const slug = config.project.id;
   // Opened right after the config so a store written by a newer HQ stops startup with its own message.
   const company = openCompany({ home: companyHome(), repoRoot: repo.root });
+  // Refuses to start when another repo already uses this project id (ProjectIdTakenError).
+  company.agents.ensureProject({ slug, name: config.project.name, root: repo.root });
   // The shared agent token from before M0-B is not used any more.
   rmSync(legacyAgentTokenFile(slug), { force: true });
   const uiToken = browserToken(slug, dev);
@@ -55,7 +57,17 @@ async function main() {
 
   const hub = new Hub(repo, slug, config, loadPlan(repo.root), setup);
   hub.snap.welcome = isNew;
-  const sessions = new Sessions(hub, "");
+  // The team in the config, registered in the company store. Roles come from the
+  // store; isLead only seeds the CTO on a project's first import. (A new project
+  // registers its team when the welcome screen is completed.)
+  if (!isNew) {
+    const sync = company.agents.syncFromConfig(slug, config.team);
+    for (const id of sync.ignoredLead)
+      hub.activity("config", id, `${hub.name(id)} is marked lead in .jsmhq/config.json, but roles come from the company store; it was added as a builder.`);
+    for (const id of sync.skipped)
+      hub.activity("config", null, `The agent id ${JSON.stringify(id.slice(0, 40))} in .jsmhq/config.json is not a plain id (lower-case letters, digits and "-"), so it was not registered.`);
+  }
+  const sessions = new Sessions(hub, company);
   const inbox = new Inbox(hub, { type: (id, text) => sessions.typeInto(id, text), enter: (id) => sessions.pressEnter(id) });
   sessions.onSessionDown = (id) => inbox.sessionDown(id);
   sessions.onSessionReattached = (id) => inbox.sessionReattached(id);
@@ -97,7 +109,7 @@ async function main() {
     company,
     distDir: dev ? null : distDir,
     allowedOrigins: [uiOrigin, `http://127.0.0.1:${uiPort}`, `http://localhost:${port}`, `http://127.0.0.1:${port}`],
-    commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp),
+    commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp, company),
   });
   // Only once HQ is serving: a port already in use must not record a start.
   company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });
