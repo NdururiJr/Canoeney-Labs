@@ -21,7 +21,7 @@ import { Hub } from "../hub";
 import { Inbox } from "../inbox";
 import { Planner } from "../planner";
 import type { RepoInfo } from "../repo";
-import { loadConfig, loadPlan, newAgent } from "../store";
+import { loadConfig, newAgent } from "../store";
 
 export const FIXTURE_START = "2026-11-12T08:00:00.000Z";
 /** The dashboard origin the fixture allows. */
@@ -104,9 +104,13 @@ export async function makeHq(
   company.agents.ensureProject({ slug, name: config.project.name, root: repoRoot });
   company.agents.syncFromConfig(slug, config.team);
 
-  const hub = new Hub(repo, slug, config, loadPlan(repoRoot), { checks: [], checkedAt: FIXTURE_START } as never);
+  const hub = new Hub(repo, slug, config, company.plans.load(slug), { checks: [], checkedAt: FIXTURE_START } as never);
   const inbox = new Inbox(hub, { type: async () => false, enter: async () => false });
-  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null);
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null, {
+    plans: company.plans,
+    projectId: slug,
+    roleOf: (id) => company.agents.get(slug, id)?.role ?? null,
+  });
   const auth = new AgentAuth({ projectSlug: slug, company, hub, limits: opts.limits });
   const setupFile = join(companyHomeDir, "owner-setup.txt");
   const newOwnerAuth = () =>

@@ -4,7 +4,7 @@
 import type { OfficeEvent } from "../src/data/source";
 import { HOST_TERMINAL, type ActivityEvent, type ActivityType, type AgentConfig, type AgentStatus, type HqConfig, type OfficeSnapshot, type SessionInfo, type SetupState } from "../src/data/types";
 import { writePlanExport } from "./planExport";
-import { saveConfig, savePlan, type PlanFile } from "./store";
+import { saveConfig, type PlanFile } from "./store";
 import type { RepoInfo } from "./repo";
 import { TerminalFilter } from "./terminalFilter";
 
@@ -140,9 +140,9 @@ export class Hub {
     this.emit({ type: "config.updated", config: structuredClone(this.snap.config) });
   }
 
+  /** Tasks live in the company store; the only file HQ writes is the opt-in, never-read docs/plan.md. */
   planChanged() {
     const plan = { boards: this.snap.boards, tasks: this.snap.tasks };
-    savePlan(this.repo.root, plan);
     if (this.snap.config.project.exportPlan) writePlanExport(this.repo.root, this.snap.config, plan);
   }
 

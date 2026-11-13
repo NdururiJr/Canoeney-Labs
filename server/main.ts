@@ -28,7 +28,7 @@ import { legacyAgentTokenFile, legacyDevTokenFile } from "./paths";
 import { detectRepo } from "./repo";
 import { Sessions } from "./sessions";
 import { runSetupChecks } from "./setup";
-import { loadConfig, loadPlan } from "./store";
+import { loadConfig } from "./store";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -74,7 +74,7 @@ async function main() {
   const setup = await runSetupChecks(repo, config.team);
   for (const c of setup.checks) log.info(`  ${c.status === "ok" ? "✓" : c.status === "warning" ? "!" : "✗"} ${c.label}: ${c.detail}`);
 
-  const hub = new Hub(repo, slug, config, loadPlan(repo.root), setup);
+  const hub = new Hub(repo, slug, config, company.plans.load(slug), setup);
   hub.snap.welcome = isNew;
   // The team in the config, registered in the company store. Roles come from the
   // store; isLead only seeds the CTO on a project's first import. (A new project
@@ -111,7 +111,11 @@ async function main() {
   };
   void sbx.refresh();
   void mcp.refresh();
-  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null);
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null, {
+    plans: company.plans,
+    projectId: slug,
+    roleOf: (id) => company.agents.get(slug, id)?.role ?? null,
+  });
   planner.actions = new ActionItems(hub, planner);
 
   const root = dirname(dirname(fileURLToPath(import.meta.url)));

@@ -161,6 +161,8 @@ export interface Task {
   files?: string[]; // the only files this task may edit
   doneWhen?: string; // acceptance criteria
   note?: string | null; // e.g. why it's blocked
+  /** Who created it: an agent id, or "you" for the owner. Its title is quoted as theirs. */
+  createdBy?: string;
 }
 
 export type ReviewState = "pending" | "reviewing" | "changes-requested" | "passed";

@@ -6,6 +6,7 @@ import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
 import { HumanAccounts } from "./humanAccounts";
+import { PlanStore } from "./planStore";
 import { ProjectSettings } from "./projectSettings";
 import { DashboardChannel } from "./slots/dashboardChannel";
 import { SqliteKnowledgeStore } from "./slots/knowledge";
@@ -32,6 +33,8 @@ export interface Company {
   humans: HumanAccounts;
   /** Project and agent settings and grants: the only writer of configuration (M0-D1). */
   settings: ProjectSettings;
+  /** Each project's boards and tasks (M0-D1). */
+  plans: PlanStore;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
@@ -53,6 +56,7 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
     agents,
     secrets,
     settings: new ProjectSettings(db, clock, audit, agents),
+    plans: new PlanStore(db),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
     home,
     db,
