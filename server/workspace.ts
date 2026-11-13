@@ -2,19 +2,25 @@
 
 import { existsSync } from "node:fs";
 import type { AgentConfig } from "../src/data/types";
-import { companyHome, isInside } from "./company/home";
+import { companyHome, hqHome, isInside } from "./company/home";
 import { run } from "./lib/exec";
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
 
 /**
  * The agent's folder. Throws if it is the company store or inside it: agents
- * must never work in, or be pointed at, the company's records.
+ * must never work in, or be pointed at, the company's records. A folder someone
+ * chose is also refused when it is, holds, or sits inside HQ's home or the
+ * store (SR-D-04), links and junctions included. HQ's own clone sits inside
+ * HQ's home by design.
  */
-export function workspaceFor(agent: AgentConfig, projectSlug: string): string {
+export function workspaceFor(agent: AgentConfig, projectSlug: string, roots: { store: string; hq: string } = { store: companyHome(), hq: hqHome() }): string {
   const dir = agent.workspacePath || managedWorkspace(projectSlug, agent.id);
-  const store = companyHome();
-  if (isInside(dir, store)) throw new Error(`${dir} is inside the company store (${store}). Choose a folder outside it for ${agent.name}.`);
+  if (isInside(dir, roots.store)) throw new Error(`${dir} is inside the company store (${roots.store}). Choose a folder outside it for ${agent.name}.`);
+  if (agent.workspacePath) {
+    if (isInside(roots.store, dir)) throw new Error(`${dir} holds the company store (${roots.store}). Choose a folder outside it for ${agent.name}.`);
+    if (isInside(dir, roots.hq) || isInside(roots.hq, dir)) throw new Error(`${dir} is, holds or sits inside HQ's home (${roots.hq}), where HQ keeps its records. Choose another folder for ${agent.name}.`);
+  }
   return dir;
 }
 

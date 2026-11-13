@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { HQ_DIRNAME } from "./company/home";
+import { hqHome } from "./company/home";
 
 export const slugify = (s: string) =>
   s
@@ -9,9 +8,9 @@ export const slugify = (s: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "") || "project";
 
-/** ~/.jsmhq/<project>/ — HQ's per-project home (agent folders, tokens). */
+/** ~/.jsmhq/<project>/ (or under HQ_HOME) — HQ's per-project home (agent folders, tokens). */
 export function projectHome(projectSlug: string): string {
-  const dir = join(homedir(), HQ_DIRNAME, projectSlug);
+  const dir = join(hqHome(), projectSlug);
   mkdirSync(dir, { recursive: true });
   return dir;
 }

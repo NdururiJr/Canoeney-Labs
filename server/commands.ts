@@ -307,7 +307,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
         apiKey: str(v.apiKey, 4000) || undefined,
       });
     } },
-    authMcp: { role: "owner", pin: true, target: first, run: (_ctx, name) => mcp.authorize(str(name, 40)) },
+    // It opens a terminal on the host for sbx's sign-in: never from a remote session (PR #5 carry-forward).
+    authMcp: { role: "owner", pin: true, localOnly: true, target: first, run: (_ctx, name) => mcp.authorize(str(name, 40)) },
     removeMcp: { role: "owner", target: first, run: (ctx, name) => mcp.remove(str(name, 40), authorityOf(ctx)) },
     setAgentMcp: { role: "owner", target: first,
       pin: pinIf((a) => {

@@ -15,7 +15,7 @@ import { LocalRouter } from "./slots/router";
 import type { AuditSink, Channel, Memory, Router } from "./slots/types";
 
 export { SchemaTooNewError } from "./db";
-export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome, isInside } from "./home";
+export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome, hqHome, isInside } from "./home";
 
 export interface Company {
   db: CompanyDb;

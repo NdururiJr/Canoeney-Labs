@@ -118,6 +118,7 @@ async function main() {
   const ownerAuth = new OwnerAuth({ accounts: company.humans, clock: company.clock, audit: company.audit, allowedOrigins, setupFile: join(company.home, "owner-setup.txt") });
   const setupFile = ownerAuth.prepareSetup();
 
+  const dashboard = new Dashboard(makeCommands(hub, sessions, planner, inbox, sbx, mcp, company), { ownerAuth, audit: company.audit, clock: company.clock });
   await startHttp({
     hub,
     inbox,
@@ -128,7 +129,7 @@ async function main() {
     company,
     distDir: dev ? null : distDir,
     allowedOrigins,
-    dashboard: new Dashboard(makeCommands(hub, sessions, planner, inbox, sbx, mcp, company), { ownerAuth, audit: company.audit, clock: company.clock }),
+    dashboard,
   });
   // Only once HQ is serving: a port already in use must not record a start.
   company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.started", data: { project: slug } });
@@ -154,6 +155,8 @@ async function main() {
     sbx.stopApprovalPolling();
     github.stop();
     try {
+      // The collapsed terminal rows still counting go in before HQ stops (M0-C final review).
+      dashboard.flush(true);
       company.audit.append({ actorKind: "hq", actorId: "hq", action: "hq.stopped", data: { project: slug } });
       company.close();
     } catch (err) {

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import type { OfficeEvent } from "../src/data/source";
 import { cleanAgentText } from "./hooks";
@@ -90,4 +93,32 @@ test("SR-B-19 [T-S2.4] hook-reported state decides nothing", async (t) => {
       ["hook.SessionEnd", `${hq.slug}/ana`, { bestEffort: true }],
     ],
   );
+});
+
+test("SR-B-19 [T-S2.4] every read of hook-reported state is a display or delivery site", () => {
+  // Hook-reported state (an agent's state and note, and when its last hook came) may time
+  // deliveries and fill the display; it must never decide who may do what. A new read must
+  // be added here on purpose, after checking it decides nothing.
+  const ALLOWED = [
+    "inbox.ts: lastHookAt(", // the inbox records when hooks arrive
+    "inbox.ts: status(agentId)?.state", // delivery: type a message only into an idle agent
+    "main.ts: lastHookAt", // wiring
+    "main.ts: lastHookAt(",
+    "sessions.ts: lastHookAt", // declaration
+    "sessions.ts: lastHookAt(", // the quiet time before reading the agent's screen
+  ];
+  const server = dirname(fileURLToPath(import.meta.url));
+  const found = new Set<string>();
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== "testing") walk(p);
+      } else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) {
+        for (const m of readFileSync(p, "utf8").matchAll(/lastHookAt\(?|status\([^)]*\)\??\.(?:state|note)\b/g)) found.add(`${relative(server, p).replace(/\\/g, "/")}: ${m[0]}`);
+      }
+    }
+  };
+  walk(server);
+  assert.deepEqual([...found].sort(), [...ALLOWED].sort());
 });

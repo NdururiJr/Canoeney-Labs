@@ -115,7 +115,33 @@ export class Sessions {
 
   // ------------------------------------------------------------ lifecycle
 
-  async start(id: string) {
+  // Start, stop, recreate and remove run one at a time per agent (a lane), so a
+  // stop pressed while the agent is still starting waits and then stops it: the
+  // agent ends stopped, with no live secret (M0-B carry-forward).
+  private lanes = new Map<string, Promise<unknown>>();
+  private lane<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const next = (this.lanes.get(id) ?? Promise.resolve()).then(fn, fn);
+    this.lanes.set(id, next.catch(() => {}));
+    return next;
+  }
+
+  start(id: string) {
+    return this.lane(id, () => this.startNow(id));
+  }
+
+  stop(id: string) {
+    return this.lane(id, () => this.stopNow(id));
+  }
+
+  removeResources(id: string, opts: { deleteSandbox: boolean; deleteFolder: boolean }): Promise<string[]> {
+    return this.lane(id, () => this.removeResourcesNow(id, opts));
+  }
+
+  recreate(id: string) {
+    return this.lane(id, () => this.recreateNow(id));
+  }
+
+  private async startNow(id: string) {
     const hub = this.hub;
     const agent = hub.cfg(id);
     const st = hub.status(id);
@@ -199,7 +225,7 @@ export class Sessions {
     }
   }
 
-  async stop(id: string) {
+  private async stopNow(id: string) {
     const hub = this.hub;
     const agent = hub.cfg(id);
     if (!agent) return;
@@ -243,7 +269,7 @@ export class Sessions {
   }
 
   /** Stops the agent and deletes what was asked. Only HQ-made folders inside HQ's home can be deleted. */
-  async removeResources(id: string, opts: { deleteSandbox: boolean; deleteFolder: boolean }): Promise<string[]> {
+  private async removeResourcesNow(id: string, opts: { deleteSandbox: boolean; deleteFolder: boolean }): Promise<string[]> {
     const agent = this.hub.cfg(id);
     if (!agent) return [];
     const done: string[] = [];
@@ -293,11 +319,11 @@ export class Sessions {
   }
 
   /** Removes the agent's sandbox and starts a fresh one (applies new CPU/memory). The folder is kept. */
-  async recreate(id: string) {
+  private async recreateNow(id: string) {
     const agent = this.hub.cfg(id);
     if (!agent || agent.mode !== "sandbox") return;
     const name = this.name(id);
-    if (this.hub.status(id)?.session.state === "running") await this.stop(id);
+    if (this.hub.status(id)?.session.state === "running") await this.stopNow(id);
     this.hub.setSession(id, { state: "starting", detail: "Removing the old sandbox…", sandbox: null });
     const rm = await run("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
     if (!rm.ok && !/not found|no such/i.test(rm.stderr)) {
@@ -307,7 +333,7 @@ export class Sessions {
     this.onSandboxRemoved(id);
     this.hub.setSession(id, { state: "stopped", detail: null });
     this.hub.activity("session", id, `Recreating ${agent.name}'s sandbox with new resources`);
-    await this.start(id);
+    await this.startNow(id);
   }
 
   /** Reads each HQ sandbox's real CPU/memory from `sbx ls --json`. */
@@ -477,9 +503,19 @@ export class Sessions {
         this.hub.activity("session", agent.id, `${agent.name}'s session ended`);
         return;
       }
+      // The folder is checked before anything attaches. A refused one is marked failed
+      // once, and stays so until the agent's settings change (SR-D-04).
+      let workspace: string;
+      try {
+        workspace = workspaceFor(agent, this.hub.slug);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        if (st.session.state !== "failed" || st.session.detail !== detail) this.hub.setSession(agent.id, { state: "failed", detail });
+        return;
+      }
       this.attach(agent.id);
       if (st.session.state !== "running") {
-        this.hub.setSession(agent.id, { state: "running", detail: null, workspace: workspaceFor(agent, this.hub.slug) });
+        this.hub.setSession(agent.id, { state: "running", detail: null, workspace });
         this.hub.setStatus(agent.id, { note: "Reattached" });
         this.onSessionReattached(agent.id);
         this.noteOldKey(agent.id);

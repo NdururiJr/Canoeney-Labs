@@ -43,6 +43,14 @@ function buildServer(hub: Hub, planner: Planner, company: Company, agent: Regist
       let written = false;
       try {
         return company.db.transaction(() => {
+          // Re-read on every call: an agent paused or retired after its request was
+          // authenticated gets nothing done (M0-B carry-forward).
+          const status = company.agents.getById(agent.companyId)?.status ?? "retired";
+          if (status !== "active") {
+            record(target, { tool, outcome: "refused", reason: status });
+            written = true;
+            return fail(`You are ${status}, so HQ refused this call. Wait for the owner.`);
+          }
           record(target, { tool, outcome: "ok", args: recorded });
           written = true;
           return fn(args);

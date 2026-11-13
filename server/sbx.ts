@@ -355,7 +355,8 @@ export class Sbx {
           this.hub.configChanged();
           await this.syncRules(agentId);
         }
-        const why = err ? err.slice(0, 160) : agent.mode !== "sandbox" ? `${who} isn't in Sandbox mode` : "sbx didn't apply the rule";
+        // sbx's own text can repeat the host the agent chose: the feed names the action only, and the host stays in the quote.
+        const why = err ? "sbx refused the rule" : agent.mode !== "sandbox" ? `${who} isn't in Sandbox mode` : "sbx didn't apply the rule";
         this.hub.activity("config", agentId, `Couldn't allow the site: ${why}. The request is still listed.`, { quote: { author: who, text: target.host } });
         return;
       }
@@ -398,7 +399,7 @@ export class Sbx {
     const ok = new Set(list.map((a) => a.host).filter((h) => !failed.includes(h))).size;
     if (ok) this.hub.activity("config", agentId, `You allowed ${ok} site${ok === 1 ? "" : "s"} for ${who}'s sandbox`);
     if (failed.length) {
-      const why = agent.mode !== "sandbox" ? `${who} isn't in Sandbox mode` : st?.syncError?.slice(0, 120) || "sbx didn't apply them";
+      const why = agent.mode !== "sandbox" ? `${who} isn't in Sandbox mode` : st?.syncError ? "sbx refused the rules" : "sbx didn't apply them";
       this.hub.activity("config", agentId, `Couldn't allow ${failed.length === 1 ? "a site" : `${failed.length} sites`}: ${why}. They're still listed.`, {
         quote: { author: who, text: `${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}` },
       });

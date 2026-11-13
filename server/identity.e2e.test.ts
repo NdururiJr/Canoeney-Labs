@@ -28,6 +28,9 @@ test("SR-B-10 [T-S1.10] the secret appears nowhere but the agent's own files", a
   replies.push((await mcpCall(hq, secret, "create_task", { title: "not mine to make" })).text); // refused
   replies.push((await mcpCall(hq, secret, "set_my_status", { status: "done" })).text); // an error: no task
   replies.push((await hook(hq, secret, "ana", "Stop")).text);
+  // Stopping the agent (its secret is revoked, its folder kept) must not print or emit the secret either.
+  await sessions.stop("ana");
+  assert.equal(hq.hub.status("ana")?.session.state, "stopped");
 
   const body = secret.slice("hqa_".length);
   const audit = JSON.stringify(hq.company.audit.query({ limit: 1000 }));

@@ -7,6 +7,7 @@ import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import type { Authority } from "./company/authority";
 import type { Hub } from "./hub";
+import { log } from "./lib/log";
 import type { Planner } from "./planner";
 import type { Sbx } from "./sbx";
 
@@ -99,7 +100,9 @@ async function answer(hub: Hub, sbx: Sbx, planner: Planner, company: Company, re
     hub.configChanged();
     // Remove any rule that did go through, and clear the stale error.
     await Promise.all(added.map((id) => sbx.syncRules(id).catch(() => {})));
-    hub.activity("config", req.agentId, `Couldn't allow the site ${who} asked for (${failure.slice(0, 160)}). The request is still open: try again or deny it.`, { quote: { author: who, text: req.domain } });
+    // The failure's text can repeat the domain the agent chose: the feed names the action only (the domain stays in the quote).
+    log.warn(`access: couldn't allow a site for ${req.agentId}: ${failure.slice(0, 300)}`);
+    hub.activity("config", req.agentId, `Couldn't allow the site ${who} asked for: sbx refused the rule. The request is still open: try again or deny it.`, { quote: { author: who, text: req.domain } });
     return;
   }
 

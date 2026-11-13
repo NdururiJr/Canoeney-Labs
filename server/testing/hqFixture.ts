@@ -134,6 +134,9 @@ export async function makeHq(
   // Code that asks for the company home (workspaceFor) gets this one, never the real ~/.jsmhq/_company.
   const previousHome = process.env.HQ_COMPANY_HOME;
   process.env.HQ_COMPANY_HOME = companyHomeDir;
+  // HQ's own home (agents' clones, per-project records) too: tests never touch the real ~/.jsmhq.
+  const previousHqHome = process.env.HQ_HOME;
+  process.env.HQ_HOME = join(dir, "hq home");
   const company = openCompany({ home: companyHomeDir, repoRoot, clock });
   // The owner's row exists from the start (enrollment adds the credentials later), so commands run directly act as a real owner.
   company.db.prepare("INSERT INTO humans(id, display_name, role, created_at) VALUES ('owner', 'Owner', 'owner', ?)").run(FIXTURE_START);
@@ -181,6 +184,8 @@ export async function makeHq(
     company.close();
     if (previousHome === undefined) delete process.env.HQ_COMPANY_HOME;
     else process.env.HQ_COMPANY_HOME = previousHome;
+    if (previousHqHome === undefined) delete process.env.HQ_HOME;
+    else process.env.HQ_HOME = previousHqHome;
     rmSync(dir, { recursive: true, force: true });
   });
 
