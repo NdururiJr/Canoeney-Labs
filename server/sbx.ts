@@ -5,6 +5,9 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BasePolicy, SbxAgentState, SbxPort, SbxRule, SbxState } from "../src/data/types";
+import type { Company } from "./company";
+import { companyAgentId } from "./company/agents";
+import type { Authority } from "./company/authority";
 import type { Hub } from "./hub";
 import { parseCliJson, sandboxList } from "./lib/json";
 import { run } from "./lib/exec";
@@ -52,7 +55,14 @@ export class Sbx {
   private ownedFile: string;
   private owned: Record<string, string[]>; // sandbox name → "allow foo.com" entries HQ added
 
-  constructor(private hub: Hub) {
+  private exec: typeof run;
+
+  constructor(
+    private hub: Hub,
+    private company: Company | null = null,
+    opts: { exec?: typeof run } = {},
+  ) {
+    this.exec = opts.exec ?? run;
     this.ownedFile = join(projectHome(hub.slug), "sbx-owned.json");
     this.owned = (existsSync(this.ownedFile) && parseCliJson<Record<string, string[]>>(readFileSync(this.ownedFile, "utf8"))) || {};
     this.state = { basePolicy: "unknown", proxy: null, globalKeys: [], agents: {}, checkedAt: new Date().toISOString() };
@@ -80,7 +90,7 @@ export class Sbx {
 
   /** Network rules in effect, or null when sbx's list couldn't be read (not the same as "no rules"). */
   private async rules(): Promise<RawRule[] | null> {
-    const r = await run("sbx", ["policy", "ls", "--json", "--type", "network"], { timeoutMs: 15_000 });
+    const r = await this.exec("sbx", ["policy", "ls", "--json", "--type", "network"], { timeoutMs: 15_000 });
     if (!r.ok) return null;
     const data = parseCliJson<{ rules?: RawRule[] }>(r.stdout);
     if (!data) return null;
@@ -103,8 +113,8 @@ export class Sbx {
     }
     const [rules, keysOut, proxyOut, base] = await Promise.all([
       this.rules().then((list) => list ?? []),
-      run("sbx", ["secret", "ls", "--json"], { timeoutMs: 15_000 }),
-      run("sbx", ["settings", "get", "proxy.sandbox"], { timeoutMs: 10_000 }),
+      this.exec("sbx", ["secret", "ls", "--json"], { timeoutMs: 15_000 }),
+      this.exec("sbx", ["settings", "get", "proxy.sandbox"], { timeoutMs: 10_000 }),
       this.basePolicy(),
     ]);
     let secrets: { scope: string; type: string; name: string }[] = [];
@@ -152,7 +162,7 @@ export class Sbx {
 
   /** Published ports of one sandbox, or null if sbx couldn't list them (e.g. the sandbox is gone). */
   private async readPorts(agentId: string): Promise<SbxPort[] | null> {
-    const r = await run("sbx", ["ports", this.name(agentId), "--json"], { timeoutMs: 10_000 });
+    const r = await this.exec("sbx", ["ports", this.name(agentId), "--json"], { timeoutMs: 10_000 });
     type Row = { host_port?: number; sandbox_port?: number };
     const data = r.ok ? parseCliJson<Row[] | { ports?: Row[] }>(r.stdout) : null;
     if (!data) return null;
@@ -185,7 +195,7 @@ export class Sbx {
   async forwardPort(agentId: string, port: number) {
     const a = this.hub.cfg(agentId);
     if (!a || a.mode !== "sandbox" || !Number.isInteger(port) || port < 1 || port > 65535) return;
-    const r = await run("sbx", ["ports", this.name(agentId), "--publish", `127.0.0.1:${port}:${port}`], { timeoutMs: 30_000 });
+    const r = await this.exec("sbx", ["ports", this.name(agentId), "--publish", `127.0.0.1:${port}:${port}`], { timeoutMs: 30_000 });
     if (r.ok) this.hub.activity("config", agentId, `Forwarded port ${port} from ${a.name}'s sandbox to localhost:${port} on this machine.`);
     else {
       const why = `${r.stdout}\n${r.stderr}`.trim().split("\n").filter(Boolean).pop()?.replace(/^error: /i, "") ?? "";
@@ -203,7 +213,7 @@ export class Sbx {
     const a = this.hub.cfg(agentId);
     if (!a || !Number.isInteger(port) || port < 1 || port > 65535) return;
     const host = this.state.agents[agentId]?.ports?.find((p) => p.sandbox === port)?.host ?? port;
-    const r = await run("sbx", ["ports", this.name(agentId), "--unpublish", `127.0.0.1:${host}:${port}`], { timeoutMs: 30_000 });
+    const r = await this.exec("sbx", ["ports", this.name(agentId), "--unpublish", `127.0.0.1:${host}:${port}`], { timeoutMs: 30_000 });
     if (!r.ok) this.hub.activity("config", agentId, `Couldn't stop forwarding port ${port}: ${(r.stderr || r.stdout).trim().split("\n").pop()?.slice(0, 160)}`);
     await this.refreshPorts(agentId);
   }
@@ -215,7 +225,7 @@ export class Sbx {
 
   /** sbx's queue of blocked requests. It has no JSON output, so the table is read by its header's columns. */
   private async readApprovals(): Promise<{ id: string; sandbox: string; title: string; detail: string }[] | null> {
-    const r = await run("sbx", ["policy", "approval", "ls"], { timeoutMs: 10_000 });
+    const r = await this.exec("sbx", ["policy", "approval", "ls"], { timeoutMs: 10_000 });
     if (!r.ok) return null;
     const lines = r.stdout.split("\n").filter((l) => l.trim());
     const head = lines.findIndex((l) => /^APPROVAL\s+SANDBOX\s+TITLE\s+DETAIL/.test(l));
@@ -295,26 +305,26 @@ export class Sbx {
    * removable in Settings → Sandbox) and clears every queued request for it; Dismiss clears only the one.
    * "all" answers every listed request the same way. One answer per agent at a time; a second click meanwhile is ignored.
    */
-  async answerApproval(agentId: string, approvalId: string | "all", decision: "allow" | "dismiss") {
+  async answerApproval(agentId: string, approvalId: string | "all", decision: "allow" | "dismiss", by: Authority) {
     if (this.answering.has(agentId)) return;
     this.answering.add(agentId);
     try {
-      await this.answer(agentId, approvalId, decision);
+      await this.answer(agentId, approvalId, decision, by);
     } finally {
       this.answering.delete(agentId);
     }
   }
 
   private async respondApproval(id: string, option: "allow" | "dismiss"): Promise<boolean> {
-    return (await run("sbx", ["policy", "approval", "respond", id, "--option", option], { timeoutMs: 10_000 })).ok;
+    return (await this.exec("sbx", ["policy", "approval", "respond", id, "--option", option], { timeoutMs: 10_000 })).ok;
   }
 
-  private async answer(agentId: string, approvalId: string | "all", decision: "allow" | "dismiss") {
+  private async answer(agentId: string, approvalId: string | "all", decision: "allow" | "dismiss", by: Authority) {
     const list = [...(this.state.agents[agentId]?.approvals ?? [])];
     const target = approvalId === "all" ? null : list.find((a) => a.id === approvalId);
     if (approvalId !== "all" && !target) return;
     const respond = (id: string, option: "allow" | "dismiss") => this.respondApproval(id, option);
-    if (decision === "allow" && approvalId === "all") return this.allowAll(agentId, list);
+    if (decision === "allow" && approvalId === "all") return this.allowAll(agentId, list, by);
 
     if (decision === "allow" && target) {
       const who = this.hub.name(agentId);
@@ -330,11 +340,9 @@ export class Sbx {
       }
       const agent = this.hub.cfg(agentId);
       if (!agent) return;
-      const added = !agent.sandbox.allow.includes(target.host);
-      if (added) {
-        agent.sandbox.allow = [...agent.sandbox.allow, target.host];
-        this.hub.configChanged();
-      }
+      // The grant needs the PIN or a decision (SR-D-03); the store refuses it otherwise.
+      const added = this.settings().grant(this.cid(agentId), "network-allow", target.host, by);
+      if (added) this.hub.configChanged();
       await this.syncRules(agentId);
       // Success only when sbx now lists the rule for this sandbox (syncRules skips a Local-mode agent
       // or a missing sandbox without an error).
@@ -342,7 +350,8 @@ export class Sbx {
       const applied = this.state.agents[agentId]?.rules.some((r) => r.decision === "allow" && r.resources.includes(target.host));
       if (!applied || err?.includes(target.host)) {
         if (added) {
-          agent.sandbox.allow = agent.sandbox.allow.filter((h) => h !== target.host);
+          // sbx refused it: HQ takes the grant back, so no active grant is left behind.
+          this.settings().revoke(this.cid(agentId), "network-allow", target.host, { via: "hq" });
           this.hub.configChanged();
           await this.syncRules(agentId);
         }
@@ -360,7 +369,7 @@ export class Sbx {
   }
 
   /** Allow all: one sync for every host:port rule, then sbx's own approval for the rest (same split as one Allow). */
-  private async allowAll(agentId: string, list: SbxAgentState["approvals"]) {
+  private async allowAll(agentId: string, list: SbxAgentState["approvals"], by: Authority) {
     const agent = this.hub.cfg(agentId);
     if (!agent || !list.length) return;
     const who = this.hub.name(agentId);
@@ -370,11 +379,8 @@ export class Sbx {
     for (const a of list.filter((x) => !viaRule(x))) if (!(await this.respondApproval(a.id, "allow"))) failed.push(a.host);
 
     const hosts = [...new Set(list.filter(viaRule).map((a) => a.host))];
-    const added = hosts.filter((h) => !agent.sandbox.allow.includes(h));
-    if (added.length) {
-      agent.sandbox.allow = [...agent.sandbox.allow, ...added];
-      this.hub.configChanged();
-    }
+    const added = hosts.filter((h) => this.settings().grant(this.cid(agentId), "network-allow", h, by));
+    if (added.length) this.hub.configChanged();
     if (hosts.length) await this.syncRules(agentId);
     const st = this.state.agents[agentId];
     const applied = (h: string) => st?.rules.some((r) => r.decision === "allow" && r.resources.includes(h)) && !st?.syncError?.includes(h);
@@ -382,7 +388,7 @@ export class Sbx {
     // Hosts sbx didn't take come back off the list (and stay listed as blocked), as with one Allow.
     const undo = added.filter((h) => notApplied.includes(h));
     if (undo.length) {
-      agent.sandbox.allow = agent.sandbox.allow.filter((h) => !undo.includes(h));
+      for (const h of undo) this.settings().revoke(this.cid(agentId), "network-allow", h, { via: "hq" });
       this.hub.configChanged();
       await this.syncRules(agentId);
     }
@@ -404,7 +410,7 @@ export class Sbx {
 
   /** True if sbx knows a sandbox with this name. */
   async exists(agentId: string): Promise<boolean> {
-    const r = await run("sbx", ["ls", "--json"], { timeoutMs: 10_000 });
+    const r = await this.exec("sbx", ["ls", "--json"], { timeoutMs: 10_000 });
     try {
       return (sandboxList(r.stdout) ?? []).some((s) => s.name === this.name(agentId));
     } catch {
@@ -416,11 +422,30 @@ export class Sbx {
    * Makes the sandbox's allow/deny rules match the agent's lists. Adds what's
    * missing; removes only rules HQ added earlier. Needs the sandbox to exist.
    */
+  /** The sandbox's rules: built from the agent's grants in the store only, never from a file (SR-D-10). */
+  wantedRules(agentId: string): Set<string> {
+    if (!this.company) return new Set();
+    const grants = this.company.settings.grants(this.cid(agentId));
+    return new Set([
+      ...grants.filter((g) => g.kind === "network-allow").map((g) => key("allow", g.value)),
+      ...grants.filter((g) => g.kind === "network-deny").map((g) => key("deny", g.value)),
+    ]);
+  }
+
+  private cid(agentId: string): string {
+    return companyAgentId(this.hub.slug, agentId);
+  }
+
+  private settings() {
+    if (!this.company) throw new Error("Sbx has no company store.");
+    return this.company.settings;
+  }
+
   async syncRules(agentId: string): Promise<void> {
     const agent = this.hub.cfg(agentId);
     if (!agent || agent.mode !== "sandbox" || !(await this.exists(agentId))) return;
     const name = this.name(agentId);
-    const want = new Set([...agent.sandbox.allow.map((r) => key("allow", r)), ...agent.sandbox.deny.map((r) => key("deny", r))]);
+    const want = this.wantedRules(agentId);
     const owned = new Set(this.owned[name] ?? []);
     const all = await this.rules();
     if (!all) {
@@ -438,7 +463,7 @@ export class Sbx {
     for (const entry of want) {
       if (have.has(entry)) continue;
       const [decision, resource] = entry.split(" ");
-      const r = await run("sbx", ["policy", decision, "network", "--sandbox", name, resource], { timeoutMs: 15_000 });
+      const r = await this.exec("sbx", ["policy", decision, "network", "--sandbox", name, resource], { timeoutMs: 15_000 });
       if (r.ok) owned.add(entry);
       else errors.push(`${decision} ${resource}: ${r.stderr.trim().split("\n")[0]}`);
     }
@@ -447,7 +472,7 @@ export class Sbx {
       const [decision, resource] = entry.split(" ");
       const rule = rules.find((r) => r.decision === decision && r.resources.includes(resource));
       const r = rule
-        ? await run("sbx", ["policy", "rm", "network", "--sandbox", name, "--id", rule.id, "--force"], { timeoutMs: 15_000 })
+        ? await this.exec("sbx", ["policy", "rm", "network", "--sandbox", name, "--id", rule.id, "--force"], { timeoutMs: 15_000 })
         : { ok: true, stderr: "" };
       if (r.ok) owned.delete(entry);
       else errors.push(`remove ${resource}: ${r.stderr.trim().split("\n")[0]}`);
@@ -465,21 +490,21 @@ export class Sbx {
   /** Stores a service key (value via stdin, never kept). agentId null = every sandbox. */
   async setKey(agentId: string | null, service: string, value: string) {
     const args = ["secret", "set", service, ...(agentId ? ["--sandbox", this.name(agentId)] : []), "--force"];
-    const r = await run("sbx", args, { timeoutMs: 20_000, input: value.trim() + "\n" });
+    const r = await this.exec("sbx", args, { timeoutMs: 20_000, input: value.trim() + "\n" });
     if (!r.ok) throw new Error(r.stderr.trim().split("\n")[0] || "sbx secret set failed");
     await this.refresh();
   }
 
   async removeKey(agentId: string | null, service: string) {
-    const r = await run("sbx", ["secret", "rm", service, ...(agentId ? ["--sandbox", this.name(agentId)] : []), "--force"], { timeoutMs: 20_000 });
+    const r = await this.exec("sbx", ["secret", "rm", service, ...(agentId ? ["--sandbox", this.name(agentId)] : []), "--force"], { timeoutMs: 20_000 });
     if (!r.ok) throw new Error(r.stderr.trim().split("\n")[0] || "sbx secret rm failed");
     await this.refresh();
   }
 
   async setProxy(url: string | null) {
     const r = url
-      ? await run("sbx", ["settings", "set", "proxy.sandbox", url], { timeoutMs: 15_000 })
-      : await run("sbx", ["settings", "unset", "proxy.sandbox"], { timeoutMs: 15_000 });
+      ? await this.exec("sbx", ["settings", "set", "proxy.sandbox", url], { timeoutMs: 15_000 })
+      : await this.exec("sbx", ["settings", "unset", "proxy.sandbox"], { timeoutMs: 15_000 });
     if (!r.ok) throw new Error(r.stderr.trim().split("\n")[0] || "sbx settings failed");
     await this.refresh();
   }

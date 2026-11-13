@@ -9,6 +9,7 @@ import { existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeCommands } from "./commands";
+import { offerImport } from "./repoConfigImport";
 import { Dashboard } from "./dashboard";
 import { companyHome, openCompany } from "./company";
 import { AgentAuth } from "./agentAuth";
@@ -28,7 +29,6 @@ import { legacyAgentTokenFile, legacyDevTokenFile } from "./paths";
 import { detectRepo } from "./repo";
 import { Sessions } from "./sessions";
 import { runSetupChecks } from "./setup";
-import { loadConfig } from "./store";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -56,13 +56,12 @@ async function main() {
   const dev = flag("dev");
   const port = Number(arg("port") ?? process.env.HQ_PORT ?? 7420);
   const repo = await detectRepo(resolve(arg("repo") ?? process.env.HQ_REPO ?? process.cwd()));
-  const { config, isNew } = loadConfig(repo, port);
-  config.project.hqPort = port;
-  const slug = config.project.id;
-  // Opened right after the config so a store written by a newer HQ stops startup with its own message.
+  // A store written by a newer HQ stops startup here, with its own message.
   const company = openCompany({ home: companyHome(), repoRoot: repo.root });
-  // Refuses to start when another repo already uses this project id (ProjectIdTakenError).
-  company.agents.ensureProject({ slug, name: config.project.name, root: repo.root });
+  // The project id comes from the store, never from a file in the repo (M0-D1).
+  const slug = company.agents.ensureProject({ name: repo.name, root: repo.root });
+  // The configuration is a view of the store; the repo's .jsmhq/ files have no effect (SR-D-01).
+  const configSource = () => company.settings.view(slug, { path: repo.root, hqPort: port });
   // The shared agent token from before M0-B is not used any more.
   rmSync(legacyAgentTokenFile(slug), { force: true });
   // The dashboard has owner login now (M0-C): no token in a URL.
@@ -71,31 +70,20 @@ async function main() {
   log.info(`repo   ${repo.root}${repo.github ? `  (github.com/${repo.github})` : ""}`);
   log.info(`company ${company.db.file}`);
   log.info("checking setup…");
-  const setup = await runSetupChecks(repo, config.team);
+  const setup = await runSetupChecks(repo, configSource().team);
   for (const c of setup.checks) log.info(`  ${c.status === "ok" ? "✓" : c.status === "warning" ? "!" : "✗"} ${c.label}: ${c.detail}`);
 
-  const hub = new Hub(repo, slug, config, company.plans.load(slug), setup);
-  hub.snap.welcome = isNew;
-  // The team in the config, registered in the company store. Roles come from the
-  // store; isLead only seeds the CTO on a project's first import. (A new project
-  // registers its team when the welcome screen is completed.)
-  if (!isNew) {
-    const sync = company.agents.syncFromConfig(slug, config.team);
-    for (const id of sync.ignoredLead)
-      hub.activity("config", id, `${hub.name(id)} is marked lead in .jsmhq/config.json, but roles come from the company store; it was added as a builder.`);
-    for (const { id, status } of sync.inactive)
-      hub.activity("config", id, `${hub.name(id)} is ${status} in the company store, so it can't start.`);
-    for (const id of sync.skipped)
-      hub.activity("config", null, `The agent id ${JSON.stringify(id.slice(0, 40))} in .jsmhq/config.json is not a plain id (lower-case letters, digits and "-"), so it was not registered.`);
-  }
+  const hub = new Hub(repo, slug, configSource, company.plans.load(slug), setup);
+  // Until the owner completes the welcome or confirms an import, nothing is read from the repo.
+  offerImport(hub, company);
   const sessions = new Sessions(hub, company);
   const inbox = new Inbox(hub, { type: (id, text) => sessions.typeInto(id, text), enter: (id) => sessions.pressEnter(id) });
   sessions.onSessionDown = (id) => inbox.sessionDown(id);
   sessions.onSessionReattached = (id) => inbox.sessionReattached(id);
   sessions.lastHookAt = (id) => inbox.lastHookAt(id);
-  const sbx = new Sbx(hub);
+  const sbx = new Sbx(hub, company);
   sessions.envFileFor = (id) => (existsSync(sbx.envFile(id)) ? sbx.envFile(id) : null);
-  const mcp = new SbxMcp(hub, (id, file, args, onExit) => sessions.runTerminal(id, file, args, onExit));
+  const mcp = new SbxMcp(hub, (id, file, args, onExit) => sessions.runTerminal(id, file, args, onExit), undefined, company);
   sessions.onSandboxReady = (id) => {
     void sbx.syncRules(id);
     void mcp.attachAll(id);

@@ -3,7 +3,7 @@
 // `.jsmhq/config.json`, decides who an agent is and what it may do: `isLead`
 // in the config seeds the role once, on a project's first import.
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { AgentCli } from "../../src/data/types";
 import type { AgentSecrets, RevokeReason } from "./agentSecrets";
 import type { Clock } from "./clock";
@@ -13,6 +13,10 @@ import type { ActorKind, AgentStatus, RoleId } from "./types";
 
 /** Project and agent ids name folders and sessions, so only plain slugs. */
 const PLAIN_ID = /^[a-z0-9][a-z0-9-]*$/;
+
+/** A folder name as a project id: lower-case letters, digits and "-". */
+export const projectSlug = (name: string): string =>
+  name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
 
 export function companyAgentId(projectSlug: string, agentId: string): string {
   if (!PLAIN_ID.test(projectSlug) || !PLAIN_ID.test(agentId)) {
@@ -42,16 +46,6 @@ export interface ConfigAgent {
   id: string;
   name: string;
   cli: AgentCli;
-}
-
-export class ProjectIdTakenError extends Error {
-  constructor(
-    readonly slug: string,
-    readonly otherRoot: string,
-  ) {
-    super(`Another repo at ${otherRoot} already uses the project id ${slug}. Change project.id in .jsmhq/config.json of one of them.`);
-    this.name = "ProjectIdTakenError";
-  }
 }
 
 interface Row {
@@ -90,27 +84,38 @@ export class AgentRegistry {
     private readonly secrets: AgentSecrets,
   ) {}
 
+  /** The project whose repo is at `root`, or null. */
+  projectForRoot(root: string): string | null {
+    const rows = this.db.prepare("SELECT id, repo FROM projects ORDER BY created_at, rowid").all<{ id: string; repo: string }>();
+    return rows.find((r) => samePath(r.repo, root))?.id ?? null;
+  }
+
   /**
-   * Records the project with its repo's absolute path. Two repos whose config
-   * carries the same project id would otherwise share one set of agents, so a
-   * second repo is refused while the first still exists. A first repo that no
-   * longer exists was moved: the path is updated.
+   * The project id for the repo at `root` (M0-D1: the id comes from the store,
+   * never from a file). A repo already registered keeps its id. Otherwise the id
+   * is `slug` (by default the folder name as a slug); a project with that id
+   * whose repo no longer exists was moved and takes the new path, and one whose
+   * repo still exists makes the new id `<slug>-2`, `<slug>-3` and so on.
    */
-  ensureProject(p: { slug: string; name: string; root: string }): void {
-    this.tx(() => {
-      const row = this.db.prepare("SELECT repo FROM projects WHERE id = ?").get<{ repo: string }>(p.slug);
+  ensureProject(p: { name: string; root: string; slug?: string }): string {
+    return this.tx(() => {
+      const known = this.projectForRoot(p.root);
+      if (known) return known;
+      const base = p.slug ?? projectSlug(basename(resolve(p.root)));
       const at = this.clock.now().toISOString();
-      if (!row) {
-        this.db
-          .prepare("INSERT INTO projects(id, name, repo, kind, created_at) VALUES (?, ?, ?, 'company', ?)")
-          .run(p.slug, p.name, p.root, at);
-        this.audit.append({ actorKind: "hq", actorId: "hq", action: "project.registered", target: p.slug, data: { name: p.name } });
-        return;
+      for (let n = 1; ; n++) {
+        const slug = n === 1 ? base : `${base}-${n}`;
+        const row = this.db.prepare("SELECT repo FROM projects WHERE id = ?").get<{ repo: string }>(slug);
+        if (!row) {
+          this.db.prepare("INSERT INTO projects(id, name, repo, kind, created_at) VALUES (?, ?, ?, 'company', ?)").run(slug, p.name, p.root, at);
+          this.audit.append({ actorKind: "hq", actorId: "hq", action: "project.registered", target: slug, data: { name: p.name } });
+          return slug;
+        }
+        if (existsSync(row.repo)) continue;
+        this.db.prepare("UPDATE projects SET repo = ? WHERE id = ?").run(p.root, slug);
+        this.audit.append({ actorKind: "hq", actorId: "hq", action: "project.moved", target: slug, data: { from: row.repo, to: p.root } });
+        return slug;
       }
-      if (samePath(row.repo, p.root)) return;
-      if (existsSync(row.repo)) throw new ProjectIdTakenError(p.slug, row.repo);
-      this.db.prepare("UPDATE projects SET repo = ? WHERE id = ?").run(p.root, p.slug);
-      this.audit.append({ actorKind: "hq", actorId: "hq", action: "project.moved", target: p.slug, data: { from: row.repo, to: p.root } });
     });
   }
 

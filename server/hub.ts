@@ -1,10 +1,11 @@
 // The server's single source of truth. Every mutation emits the matching
-// OfficeEvent to all connected browsers, and config/plan changes are saved.
+// OfficeEvent to all connected browsers. The config is a view of the company
+// store (M0-D1): configChanged() rebuilds it from there and writes no file.
 
 import type { OfficeEvent } from "../src/data/source";
 import { HOST_TERMINAL, type ActivityEvent, type ActivityType, type AgentConfig, type AgentStatus, type HqConfig, type OfficeSnapshot, type SessionInfo, type SetupState } from "../src/data/types";
 import { writePlanExport } from "./planExport";
-import { saveConfig, type PlanFile } from "./store";
+import type { PlanFile } from "./store";
 import type { RepoInfo } from "./repo";
 import { TerminalFilter } from "./terminalFilter";
 
@@ -17,7 +18,14 @@ export class Hub {
   private listeners = new Set<Listener>();
   private seq = 0;
 
-  constructor(readonly repo: RepoInfo, readonly slug: string, config: HqConfig, plan: PlanFile, setup: SetupState) {
+  constructor(
+    readonly repo: RepoInfo,
+    readonly slug: string,
+    private readonly configSource: () => HqConfig,
+    plan: PlanFile,
+    setup: SetupState,
+  ) {
+    const config = configSource();
     this.snap = {
       setup,
       sbx: { basePolicy: "unknown", proxy: null, globalKeys: [], agents: {}, checkedAt: now() },
@@ -135,8 +143,10 @@ export class Hub {
     this.emit({ type: "activity", event });
   }
 
+  /** Rebuilds the config from the store after a write, gives new agents a status, and tells the browsers. */
   configChanged() {
-    saveConfig(this.repo.root, this.snap.config);
+    this.snap.config = this.configSource();
+    for (const a of this.snap.config.team) if (!this.status(a.id)) this.snap.agents.push(Hub.freshStatus(a.id));
     this.emit({ type: "config.updated", config: structuredClone(this.snap.config) });
   }
 

@@ -18,7 +18,7 @@ export type Authority =
   | { via: "hq" };
 
 export type ProjectField = "name" | "officeName" | "exportPlan" | "github" | "stack";
-export type AgentField = "displayRole" | "color" | "model" | "mode" | "cli" | "workspacePath" | "roleMd" | "resources";
+export type AgentField = "name" | "displayRole" | "color" | "model" | "mode" | "cli" | "workspacePath" | "roleMd" | "resources";
 
 export type ConfigChange =
   | { kind: "grant" | "revoke"; permission: PermissionKind; value: string }

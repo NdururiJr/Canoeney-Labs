@@ -143,6 +143,10 @@ export interface OfficeDataSource {
 
   /** Finishes first-run setup: saves the project's team and review tool. */
   completeWelcome(input: WelcomeInput): void;
+  /** Asks HQ what importing the repo's old .jsmhq/config.json would write (it writes nothing). */
+  previewRepoImport(): void;
+  /** Imports exactly the previewed files (needs the PIN; refused if they changed since). */
+  importRepoConfig(sha256: string): void;
 
   dev?: DevControls;
 }

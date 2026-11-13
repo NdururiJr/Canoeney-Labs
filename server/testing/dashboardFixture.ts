@@ -73,7 +73,7 @@ export async function makeDashboardHq(t: TestContext): Promise<DashboardHq> {
   };
   const hq = await makeHq(t, {
     commands: (p) => {
-      const mcp = new SbxMcp(p.hub, (id, file, args) => calls.push({ name: "runTerminal", args: [id, file, ...args] }), exec);
+      const mcp = new SbxMcp(p.hub, (id, file, args) => calls.push({ name: "runTerminal", args: [id, file, ...args] }), exec, p.company);
       return makeCommands(p.hub, stubSessions(calls), p.planner, p.inbox, stubSbx(calls, failWith), mcp, p.company);
     },
   });

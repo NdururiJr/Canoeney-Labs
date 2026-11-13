@@ -136,7 +136,7 @@ export class Sessions {
 
     // Who may start, and as what, comes from the company store (M0-B).
     const reg = this.company.agents.get(hub.slug, id);
-    if (!reg) return fail("This agent is not registered in the company store. Restart HQ to register it.");
+    if (!reg) return fail("This agent is not in the company store. Add it from the dashboard.");
     if (reg.status === "paused") return fail("This agent is paused.");
     if (reg.status === "retired") return fail("This agent was retired.");
 

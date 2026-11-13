@@ -11,7 +11,7 @@ import { AuthorityError, hqMay, relaxes, type AgentField, type Authority, type A
 import { canonicalJson } from "./canonicalJson";
 import type { Clock } from "./clock";
 import type { CompanyDb } from "./db";
-import type { AuditSink } from "./slots/types";
+import type { AuditEventInput, AuditSink } from "./slots/types";
 import type { PermissionKind } from "./types";
 
 /** Used for a project with no settings row yet: every control at its tightest. */
@@ -32,10 +32,13 @@ export interface ProjectPatch {
   officeName?: string;
   exportPlan?: boolean;
   github?: string | null;
-  stack?: StackConfig;
+  /** null removes the stack. */
+  stack?: StackConfig | null;
 }
 
 export interface AgentSettingsPatch {
+  /** The agent's name (written to agents.name). */
+  name?: string;
   displayRole?: string;
   color?: string;
   model?: string;
@@ -91,7 +94,7 @@ interface Settings {
 }
 
 const PROJECT_FIELDS: readonly ProjectField[] = ["name", "officeName", "exportPlan", "github", "stack"];
-const AGENT_FIELDS: readonly AgentField[] = ["displayRole", "color", "model", "mode", "cli", "workspacePath", "roleMd", "resources"];
+const AGENT_FIELDS: readonly AgentField[] = ["name", "displayRole", "color", "model", "mode", "cli", "workspacePath", "roleMd", "resources"];
 
 const same = (a: unknown, b: unknown): boolean => canonicalJson(a ?? null) === canonicalJson(b ?? null);
 
@@ -104,12 +107,33 @@ class Refused {
 }
 
 export class ProjectSettings {
+  /** Inside transaction(): a refusal waits here and is written after the rollback, so it is not rolled back with it. */
+  private batch: { refusal: AuditEventInput | null } | null = null;
+
   constructor(
     private readonly db: CompanyDb,
     private readonly clock: Clock,
     private readonly audit: AuditSink,
     private readonly agents: AgentRegistry,
   ) {}
+
+  /**
+   * Runs several writes in one immediate transaction. If one is refused, all of
+   * them roll back and the settings.refused row is written afterwards.
+   */
+  transaction<T>(fn: () => T): T {
+    if (this.db.inTransaction) return fn();
+    const batch = { refusal: null as AuditEventInput | null };
+    this.batch = batch;
+    try {
+      return this.db.transaction(fn, "immediate");
+    } catch (err) {
+      if (batch.refusal) this.audit.append(batch.refusal);
+      throw err;
+    } finally {
+      this.batch = null;
+    }
+  }
 
   has(projectId: string): boolean {
     return !!this.db.prepare("SELECT 1 AS x FROM project_settings WHERE project_id = ?").get(projectId);
@@ -191,7 +215,8 @@ export class ProjectSettings {
         if (c.field === "name") this.db.prepare("UPDATE projects SET name = ? WHERE id = ?").run(String(c.after), projectId);
         else {
           const column = { officeName: "office_name", exportPlan: "export_plan", github: "github", stack: "stack_json" }[c.field];
-          const value = c.field === "exportPlan" ? (c.after ? 1 : 0) : c.field === "stack" ? JSON.stringify(c.after) : ((c.after as string | null) ?? null);
+          // An empty office name or a null stack clears the column.
+          const value = c.field === "exportPlan" ? (c.after ? 1 : 0) : c.field === "stack" ? (c.after ? JSON.stringify(c.after) : null) : (c.after as string | null) || null;
           this.db.prepare(`UPDATE project_settings SET ${column} = ?, updated_at = ? WHERE project_id = ?`).run(value, at, projectId);
         }
         this.record(by, "settings.changed", projectId, { change: "project", field: c.field });
@@ -203,7 +228,7 @@ export class ProjectSettings {
     const agent = this.mustAgent(companyId);
     const cur = this.settingsOf(agent);
     const cli = this.cliOf(companyId);
-    const current: Record<AgentField, unknown> = { ...cur, cli };
+    const current: Record<AgentField, unknown> = { ...cur, cli, name: agent.name };
     const changes = AGENT_FIELDS.filter((f) => patch[f] !== undefined && !same(current[f], patch[f])).map(
       (field): ConfigChange => ({ kind: "agent", field, before: current[field], after: patch[field] }),
     );
@@ -213,6 +238,7 @@ export class ProjectSettings {
       for (const c of changes) {
         if (c.kind !== "agent") continue;
         if (c.field === "cli") this.db.prepare("UPDATE agents SET cli = ? WHERE id = ?").run(c.after as AgentCli, companyId);
+        else if (c.field === "name") this.db.prepare("UPDATE agents SET name = ? WHERE id = ?").run(String(c.after), companyId);
         else (next as unknown as Record<string, unknown>)[c.field] = c.after;
         this.record(by, "settings.changed", companyId, { change: "agent", field: c.field });
       }
@@ -290,13 +316,15 @@ export class ProjectSettings {
     } catch (err) {
       if (!(err instanceof Refused)) throw err;
       const c = err.change;
-      this.audit.append({
+      const row: AuditEventInput = {
         actorKind: by.via === "pin" || by.via === "session" ? "human" : "hq",
         actorId: by.via === "pin" || by.via === "session" ? by.humanId : "hq",
         action: "settings.refused",
         target,
         data: { change: c.kind, ...("field" in c ? { field: c.field } : {}), ...("permission" in c ? { kind: c.permission } : {}), reason: err.reason, authority: by.via },
-      });
+      };
+      if (this.batch) this.batch.refusal ??= row;
+      else this.audit.append(row);
       throw new AuthorityError(err.reason, c);
     }
   }

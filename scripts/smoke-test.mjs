@@ -62,6 +62,12 @@ function within(ms, why, fn) {
     });
   });
 }
+// Stops a child HQ that is still running (its whole tree on Windows).
+function stop(child) {
+  if (child.exitCode !== null) return;
+  if (win) spawnSyncKill(child.pid);
+  else child.kill("SIGTERM");
+}
 function spawnSyncKill(pid) {
   try {
     execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
@@ -126,7 +132,8 @@ const second = startHq();
 let secondLog = "";
 second.stdout.on("data", (d) => (secondLog += d));
 second.stderr.on("data", (d) => (secondLog += d));
-const secondCode = await within(60_000, () => `a second HQ on port ${port} didn't exit in 60s:\n${secondLog}`, (done) => {
+// If it never exits, stop it before failing: a hung second HQ must not outlive the test.
+const secondCode = await within(60_000, () => (stop(second), `a second HQ on port ${port} didn't exit in 60s:\n${secondLog}`), (done) => {
   second.on("exit", done);
 });
 if (secondCode !== 1 || !/in use/.test(secondLog)) fail(`second HQ: expected exit 1 with "in use", got ${secondCode}:
@@ -200,6 +207,38 @@ const snap = await within(15_000, "no snapshot in 15s", (done) => {
 if (snap.welcome !== true) fail("expected the welcome screen on a fresh repo");
 step(`snapshot ok (welcome, ${snap.setup.checks.length} setup checks)`);
 for (const c of snap.setup.checks) console.log(`    ${c.status === "ok" ? "✓" : c.status === "warning" ? "!" : "✗"} ${c.label}: ${c.detail}`);
+
+// Completing the welcome needs the PIN, and writes the team to the company store, not to the repo (M0-D1).
+const welcome = await within(15_000, "the welcome got no answer in 15s", (done) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Origin: origin, Cookie: cookie } });
+  const send = (id, pin) =>
+    ws.send(JSON.stringify({ cmd: "completeWelcome", id, args: [{ lead: { name: "Lead" }, workers: [{ name: "Ana", role: "Developer" }] }], ...(pin ? { pin } : {}) }));
+  const results = {};
+  ws.on("open", () => send("w1", null));
+  ws.on("message", (raw) => {
+    const e = JSON.parse(String(raw));
+    if (e.type !== "command.result") return;
+    results[e.id] = e;
+    if (e.id === "w1") send("w2", "135790");
+    if (e.id === "w2") {
+      ws.close();
+      done(results);
+    }
+  });
+  ws.on("error", (err) => fail(`websocket: ${err.message}`));
+});
+if (welcome.w1.ok !== false || welcome.w1.error !== "pin-required") fail(`welcome without the PIN: expected pin-required, got ${JSON.stringify(welcome.w1)}`);
+if (welcome.w2.ok !== true) fail(`welcome with the PIN: ${JSON.stringify(welcome.w2)}`);
+{
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(companyDb, { readOnly: true });
+  const agents = db.prepare("SELECT count(*) AS n FROM agents").get().n;
+  const settings = db.prepare("SELECT count(*) AS n FROM project_settings").get().n;
+  db.close();
+  if (agents !== 2 || settings !== 1) fail(`expected the team in the company store, found ${agents} agents and ${settings} settings rows`);
+}
+if (existsSync(join(repo, ".jsmhq", "config.json"))) fail("HQ wrote .jsmhq/config.json into the repo");
+step("welcome completed with the PIN; the team is in the company store, not in the repo");
 
 cleanup();
 console.log("✓ smoke test passed");

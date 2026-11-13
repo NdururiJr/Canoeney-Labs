@@ -141,6 +141,8 @@ export function connectOffice() {
 export const officeActions = {
   /** Sends a command again with the approval PIN (the PIN dialog). */
   sendWithPin: (cmd: string, args: unknown[], pin: string) => source.sendWithPin?.(cmd, args, pin),
+  previewRepoImport: () => source.previewRepoImport(),
+  importRepoConfig: (sha256: string) => source.importRepoConfig(sha256),
   sendTerminalInput: (agentId: string, data: string) => source.sendTerminalInput(agentId, data),
   resizeTerminal: (agentId: string, cols: number, rows: number) => source.resizeTerminal(agentId, cols, rows),
   startAgent: (id: string) => source.startAgent(id),
