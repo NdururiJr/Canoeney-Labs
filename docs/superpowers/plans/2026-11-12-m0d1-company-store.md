@@ -111,13 +111,13 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
 | Sparse patterns (non-cone) | `/*`, `!CLAUDE.md`, `!CLAUDE.local.md`, `!AGENTS.md`, `!AGENTS.override.md`, `!ROLE.md`, `!.mcp.json`, `!.claude/`, `!.agents/`, `!.codex/` |
 | HQ's own files a repo may not commit | `.jsmhq-role.md`, `.jsmhq-hook.mjs`, `.claude/settings.local.json`, `.claude/hq-mcp.json`, `.codex/config.toml` |
 | Project notes | `CLAUDE.md` at the root of the project's repo (the owner's checkout). Only a regular file (a link is not offered), at most 20,000 characters, identified by the SHA-256 of its bytes |
-| New audit actions | `settings.changed`, `settings.refused`, `permission.granted`, `permission.revoked`, `settings.imported`, `project-notes.approved`. Each `data` carries `authority`; a decision also fills the row's `decision_id` |
+| New audit actions | `settings.changed`, `settings.refused`, `permission.granted`, `permission.revoked`, `settings.imported` (with the previewed `sha256` and counts), `project-notes.approved`. Each `data` carries `authority`; a decision also fills the row's `decision_id` |
 
 ## Review focus
 
 1. **Upgrading an install from M0-C.**
    - The store already has agent rows, but no settings, and `.jsmhq/config.json` exists.
-   - The dashboard must offer the import. Until the owner confirms it, agents show with default settings and no grants, and nothing is read from the file.
+   - The dashboard must offer the import. Until the owner confirms it, agents show with default settings and no grants. Nothing reads the file until the owner asks for the preview, and the import writes only what the preview showed.
    - Test: Task 3 `an upgraded store offers the import and grants nothing before it`.
 2. **An existing clone where an agent edited `CLAUDE.md`.** Sparse checkout leaves a modified file on disk. HQ must refuse to start the agent, not load the file quietly.
    - Test: Task 5 `a clone with local changes to CLAUDE.md does not start`.
@@ -245,7 +245,8 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
 - Create: `server/repoConfigImport.ts`, `server/repoConfigImport.test.ts`
 - Modify: `server/commands.ts`, `server/sbx.ts` (injectable `exec`, as `SbxMcp` has; `syncRules` reads grants from the store), `server/access.ts`, `server/sbxMcp.ts`, `server/dashboard.ts` (`CommandCtx.pin: boolean`), `server/sessions.ts`
 - Modify: `server/testing/hqFixture.ts` (seed through `ProjectSettings`; a `writeRepoFiles` helper), `scripts/smoke-test.mjs`
-- Modify: `src/data/types.ts` (`OfficeSnapshot.importable?: true`), `src/data/source.ts`, `src/data/ws/wsSource.ts`, `src/data/mock/mockSource.ts`, `src/ui/setup/WelcomeModal.tsx`
+- Modify: `src/data/types.ts` (`OfficeSnapshot.importable?: true`, `OfficeSnapshot.importPreview?: { sha256: string; lines: { text: string; fromFile: string[] }[]; tasks: number }`), `src/data/source.ts`, `src/data/ws/wsSource.ts`, `src/data/mock/mockSource.ts`, `src/ui/setup/WelcomeModal.tsx`
+- Create: `src/ui/setup/ImportPreview.tsx` and its markup test
 - Modify: `README.md` (the upgrade step), `docs/how-it-works.md` ("Where HQ keeps things")
 
 **Interfaces:**
@@ -264,14 +265,17 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
   - `SbxMcp.attachAll` reads the `mcp-server` grants the same way.
 - A rollback after sbx refuses a rule revokes the grant with `{ via: "hq" }`.
 - `completeWelcome` (PIN) calls `settings.create` and `settings.addAgent`.
-- `importRepoConfig()`: owner, `pin: true`. It is the only reader of `.jsmhq/config.json` and `.jsmhq/plan.json`.
+- `repoConfigImport.ts` is the only reader of `.jsmhq/config.json` and `.jsmhq/plan.json`. The owner sees what an import will write before the PIN, and the PIN binds to exactly that (D3, as `approveProjectNotes` does):
+  - `readImport(root): { sha256: string; plan: ImportPlan }`. It reads each file's bytes once. `sha256` is the SHA-256 of `JSON.stringify({ config: <hex SHA-256 of config.json>, plan: <hex SHA-256 of plan.json> | null })`. `plan` is parsed from those same bytes:
+    - `changes: ConfigChange[]`: every write the import will make. That means the workflow, stack, office name, `exportPlan` and `github` (from `project.repo`); each agent, with `syncFromConfig`'s first-import rule for the CTO; each agent's settings; and the grants from `sandbox.allow`, `sandbox.deny`, `mcp` and `skills`.
+    - `boards` and `tasks`.
+  - `previewImport(plan): ImportLine[]`, where `ImportLine = { change: ConfigChange; text: string; fromFile: string[] }`. It covers exactly the changes in `plan.changes` for which `relaxes()` is true, in the classifier's order: who the CTO is; each agent added, with its mode, CLI, chosen folder and role text; every grant; `merge.by`; review; deploy; the repo; the stack. `fromFile` holds the values taken from the file, such as names, domains, paths and role text. Because the preview and the import use the same `plan`, the preview cannot leave out a write.
+- `previewRepoImport()`: owner session, no PIN, and it writes nothing. It is refused once `settings.has(slug)`. It sets `importPreview` on the owner's snapshot, with each line's `text` and `fromFile` (the `change` stays on the server). `viewFor` drops it for the supervisor.
+- `importRepoConfig({ sha256 })`: owner, `pin: true`.
   - It is refused when `settings.has(slug)`, since the import happens once.
-  - It writes, with the PIN authority:
-    - the workflow, stack, office name, `exportPlan`, and `github` (from `project.repo`);
-    - the agents, with `syncFromConfig`'s first-import rule for the CTO;
-    - their settings, and grants from `sandbox.allow`, `sandbox.deny`, `mcp` and `skills`;
-    - the boards and tasks.
-  - It appends `settings.imported` with counts only.
+  - It calls `readImport` again. If that hash differs from `sha256`, the files changed after the owner saw them. The import is then refused with an activity line and a `settings.refused` row (`reason: "import-changed"`), and the store is unchanged. Otherwise it applies that read's `plan`, the same bytes it hashed, with the PIN authority.
+  - Each setting and grant gets its own `settings.changed` or `permission.granted` row. The import then appends `settings.imported` with `{ sha256, counts }`.
+- `resolveAccess` with `everyone` writes one `network-allow` grant for each agent that exists at that moment, each with its own row. An agent added later gets none (SR-D-11). D5, the width of a grant, is still the owner's to decide before the M1 plan and may remove this answer.
 - `Sessions.start` for an agent with no store row says "This agent is not in the company store. Add it from the dashboard." (M0-B carry-forward: the restart wording).
 
 - [ ] **Step 1: Write the failing tests**
@@ -283,10 +287,19 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
   - `SR-D-02 [T-S7.4] the import is refused without the PIN, and a second time`.
     - Without the PIN: `pin-required`, a refused row, and the store unchanged.
     - Once settings exist: refused (an activity line and a `settings.refused` row), and the store unchanged.
-  - `the import carries the team, grants, workflow and tasks into the store`.
+  - `the import carries the team, grants, workflow and tasks into the store`. Each setting and grant has its own row, and `settings.imported` carries the previewed `sha256`.
+  - `SR-D-02 [T-S7.1 T-S7.4] the import preview names every relaxing change it will write`.
+    - The file sets a builder to `mode: "local"`, allows `docs.example.com` and sets `merge.by: "lead"`. The preview's lines name all three.
+    - After the import, every `settings.changed` and `permission.granted` row whose change `relaxes()` matches one preview line, and there are as many rows as lines.
+  - `SR-D-02 [T-S7.4] an import of files that changed after the preview is refused`.
+    - Preview, then add an allowed domain to the file, then import with the previewed hash.
+    - Result: refused, a `settings.refused` row with `reason: "import-changed"`, and the store unchanged.
+  - `the import preview shows the file's values as agent text`. A markup test: `textOutside` holds none of an agent name, a domain or the role text from the file.
+  - `the supervisor's view has no import preview`.
   - `an upgraded store offers the import and grants nothing before it`.
     - Agent rows exist, but no settings, and the file exists.
-    - The snapshot has `welcome` and `importable`, the agents have no grants, and no file is read (spy on `fs.readFileSync` for that path).
+    - The snapshot has `welcome` and `importable`, and the agents have no grants.
+    - Nothing reads the file until the owner asks for the preview: spy on `fs.readFileSync` for that path.
   - `SR-D-03 [T-S7.1] each relaxing command asks for the PIN, and the store refuses it without one`.
     - Through `Dashboard.dispatch`, every relaxing command without a PIN gives `pin-required`.
     - Calling its `run` directly with `ctx.pin = false` throws `AuthorityError`.
@@ -294,11 +307,13 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
     - The fake `exec` records every `sbx policy` call.
     - With an empty `permissions` table and a config file full of domains, starting an agent issues only `localhost:<port>` and `host.docker.internal:<port>`.
     - `Sbx.wantedRules(agentId)` is empty.
-  - `SR-D-11 [T-S4.8] an agent added from the dashboard gets none of the lead's grants`.
+  - `SR-D-11 [T-S4.8] an agent added from the dashboard gets none of the lead's grants`. Also: after an access request answered for `everyone`, each existing agent has the grant, and an agent added afterwards does not.
   - `a grant sbx refuses is revoked again`. The fake `exec` fails the allow; afterwards `grants(agent)` has no active `network-allow` for that host, and a `permission.revoked` row with `authority: "hq"` exists.
 - [ ] **Step 2: Run them and confirm they fail.** Run: `pnpm test`. Expected: the new tests fail.
 - [ ] **Step 3: Implement.**
-  - The welcome modal shows **Import from .jsmhq/config.json** when `importable` is set. It goes through `sendWithPin` like the other PIN commands.
+  - When `importable` is set, the welcome modal shows **Review import from .jsmhq/config.json**, which sends `previewRepoImport`.
+  - `src/ui/setup/ImportPreview.tsx` lists the lines. Every value from the file is shown through `AgentText`, labelled ".jsmhq/config.json". Role text is preformatted, not rendered markdown.
+  - Under the list, **Import with PIN** sends `importRepoConfig({ sha256 })` through `sendWithPin`.
   - The smoke test enrolls the owner and completes the welcome with the PIN.
   - Carry-forward (CodeRabbit on PR #1): the smoke test kills the second HQ when its 60 s wait times out.
 - [ ] **Step 4: Run them and confirm they pass.** Run: `pnpm test && pnpm typecheck && pnpm build && npm pack --pack-destination pack && node scripts/smoke-test.mjs pack/*.tgz 7431`. Expected: all pass. On the smoke test, delete any old tarball in `pack/` first.
@@ -350,6 +365,7 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
 **Files:**
 - Create: `server/agentIsolation.ts`, `server/agentIsolation.test.ts`
 - Modify: `server/workspace.ts` (clone without checkout, then isolate; check a chosen folder), `server/agentFiles.ts` (drop `adoptRoleFile`'s inclusion and `RoleExtras.ownRole`, but keep removing a `ROLE.md` that an older HQ generated), `server/adapters.ts` (one refusal for tracked HQ files, replacing the Codex-only check)
+- Modify: `server/skills.ts` (`syncSkillsInto` reports what it skipped), `server/sessions.ts` (the activity line)
 - Modify: `docs/adr/0008-company-store-holds-configuration.md` (an "Agents ignore repo-carried configuration" section)
 
 **Interfaces:**
@@ -362,6 +378,11 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
   - For HQ's own clone: `git clone --no-checkout`, `isolateClone`, then populate the working tree. An existing clone is isolated again on every start.
   - For any folder: if `agentConfigOnDisk` is not empty, throw "<dir> has the repo's agent settings on disk (<first path>). HQ keeps them out of agent folders. Commit or discard the change in <dir>, then start again." For a chosen folder the message ends "Use an HQ-managed folder for this agent." instead.
   - If `trackedHqFiles` is not empty, throw: the repo commits `<path>`, which HQ writes with the agent's secret.
+- A skill name the repo tracks wins, and the agent runs without HQ's skill of that name:
+  - `syncSkillsInto` returns `{ installed: string[]; skipped: string[] }`. A path the repo tracks goes to `skipped`; today it is dropped silently.
+  - With sparse checkout the repo's copy is not on disk either, so the agent has neither copy.
+  - `prepareSkills` passes `skipped` on. `Sessions` adds one activity line per skipped skill: "The repo commits <path>, so <agent> starts without the stack's <name> skill." `<name>` comes from HQ's skill cache, not from the repo.
+  - Refusing to start the agent instead would let any PR stop every agent by committing one file. M0-F replaces the skill source, and the overview carries the question there.
 
 - [ ] **Step 1: Write the failing tests** (a real git fixture repo).
   - `SR-D-07 [T-S7.3] a clone HQ makes holds none of the repo's agent configuration`.
@@ -377,6 +398,7 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
   - `a clone with local changes to CLAUDE.md does not start`. The error names the path, and the file is kept.
   - `a chosen folder holding the repo's agent configuration is refused and left as it is`.
   - `a repo that commits one of HQ's own files is refused`, for `.claude/settings.local.json` and for `.jsmhq-role.md`.
+  - `a stack skill whose name the repo commits is skipped, and the activity says so`. The repo commits `.claude/skills/x/SKILL.md`, and the stack installs `x`. After start, neither copy is on disk, the agent starts, `skipped` holds `.claude/skills/x`, and one activity line names it.
   - `the sparse patterns and isAgentConfigPath agree`. Over the fixture's `git ls-files`, a path is outside the sparse set exactly when `isAgentConfigPath` is true.
 - [ ] **Step 2: Run them and confirm they fail.** Run: `pnpm test`. Expected: the new tests fail.
 - [ ] **Step 3: Implement.**
@@ -392,7 +414,8 @@ D1 keys every new table by project id. D2 therefore adds projects without moving
 - Modify: `server/company/index.ts` (`Company.notes`), `server/agentFiles.ts` and `server/adapters.ts` (the notes section), `server/sessions.ts` (refresh the pending notes before each start), `server/commands.ts` (`approveProjectNotes`), `server/main.ts` (the first refresh), `server/dashboard.ts` (`viewFor` drops `projectNotes`)
 - Modify: `src/data/types.ts` (`OfficeSnapshot.projectNotes?: { approved: { version: number; approvedAt: string } | null; pending: { sha256: string; text: string } | null }`, plus the `projectNotes.updated` event), `src/data/source.ts`, `src/data/ws/wsSource.ts`, `src/data/mock/mockSource.ts`
 - Modify: `src/ui/systemItems.tsx` (`ProjectNotesRow`). Create: `src/ui/drawers/ProjectNotesDrawer.tsx` and its markup test.
-- Modify: `README.md`, `docs/how-it-works.md`, ADR 0008
+- Modify: `README.md`, ADR 0008
+- Modify: `docs/how-it-works.md`: agents cannot see or change the repo's `CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/` or `.codex/` (they are outside the sparse set, and `git add` refuses them). A task like "update CLAUDE.md" therefore cannot go to an agent. The owner edits those files and approves the notes.
 
 **Interfaces:**
 - `ProjectNotes`:
