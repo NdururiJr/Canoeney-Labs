@@ -7,6 +7,7 @@ import { DrawerHeader } from "./Drawer";
 import { safeHref } from "../agentText";
 import { AgentMarkdown, AgentText } from "../agentText";
 import { NeedsYouRow } from "../systemItems";
+import { ProjectNotesDrawer } from "./ProjectNotesDrawer";
 
 /** Everything waiting on the user: agents' action items first, then the other things that need them. */
 export function ActionItemsDrawer() {
@@ -31,6 +32,12 @@ export function ActionItemsDrawer() {
         <span className="text-[13px] text-muted">{a.total ? `${a.total} waiting on you` : "Nothing waiting on you"}</span>
       </DrawerHeader>
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-4">
+        {snap.projectNotes?.pending && (
+          <>
+            <SectionTitle>Project notes</SectionTitle>
+            <ProjectNotesDrawer notes={snap.projectNotes} repo={snap.config.project.repo || snap.config.project.name} onApprove={(sha) => officeActions.approveProjectNotes(sha)} />
+          </>
+        )}
         <SectionTitle>From agents</SectionTitle>
         {open.length === 0 ? (
           <p className="mb-4 text-[13px] text-muted">No requests. When an agent needs you to do something outside its sandbox, it shows up here.</p>

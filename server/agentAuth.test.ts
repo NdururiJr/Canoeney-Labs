@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import WebSocket from "ws";
 import { hook, makeHq, mcpCall, ORIGIN, type Hq } from "./testing/hqFixture";
@@ -90,7 +90,17 @@ test("SR-B-03 [T-S1.1 T-S2.1] the old project token is refused and no agent-toke
   const old = "0123456789abcdef".repeat(3);
   assert.equal((await hook(hq, old, "ana", "SessionStart")).status, 401);
   assert.equal((await mcpCall(hq, old, "get_my_task", {}, { "x-hq-agent": "ana" })).status, 401);
-  assert.equal(existsSync(join(homedir(), ".jsmhq", hq.slug, "agent-token")), false);
+  hq.secretFor("ana"); // issuing a real secret writes no file under HQ's home either
+  // The fixture's HQ_HOME is fresh: list every file under it and under the company home.
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    if (!existsSync(dir)) return;
+    for (const e of readdirSync(dir, { withFileTypes: true })) (e.isDirectory() ? walk : (p: string) => files.push(p))(join(dir, e.name));
+  };
+  walk(process.env.HQ_HOME!);
+  walk(hq.companyHomeDir);
+  assert.ok(process.env.HQ_HOME?.startsWith(hq.scratch), "HQ_HOME is the fixture's own");
+  assert.deepEqual(files.filter((f) => basename(f) === "agent-token"), []);
 });
 
 test("SR-B-04 [T-S1.4] every failure gets the same response", async (t) => {

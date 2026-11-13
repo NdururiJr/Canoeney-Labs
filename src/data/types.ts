@@ -161,6 +161,8 @@ export interface Task {
   files?: string[]; // the only files this task may edit
   doneWhen?: string; // acceptance criteria
   note?: string | null; // e.g. why it's blocked
+  /** Who created it: an agent id, or "you" for the owner. Its title is quoted as theirs. */
+  createdBy?: string;
 }
 
 export type ReviewState = "pending" | "reviewing" | "changes-requested" | "passed";
@@ -338,6 +340,12 @@ export interface SetupState {
 export interface OfficeSnapshot {
   /** True until the first-run welcome is finished for this repo (real HQ only). */
   welcome?: boolean;
+  /** The repo has a .jsmhq/config.json from before M0-D1 that the owner can import (it is not read until then). */
+  importable?: true;
+  /** What an import would write, shown to the owner before the PIN (never to a supervisor). */
+  importPreview?: ImportPreview;
+  /** The project notes (CLAUDE.md) agents read: the approved version, and a changed copy awaiting the owner (owner only). */
+  projectNotes?: ProjectNotesState;
   setup: SetupState;
   sbx: SbxState;
   config: HqConfig;
@@ -396,4 +404,25 @@ export interface WorkflowPatch {
   review?: Partial<WorkflowConfig["review"]>;
   merge?: Partial<WorkflowConfig["merge"]>;
   deploy?: Partial<WorkflowConfig["deploy"]>;
+}
+
+/** One change an import would make that relaxes a control. `fromFile` holds the values taken from the file: show them as agent text. */
+export interface ImportLine {
+  text: string;
+  fromFile: string[];
+}
+
+/** The owner's preview of a repo config import. The PIN confirms exactly this `sha256`. */
+export interface ImportPreview {
+  sha256: string;
+  lines: ImportLine[];
+  /** Each board's task titles, from the file (agent text). */
+  boards: { title: string; tasks: string[] }[];
+  tasks: number;
+}
+
+/** The owner approves exactly `pending.text` (its `sha256`); agents read only the approved version. */
+export interface ProjectNotesState {
+  approved: { version: number; approvedAt: string } | null;
+  pending: { sha256: string; text: string } | null;
 }

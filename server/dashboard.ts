@@ -19,6 +19,8 @@ export interface CommandCtx {
   role: HumanRole;
   remote: boolean;
   sessionId: string;
+  /** True only when dispatch checked the owner's PIN for this call. Store writes then carry the PIN authority (M0-D1). */
+  pin?: boolean;
 }
 
 export interface CommandSpec {
@@ -117,7 +119,8 @@ export class Dashboard {
     if (spec.audit === "collapsed") this.countCollapsed(ctx, cmd, target);
     else if (!this.tryAppend(ctx, "dashboard.command", target, { cmd, outcome: "run" })) return { ok: false, error: "failed" };
     try {
-      await spec.run(ctx, ...args);
+      // The PIN authority is set here and only here; a caller's own `pin` is never trusted.
+      await spec.run({ ...ctx, pin: needsPin }, ...args);
       return { ok: true };
     } catch (err) {
       // A failure's text never reaches the reply or the audit row, and for a command that takes a secret not even the log.
@@ -190,7 +193,7 @@ function safe<T>(fn: () => T): T | null {
 // ---------------------------------------------------------------- What a role sees (SR-C-09)
 
 /** Events a supervisor never receives: terminal output and the owner's machine, sandbox and access state. */
-const OWNER_ONLY_EVENTS = new Set(["terminal.output", "workspace.info", "sbx.updated", "mcp.updated", "setup.updated", "access.updated"]);
+const OWNER_ONLY_EVENTS = new Set(["terminal.output", "workspace.info", "sbx.updated", "mcp.updated", "setup.updated", "access.updated", "projectNotes.updated"]);
 
 /** A supervisor's view of the team: an explicit keep-list, so a new field is owner-only until it is listed here. */
 function teamForSupervisor(team: AgentConfig[]): Partial<AgentConfig>[] {

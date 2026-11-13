@@ -467,6 +467,11 @@ export function createMockSource(): OfficeDataSource {
       shellOut(`shell:${id}`, "\r\n\x1b[2m[shell closed]\x1b[0m\r\n");
     },
 
+    previewRepoImport() {
+      // The demo has no repo files to import.
+    },
+    importRepoConfig() {},
+    approveProjectNotes() {},
     completeWelcome() {
       // The demo never shows the welcome screen.
     },

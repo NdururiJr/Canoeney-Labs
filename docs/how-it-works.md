@@ -29,8 +29,17 @@ New teams get names from The Office: Michael leads, then Dwight, Jim, Pam and so
 ## Workspaces and sessions
 
 - **Its own copy of the repo.** Each agent gets a full clone at `~/.jsmhq/<project>/<agent>/`. Your own working folder is never touched.
-- **Its instructions.** HQ writes `.jsmhq-role.md` into that folder: the agent's role (the ROLE.md text from Settings → Team), the team, the rules and its tools. HQ also adds its hooks and MCP config there, and keeps all of these out of git. If the folder has its own `ROLE.md`, HQ includes it and never overwrites it.
+- **Its instructions.** HQ writes `.jsmhq-role.md` into that folder: the agent's role (the ROLE.md text from Settings → Team), the team, the rules and its tools. HQ also adds its hooks and MCP config there, and keeps all of these out of git. The clone leaves out the repo's own agent settings (`CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/`, `.codex/`), so a pull request can't change what every agent is told or may run.
 - **Its session.** On macOS and Linux each agent runs in a tmux session called `hq-<project>-<agent>`, so agents keep working if you close HQ or the browser. You can watch one from any terminal with `tmux attach -t hq-<project>-<agent>`, or open its drawer in HQ.
+
+## Project notes (`CLAUDE.md`)
+
+Agents never load the repo's own agent settings. The clone leaves out `CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/` and `.codex/` at any depth. A pull request that changes one of them changes no agent.
+
+- **Agents read `CLAUDE.md` only as the copy you approved.** When the repo's `CLAUDE.md` is new or has changed, **Action items** shows its text (as text an agent may have written, not rendered) with **Approve with PIN**. Approved copies are numbered and kept. Agents get the latest one in their role at their next start, for Claude Code and Codex alike. Until you approve, they keep the previous version, or have no project notes.
+- **What HQ offers:** only a regular file at the repo's root, of at most 20,000 characters. A link is not offered. If the file changes between your reading it and your PIN, the approval is refused: read it again.
+- **Agents can't see or change these files.** They are outside the agent's checkout, and `git add` refuses them there. So a task such as "update CLAUDE.md" can't go to an agent: edit the file yourself, then approve the new version.
+- **A skill the repo commits under `.claude/skills/` or `.agents/skills/`** isn't installed. If the stack has a skill with the same name, the agent starts without it, and the activity feed says so.
 
 ## Messages between agents
 
@@ -56,10 +65,10 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 - **One secret per agent.** Each time HQ starts an agent's session, it gives that agent a new secret and the previous one stops working. HQ writes it only into the agent's own MCP config and hook settings, which only you can read and which git ignores. HQ itself keeps only a fingerprint (a SHA-256 hash), so its records hold nothing an agent could use.
 - **Who is calling comes from the secret.** HQ decides which agent made a request from its secret alone. An agent name in a hook's address or an `X-HQ-Agent` header must match it, or the request is refused. Every refusal looks the same, whatever went wrong, and failed attempts are recorded.
 - **Stopping, pausing or removing an agent** ends its secret at once. If HQ restarts while agents keep running in tmux, it reconnects to them and leaves their secrets and files as they are. An agent started by an HQ from before per-agent secrets is shown in the activity feed: restart it once so it gets its own.
-- **Roles come from the company store.** The lead is the project's CTO and the others are builders. The first time HQ registers a project's team, the agent marked lead in `.jsmhq/config.json` becomes the CTO. After that, editing `isLead` in that file changes nothing: it is shown in the UI only.
+- **Roles come from the company store.** The lead is the project's CTO and the others are builders. The welcome screen, or a one-time import of an older `.jsmhq/config.json`, sets who the CTO is. Nothing in the repository changes it afterwards.
 - **Each role has its own tools.** The CTO plans and assigns (boards, tasks, the team's status). Builders work on their own task: `get_my_task`, `set_my_status`, `send_message`, `ask_user` and `request_access`. A tool outside the role is refused before it runs.
 - **Every tool call is recorded** in the company store's audit trail, with the agent that made it. If HQ can't record a call, it doesn't carry it out. Free text (messages, notes, descriptions) is recorded as its length, not its content.
-- **Two repos with the same project id** can't share one company store: the second HQ stops and asks you to change `project.id` in one repo's `.jsmhq/config.json`. A repo you moved is recognised as the same project.
+- **The project id comes from the company store.** A new repo gets its folder name; a second repo with the same folder name gets `-2`, `-3` and so on. A repo you moved is recognised as the same project. `project.id` in an old `.jsmhq/config.json` is ignored.
 
 ## GitHub and reviews
 
@@ -147,12 +156,15 @@ HQ never stores key values and never reads your env files.
 
 ## What HQ saves, and where
 
-| File | What | Commit it? |
+| Where | What | Commit it? |
 | --- | --- | --- |
-| `.jsmhq/config.json` (in your repo) | Team, workflow, stack, office name | Yes, so your team shares it |
-| `.jsmhq/plan.json` (in your repo) | Boards and tasks | Yes |
-| `docs/plan.md` (in your repo) | A readable copy of the plan, if **Settings → Project → Export plan** is on | Yes |
-| `~/.jsmhq/<project>/` | Agents' folders, app variables, action items and HQ's own records | No, it's outside your repo, on your machine only |
+| The company store (`~/.jsmhq/_company/company.db`) | The team, each agent's settings and permissions, the workflow, the stack, and the boards and tasks | No: it's outside your repo, on your machine only |
+| `docs/plan.md` (in your repo) | A readable copy of the plan, if **Settings → Project → Export plan** is on. HQ writes it and never reads it | Yes |
+| `~/.jsmhq/<project>/` | Agents' folders, app variables, action items and HQ's own records | No: it's outside your repo, on your machine only |
+
+**Why not in the repo?** An agent can change any file in the repo through a pull request. If the team and its permissions lived there, one merged PR could make a builder the lead, open its sandbox to any site, or let the lead merge. So HQ reads none of it from the repo. Every change goes through the dashboard, and anything that loosens a control (a new site, an MCP server, Local mode, review off, the lead merging, a new agent) asks for your PIN.
+
+**Upgrading from an older HQ:** an older HQ kept the team in `.jsmhq/config.json` and the tasks in `.jsmhq/plan.json`. HQ no longer reads them by itself. The welcome screen offers **Review import from .jsmhq/config.json**: it lists everything the import would loosen, with the file's values shown as text an agent may have written. Import it with your PIN, or set up a new team instead. If the file changes after you review it, the import is refused, so review it again. The import runs once. Afterwards you can delete the two files.
 
 **Remove a project:** delete each agent in Settings → Team (this removes its sandbox and, if you choose, its folder), then delete `~/.jsmhq/<project>`.
 
@@ -162,7 +174,7 @@ HQ keeps a company record, separate from the per-project folders above, in `~/.j
 
 It holds the company data model, a tamper-evident audit chain of what happened and who did it, agent and client memory, company knowledge, and the alert outbox the dashboard reads.
 
-HQ never gives agents its path, and it refuses to start an agent whose folder is the store or inside it (agent ids must be lower-case letters, digits and `-`, so a managed folder can't point there either). Agent settings still live in the repository's `.jsmhq/config.json`; moving them out of the repository is plan M0-D. HQ refuses to open the store inside a repository, so it can't be committed by accident. On macOS and Linux the folder is private to you (`0700`), and so is the file (`0600`).
+HQ never gives agents its path, and it refuses to start an agent whose folder is the store or inside it (agent ids must be lower-case letters, digits and `-`, so a managed folder can't point there either). The team, the agents' settings and permissions, and the tasks live in the store too (see above). HQ refuses to open the store inside a repository, so it can't be committed by accident. On macOS and Linux the folder is private to you (`0700`), and so is the file (`0600`).
 
 HQ records when it starts and stops. If the store was written by a newer HQ, this HQ stops with a message asking you to update.
 

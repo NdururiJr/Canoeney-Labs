@@ -78,11 +78,18 @@ function readOwned(slug: string, workspace: string): string[] {
 export const hasHqSkills = (slug: string, workspace: string) => readOwned(slug, workspace).length > 0;
 
 /** Copies the cached skills into an agent's folder and removes ones HQ added before that the stack dropped. */
-export async function syncSkillsInto(slug: string, workspace: string): Promise<string[]> {
+/**
+ * A skill name the repo tracks wins: HQ does not install its own copy over a
+ * tracked path. With sparse checkout the repo's copy is not on disk either, so
+ * the agent starts without that skill, and `skipped` names it (D1; M0-F
+ * replaces the skill source).
+ */
+export async function syncSkillsInto(slug: string, workspace: string): Promise<{ installed: string[]; skipped: string[] }> {
   const before = readOwned(slug, workspace);
   const tracked = async (rel: string) => (await run("git", ["ls-files", "--error-unmatch", rel], { cwd: workspace })).ok;
   const inside = (rel: string) => SAFE.test(rel) && resolve(workspace, rel).startsWith(resolve(workspace) + sep);
   const now: string[] = [];
+  const skipped: string[] = [];
   const there = (rel: string) => {
     try {
       lstatSync(agentPath(workspace, rel));
@@ -99,7 +106,10 @@ export async function syncSkillsInto(slug: string, workspace: string): Promise<s
       const rel = `${sub}/${name}`;
       if (!inside(rel)) continue;
       // Never touch a skill the repo commits, or one that's already there and isn't HQ's.
-      if (await tracked(rel)) continue;
+      if (await tracked(rel)) {
+        skipped.push(rel);
+        continue;
+      }
       if (there(rel) && !before.includes(rel)) continue;
       agentRemove(workspace, rel); // removes a symlink itself, never its target
       cpSync(join(from, name), agentPath(workspace, rel), { recursive: true });
@@ -117,18 +127,22 @@ export async function syncSkillsInto(slug: string, workspace: string): Promise<s
   mkdirSync(join(projectHome(slug), "skills-owned"), { recursive: true });
   writeFileSync(ownedFile(slug, workspace), JSON.stringify(now));
   excludeFromGit(workspace, now);
-  return now;
+  return { installed: now, skipped };
 }
 
 /** Install (if needed) and copy into the workspace. Never fails the agent's start. */
-export async function prepareSkills(slug: string, workspace: string, specs: SkillSpec[]): Promise<{ count: number; error: string | null }> {
+export async function prepareSkills(slug: string, workspace: string, specs: SkillSpec[]): Promise<{ count: number; error: string | null; skipped: string[] }> {
   try {
     await ensureSkillCache(slug, specs);
-    const copied = await syncSkillsInto(slug, workspace);
-    return { count: copied.filter((p) => p.startsWith(".claude/")).length, error: null };
+    const { installed, skipped } = await syncSkillsInto(slug, workspace);
+    return { count: installed.filter((p) => p.startsWith(".claude/")).length, error: null, skipped };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`skills: ${msg}`);
-    return { count: 0, error: msg };
+    return { count: 0, error: msg, skipped: [] };
   }
 }
+
+/** The activity line for a stack skill the repo shadows. The name comes from HQ's cache path, not from the repo. */
+export const skillSkippedText = (agentName: string, rel: string): string =>
+  `The repo commits ${rel}, so ${agentName} starts without the stack's ${rel.split("/").pop()} skill.`;

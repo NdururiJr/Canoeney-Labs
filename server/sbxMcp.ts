@@ -8,6 +8,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer, McpState, NewMcpServer } from "../src/data/types";
+import type { Company } from "./company";
+import { companyAgentId } from "./company/agents";
+import type { Authority } from "./company/authority";
 import type { Hub } from "./hub";
 import { run } from "./lib/exec";
 import { parseCliJson } from "./lib/json";
@@ -30,6 +33,8 @@ export class SbxMcp {
     private runTerminal: RunTerminal,
     /** Runs sbx; tests pass a fake. */
     private exec: typeof run = run,
+    /** Where an agent's servers are recorded, as mcp-server grants (M0-D1). */
+    private company: Company | null = null,
   ) {
     this.attachedFile = join(projectHome(hub.slug), "mcp-attached.json");
     try {
@@ -113,7 +118,7 @@ export class SbxMcp {
   }
 
   /** Unregisters a server from sbx (every sandbox on this machine), and from every agent. */
-  remove(name: string) {
+  remove(name: string, by: Authority = { via: "hq" }) {
     return this.serial(async () => {
       if (!MCP_NAME.test(name)) return;
       const r = await this.exec("sbx", ["mcp", "rm", name, "--force"], { timeoutMs: 30_000 });
@@ -126,10 +131,7 @@ export class SbxMcp {
       for (const secret of [`mcp:${name}:token`, `mcp:${name}:token:endpoint`]) await this.exec("sbx", ["secret", "rm", secret, "--force"], { timeoutMs: 15_000 });
       let changed = false;
       for (const a of this.hub.snap.config.team)
-        if (a.mcp?.includes(name)) {
-          a.mcp = a.mcp.filter((n) => n !== name);
-          changed = true;
-        }
+        if (a.mcp?.includes(name)) changed = this.settings().revoke(companyAgentId(this.hub.slug, a.id), "mcp-server", name, by) || changed;
       if (changed) this.hub.configChanged();
       for (const id of Object.keys(this.state.attached)) this.state.attached[id] = this.state.attached[id].filter((n) => n !== name);
       this.saveAttached();
@@ -139,13 +141,14 @@ export class SbxMcp {
   }
 
   /** Which servers an agent gets. New ones are attached now if its sandbox is running. */
-  setAgent(agentId: string, names: string[]) {
+  setAgent(agentId: string, names: string[], by: Authority) {
     return this.serial(async () => {
       const agent = this.hub.cfg(agentId);
       if (!agent) return;
       const want = [...new Set(names.map((n) => n.trim().toLowerCase()).filter((n) => MCP_NAME.test(n)))];
       const before = agent.mcp ?? [];
-      agent.mcp = want;
+      // Each server added needs the PIN or a decision; the store refuses it otherwise (SR-D-03).
+      this.settings().setGrants(companyAgentId(this.hub.slug, agentId), "mcp-server", want, by);
       this.hub.configChanged();
       const running = agent.mode === "sandbox" && this.hub.status(agentId)?.session.state === "running";
       if (running) await this.attach(agentId, want.filter((n) => !before.includes(n)));
@@ -160,7 +163,12 @@ export class SbxMcp {
     });
   }
 
-  /** The agent's sandbox just started: attach its servers. */
+  private settings() {
+    if (!this.company) throw new Error("SbxMcp has no company store.");
+    return this.company.settings;
+  }
+
+  /** The agent's sandbox just started: attach the servers its grants name (SR-D-10). */
   attachAll(agentId: string) {
     return this.serial(async () => {
       const agent = this.hub.cfg(agentId);

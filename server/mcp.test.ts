@@ -260,3 +260,67 @@ test("SR-B-21 [T-S1.12 T-S2.6] the per-secret limit counts calls, not requests",
   assert.equal(hq.company.audit.query({ action: "auth.rate-limited", limit: 1000 }).length, 1);
   assert.ok(!(await mcpCall(hq, hq.secretFor("ben"), "get_my_task")).json?.error);
 });
+
+/** The tool.called rows of one tool, oldest first. */
+const callsOf = (hq: Hq, tool: string) => hq.company.audit.query({ action: "tool.called", limit: 1000 }).filter((e) => e.data.tool === tool);
+const storedTask = (hq: Hq, id: string) => hq.company.plans.load(hq.slug).tasks.find((x) => x.id === id);
+
+test("SR-B-12 [T-X1.3] a task change whose store write fails changes nothing", async (t) => {
+  const hq = await makeHq(t);
+  const task = taskFor(hq, "ana");
+  const before = JSON.stringify(hq.planner.task(task.id));
+  const stored = JSON.stringify(storedTask(hq, task.id));
+  hq.company.plans.putTask = () => {
+    throw new Error("disk full");
+  };
+  const r = await mcpCall(hq, hq.secretFor("lead"), "update_task", { taskId: task.id, title: "Renamed", status: "blocked" });
+  assert.match(resultText(r), /disk full/);
+  assert.equal(JSON.stringify(hq.planner.task(task.id)), before);
+  assert.equal(JSON.stringify(storedTask(hq, task.id)), stored);
+  const rows = callsOf(hq, "update_task");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].data.outcome, "error");
+});
+
+test("SR-D-08 [T-S7.7] a builder's set_my_status done leaves the task in review", async (t) => {
+  const hq = await makeHq(t);
+  const task = taskFor(hq, "ana");
+  await mcpCall(hq, hq.secretFor("ana"), "set_my_status", { status: "in-review", prNumber: 12 });
+  assert.equal(hq.planner.task(task.id)?.status, "in-review");
+
+  const r = await mcpCall(hq, hq.secretFor("ana"), "set_my_status", { status: "done" });
+  assert.equal(resultText(r), "HQ marks a task done when its PR is merged. Call set_my_status in-review with the PR number.");
+  assert.equal(hq.planner.task(task.id)?.status, "in-review");
+  assert.equal(storedTask(hq, task.id)?.status, "in-review");
+  assert.equal(storedTask(hq, task.id)?.prNumber, 12);
+  assert.equal(callsOf(hq, "set_my_status").at(-1)?.data.outcome, "error");
+});
+
+test("the CTO can still close a task with update_task", async (t) => {
+  const hq = await makeHq(t);
+  const task = taskFor(hq, "ana");
+  const r = await mcpCall(hq, hq.secretFor("lead"), "update_task", { taskId: task.id, status: "done" });
+  assert.ok(!r.json?.error, resultText(r));
+  assert.equal(hq.planner.task(task.id)?.status, "done");
+  assert.equal(storedTask(hq, task.id)?.status, "done");
+});
+
+test("a merged PR marks its task done in the store", async (t) => {
+  const hq = await makeHq(t);
+  const task = taskFor(hq, "ben");
+  const sync = new GitHubSync(hq.hub, hq.planner, "owner/repo") as unknown as { syncTask(pr: PullRequest): void };
+  const pr = { number: 9, title: "[T] x", authorId: "ben", taskId: task.id, review: "passed", merged: true, closed: false, openComments: 0 } as unknown as PullRequest;
+  sync.syncTask(pr);
+  assert.equal(storedTask(hq, task.id)?.status, "done");
+  assert.equal(storedTask(hq, task.id)?.prNumber, 9);
+});
+
+test("an assigned task's title is quoted as written by whoever created it", async (t) => {
+  const hq = await makeHq(t);
+  const task = hq.planner.createTask({ title: "Make the logo bigger" }, "lead");
+  hq.planner.assign(task.id, "ana", "you");
+  const ev = hq.hub.snap.activity.find((e) => e.type === "task.assigned");
+  assert.equal(ev?.quote?.text, "Make the logo bigger");
+  assert.equal(ev?.quote?.author, "Lead");
+  assert.equal(storedTask(hq, task.id)?.createdBy, "lead");
+});

@@ -9,6 +9,15 @@ export const HQ_DIRNAME = ".jsmhq";
 export const COMPANY_DIRNAME = "_company";
 
 /**
+ * HQ's per-user folder: ~/.jsmhq, or HQ_HOME when set (tests set it to a
+ * temporary folder). Agents' managed clones and HQ's per-project records live
+ * here. Not created by this call.
+ */
+export function hqHome(): string {
+  return process.env.HQ_HOME || join(homedir(), HQ_DIRNAME);
+}
+
+/**
  * Where the company store lives: ~/.jsmhq/_company, or HQ_COMPANY_HOME when set
  * (tests and scripts/smoke-test.mjs set it to a temporary folder). openCompany
  * refuses a home inside the repository, and workspaceFor refuses an agent

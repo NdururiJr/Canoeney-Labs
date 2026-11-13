@@ -6,6 +6,7 @@ import { officeActions, reviewToolLabel, useOffice } from "../../store/office";
 import { agentPalette } from "../../theme/tokens";
 import { Field, Portrait } from "../kit";
 import { CliSelect, ROLE_SUGGESTIONS } from "../settings/TeamSettings";
+import { ImportPreview } from "./ImportPreview";
 
 interface WorkerDraft {
   name: string;
@@ -51,6 +52,22 @@ export function WelcomeModal() {
         </div>
 
         <div className="scroll-thin flex min-h-0 flex-col gap-4 overflow-y-auto px-4 py-3">
+          {snap.importable && (
+            <section className="flex flex-col gap-2">
+              <p className="m-0 text-[14px]">
+                This repo has team settings from an older HQ (<code>.jsmhq/config.json</code>). HQ no longer reads them by itself. Review them and import them with your PIN, or set up a new team below.
+              </p>
+              {snap.importPreview ? (
+                <ImportPreview preview={snap.importPreview} onImport={() => officeActions.importRepoConfig(snap.importPreview!.sha256)} />
+              ) : (
+                <div>
+                  <button className="btn" onClick={() => officeActions.previewRepoImport()}>
+                    Review import from .jsmhq/config.json
+                  </button>
+                </div>
+              )}
+            </section>
+          )}
           <Field label="Project name">
             <input className="field w-full" value={projectName} maxLength={80} onChange={(e) => setProjectName(e.target.value)} />
           </Field>

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { AgentRegistry, ProjectIdTakenError, companyAgentId } from "./agents";
+import { AgentRegistry, companyAgentId } from "./agents";
 import { AgentSecrets } from "./agentSecrets";
 import { SqliteAuditSink } from "./audit";
 import { FakeClock } from "./clock";
@@ -112,22 +112,27 @@ test("register refuses an id that is already registered, in any status", (t) => 
   assert.throws(() => agents.register("alpha", member("ana"), "builder", DASHBOARD_ACTOR, "dashboard"));
 });
 
-test("a second repo with the same project id is refused", (t) => {
+test("the store picks the project id: a repo keeps its id, a second repo of the same name gets the next one, a moved repo keeps its own", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "hq projects "));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const [a, b, c] = ["repo a", "repo b", "repo c"].map((n) => join(dir, n));
   for (const p of [a, b, c]) mkdirSync(p);
   const { agents, audit, db } = fresh(t, []);
-  agents.ensureProject({ slug: "alpha", name: "alpha", root: a });
-  agents.ensureProject({ slug: "alpha", name: "alpha", root: a }); // same root: nothing happens
-  assert.throws(() => agents.ensureProject({ slug: "alpha", name: "alpha", root: b }), ProjectIdTakenError);
+  assert.equal(agents.ensureProject({ slug: "alpha", name: "alpha", root: a }), "alpha");
+  assert.equal(agents.ensureProject({ slug: "alpha", name: "alpha", root: a }), "alpha"); // same root: nothing happens
+  assert.equal(agents.ensureProject({ slug: "alpha", name: "alpha", root: b }), "alpha-2"); // repo a still exists
+  assert.equal(agents.projectForRoot(b), "alpha-2");
   rmSync(a, { recursive: true });
-  agents.ensureProject({ slug: "alpha", name: "alpha", root: c });
+  assert.equal(agents.ensureProject({ slug: "alpha", name: "alpha", root: c }), "alpha"); // a was moved to c
   assert.equal(db.prepare("SELECT repo FROM projects WHERE id = 'alpha'").get<{ repo: string }>()?.repo, c);
   const moved = audit.query({ action: "project.moved" });
   assert.equal(moved.length, 1);
   assert.deepEqual(moved[0].data, { from: a, to: c });
-  assert.equal(audit.query({ action: "project.registered" }).length, 1);
+  assert.equal(audit.query({ action: "project.registered" }).length, 2);
+  // With no slug given, the id is the folder name.
+  const d = join(dir, "My Repo!");
+  mkdirSync(d);
+  assert.equal(agents.ensureProject({ name: "x", root: d }), "my-repo");
 });
 
 test("SR-B-08 [T-S1.3 T-X2.13] pausing revokes in the same transaction", (t) => {

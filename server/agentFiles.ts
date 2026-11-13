@@ -26,27 +26,28 @@ export const HQ_FILES = [ROLE_FILE, ".claude/settings.local.json", MCP_CONFIG, H
 export interface RoleExtras {
   role: RoleId;
   ctoId: string | null;
-  ownRole?: string | null;
   hasEnvFile?: boolean;
+  /** The project notes the owner last approved (never the repo's file itself: D1, SR-D-07). */
+  notes?: { version: number; content: string } | null;
 }
 
 /** HQ ≤ 0.3 wrote its role to ROLE.md; recognise that so it can be cleaned up. */
 const isHqRole = (text: string) => text.includes("## Team MCP (server `hq`)") && text.includes("You are managed by JSM HQ.");
 
 /**
- * The folder's own ROLE.md, if it has one (it's included in the generated role). A ROLE.md that an
- * older HQ generated there is removed, along with the exclude line HQ added for it.
+ * Removes a ROLE.md that an older HQ generated in the folder, with the exclude
+ * line HQ added for it. The repo's own ROLE.md is never read (D1, SR-D-07): the
+ * role comes from the company store, and the project's notes only as the copy
+ * the owner approved.
  */
-export async function adoptRoleFile(dir: string): Promise<string | null> {
+export async function removeOldRoleFile(dir: string): Promise<void> {
   const text = agentRead(dir, "ROLE.md");
-  if (text === null) return null;
-  if (!isHqRole(text)) return text.slice(0, 20_000);
+  if (text === null || !isHqRole(text)) return;
   const tracked = await run("git", ["ls-files", "--error-unmatch", "ROLE.md"], { cwd: dir });
   if (!tracked.ok) {
     agentRemove(dir, "ROLE.md");
     removeFromExclude(dir, ["ROLE.md"]);
   }
-  return null;
 }
 export const MARK = "# jsmhq-hook";
 /** Same marker for node hook commands (cmd and PowerShell have no `#` comments). */
@@ -154,6 +155,7 @@ export function roleMd(agent: AgentConfig, cfg: HqConfig, extras: RoleExtras): s
     "## Rules",
     ...rules.map((r) => `- ${r}`),
     "",
+    ...(extras.notes ? [`## Project notes (CLAUDE.md, version ${extras.notes.version}, approved by the owner)`, extras.notes.content.trim(), ""] : []),
     ...(stackRoleMd(cfg.stack) ? [stackRoleMd(cfg.stack), ""] : []),
     ...(extras.hasEnvFile
       ? [
@@ -162,7 +164,6 @@ export function roleMd(agent: AgentConfig, cfg: HqConfig, extras: RoleExtras): s
           "",
         ]
       : []),
-    ...(extras.ownRole?.trim() ? ["## From ROLE.md in this folder", extras.ownRole.trim(), ""] : []),
     "## Team MCP (server `hq`)",
     `Your tools: ${tools}.`,
     "Messages that start with `[HQ]` come from JSM HQ: assignments from the lead, or messages from teammates. Act on them.",

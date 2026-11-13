@@ -3,7 +3,11 @@
 // Allow adds a per-sandbox rule (the base policy is never touched).
 
 import type { AccessDecision, AccessRequest } from "../src/data/types";
+import type { Company } from "./company";
+import { companyAgentId } from "./company/agents";
+import type { Authority } from "./company/authority";
 import type { Hub } from "./hub";
+import { log } from "./lib/log";
 import type { Planner } from "./planner";
 import type { Sbx } from "./sbx";
 
@@ -51,13 +55,13 @@ export function requestAccess(hub: Hub, agentId: string, rawDomain: string, reas
 let queue: Promise<void> = Promise.resolve();
 
 /** Your answer: allow for that agent, for every sandboxed agent, or deny. */
-export function resolveAccess(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, decision: AccessDecision): Promise<void> {
-  const next = queue.then(() => answer(hub, sbx, planner, requestId, decision));
+export function resolveAccess(hub: Hub, sbx: Sbx, planner: Planner, company: Company, requestId: string, decision: AccessDecision, by: Authority): Promise<void> {
+  const next = queue.then(() => answer(hub, sbx, planner, company, requestId, decision, by));
   queue = next.catch(() => {});
   return next;
 }
 
-async function answer(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, decision: AccessDecision) {
+async function answer(hub: Hub, sbx: Sbx, planner: Planner, company: Company, requestId: string, decision: AccessDecision, by: Authority) {
   const req = hub.snap.accessRequests?.find((r) => r.id === requestId);
   if (!req || req.status !== "pending") return;
   const who = hub.name(req.agentId);
@@ -74,15 +78,11 @@ async function answer(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, d
     return;
   }
 
+  // "everyone" means one grant for each sandboxed agent that exists now; an agent added later gets none (SR-D-11).
   const ids = decision === "everyone" ? hub.snap.config.team.filter((a) => a.mode === "sandbox").map((a) => a.id) : [req.agentId];
-  const added: string[] = [];
-  for (const id of ids) {
-    const a = hub.cfg(id);
-    if (a && !a.sandbox.allow.includes(req.domain)) {
-      a.sandbox.allow = [...a.sandbox.allow, req.domain];
-      added.push(id);
-    }
-  }
+  const cid = (id: string) => companyAgentId(hub.slug, id);
+  // Each grant needs the PIN or a decision; the store refuses it otherwise (SR-D-03).
+  const added = company.settings.transaction(() => ids.filter((id) => company.settings.grant(cid(id), "network-allow", req.domain, by)));
   hub.configChanged();
 
   // Applies the per-sandbox rules (only sandboxes that exist; others get them when they start).
@@ -95,14 +95,14 @@ async function answer(hub: Hub, sbx: Sbx, planner: Planner, requestId: string, d
   if (thrown) failure = thrown.reason instanceof Error ? thrown.reason.message : String(thrown.reason);
   else if (bad) failure = `${hub.name(bad)}: ${sbx.state.agents[bad]?.syncError}`;
   if (failure) {
-    for (const id of added) {
-      const a = hub.cfg(id);
-      if (a) a.sandbox.allow = a.sandbox.allow.filter((d) => d !== req.domain);
-    }
+    // sbx refused it somewhere: HQ takes back every grant it just added.
+    for (const id of added) company.settings.revoke(cid(id), "network-allow", req.domain, { via: "hq" });
     hub.configChanged();
     // Remove any rule that did go through, and clear the stale error.
     await Promise.all(added.map((id) => sbx.syncRules(id).catch(() => {})));
-    hub.activity("config", req.agentId, `Couldn't allow the site ${who} asked for (${failure.slice(0, 160)}). The request is still open: try again or deny it.`, { quote: { author: who, text: req.domain } });
+    // The failure's text can repeat the domain the agent chose: the feed names the action only (the domain stays in the quote).
+    log.warn(`access: couldn't allow a site for ${req.agentId}: ${failure.slice(0, 300)}`);
+    hub.activity("config", req.agentId, `Couldn't allow the site ${who} asked for: sbx refused the rule. The request is still open: try again or deny it.`, { quote: { author: who, text: req.domain } });
     return;
   }
 

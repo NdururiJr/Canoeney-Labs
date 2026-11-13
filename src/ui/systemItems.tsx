@@ -110,3 +110,13 @@ export function TooltipBody({ title, sub, quote }: { title: string; sub?: string
 export function StatusNote({ note, flagged, author, className = "" }: { note: string; flagged?: boolean; author: string; className?: string }) {
   return flagged ? <AgentText inline author={author} text={note} className={className} /> : <span className={className}>{note}</span>;
 }
+
+/** HQ's line about a changed CLAUDE.md: agents keep the approved version until the owner approves the new one. */
+export function ProjectNotesRow({ repo, approvedVersion }: { repo: string; approvedVersion: number | null }) {
+  return (
+    <span data-system-item="project-notes-row">
+      <b>CLAUDE.md</b> in {repo} changed.{" "}
+      {approvedVersion === null ? "Agents get no project notes until you approve it." : `Agents keep version ${approvedVersion} until you approve this one.`} Read it, then approve it with your PIN.
+    </span>
+  );
+}

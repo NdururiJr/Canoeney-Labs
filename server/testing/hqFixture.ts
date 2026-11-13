@@ -1,12 +1,13 @@
 // A whole HQ for tests: a temporary repo folder and company home (both with a
 // space in the name), a registered team (lead as cto, ana and ben as builders)
 // and the HTTP server on a free port. Everything is closed when the test ends.
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
-import type { AgentConfig } from "../../src/data/types";
+import type { AgentConfig, Board, HqConfig, Task } from "../../src/data/types";
+import type { Authority } from "../company/authority";
 import { WebSocket } from "ws";
 import { AgentAuth, type AuthLimits } from "../agentAuth";
 import type { HumanToEnroll } from "../company/humanAccounts";
@@ -20,8 +21,9 @@ import { startHttp } from "../http";
 import { Hub } from "../hub";
 import { Inbox } from "../inbox";
 import { Planner } from "../planner";
+import { offerImport } from "../repoConfigImport";
 import type { RepoInfo } from "../repo";
-import { loadConfig, loadPlan, newAgent } from "../store";
+import { defaultWorkflow, newAgent } from "../store";
 
 export const FIXTURE_START = "2026-11-12T08:00:00.000Z";
 /** The dashboard origin the fixture allows. */
@@ -29,6 +31,38 @@ export const ORIGIN = "http://hq.test";
 export const OWNER_PASSWORD = "owner password 1";
 export const OWNER_PIN = "583920";
 export const SUPERVISOR = { id: "sup1", displayName: "Sam", role: "supervisor" as const, password: "supervisor password", pin: "246810" };
+
+/** The authority fixtures seed a project with: an approved decision, so no human has to exist yet. */
+export const SEED_AUTHORITY: Authority = { via: "decision", decisionId: "fixture-seed" };
+
+/** Writes a team, its settings and grants into the store, as completing the welcome or an import would. */
+export function seedProject(company: Company, slug: string, team: AgentConfig[], workflow: HqConfig["workflow"]): void {
+  company.db
+    .prepare(
+      `INSERT OR IGNORE INTO decisions(id, requester_kind, requester_id, summary, urgency, status, reply_code, dedupe_key, idempotency_key, created_at)
+       VALUES ('fixture-seed', 'hq', 'hq', 'test fixture seed', 'normal', 'approved', 'fixture-seed', 'fixture-seed', 'fixture-seed', ?)`,
+    )
+    .run(FIXTURE_START);
+  const by = SEED_AUTHORITY;
+  if (!company.settings.has(slug)) company.settings.create(slug, { github: null, workflow }, by);
+  const ordered = [...team.filter((a) => a.isLead), ...team.filter((a) => !a.isLead)];
+  for (const a of ordered) {
+    const companyId = companyAgentId(slug, a.id);
+    company.settings.addAgent(slug, { id: a.id, name: a.name, cli: a.cli, displayRole: a.role, color: a.color, mode: a.mode, model: a.model }, a.isLead && a === ordered[0] ? "cto" : "builder", by);
+    company.settings.updateAgent(companyId, { roleMd: a.roleMd, workspacePath: a.workspacePath, resources: a.sandbox.resources }, by);
+    company.settings.setGrants(companyId, "network-allow", a.sandbox.allow, by);
+    company.settings.setGrants(companyId, "network-deny", a.sandbox.deny, by);
+    company.settings.setGrants(companyId, "mcp-server", a.mcp ?? [], by);
+    company.settings.setGrants(companyId, "skill", a.skills, by);
+  }
+}
+
+/** Writes the repo's old .jsmhq/config.json and plan.json, as a repo from before M0-D1 (or a PR) carries them. */
+export function writeRepoFiles(repoRoot: string, files: { config?: unknown; plan?: { boards: Board[]; tasks: Task[] } }): void {
+  mkdirSync(join(repoRoot, ".jsmhq"), { recursive: true });
+  if (files.config !== undefined) writeFileSync(join(repoRoot, ".jsmhq", "config.json"), JSON.stringify(files.config, null, 2));
+  if (files.plan !== undefined) writeFileSync(join(repoRoot, ".jsmhq", "plan.json"), JSON.stringify(files.plan, null, 2));
+}
 
 export interface LoginResult {
   status: number;
@@ -78,6 +112,8 @@ export async function makeHq(
     team?: AgentConfig[];
     limits?: Partial<AuthLimits>;
     ownerLimits?: Partial<OwnerAuthLimits>;
+    /** Leave the store without settings, as a fresh repo or an install from before M0-D1. */
+    unseeded?: boolean;
     /** A built UI folder to serve (default: none). */
     distDir?: string;
     /** Builds the dashboard command table (default: none). */
@@ -88,25 +124,34 @@ export async function makeHq(
   const repoRoot = join(dir, "repo dir");
   mkdirSync(repoRoot);
   const repo: RepoInfo = { root: repoRoot, name: "fixture repo", originUrl: null, github: null, hasCodeRabbit: false, hasInsta: false };
-  const { config } = loadConfig(repo, 0);
-  config.team = opts.team ?? [
+  const team = opts.team ?? [
     newAgent("lead", "Lead", "Lead", "#ff77a8", true),
     newAgent("ana", "Ana", "Developer", "#29adff", false),
     newAgent("ben", "Ben", "Developer", "#00e436", false),
   ];
-  const slug = config.project.id;
   const clock = new FakeClock(FIXTURE_START);
   const companyHomeDir = join(dir, "company home");
   // Code that asks for the company home (workspaceFor) gets this one, never the real ~/.jsmhq/_company.
   const previousHome = process.env.HQ_COMPANY_HOME;
   process.env.HQ_COMPANY_HOME = companyHomeDir;
+  // HQ's own home (agents' clones, per-project records) too: tests never touch the real ~/.jsmhq.
+  const previousHqHome = process.env.HQ_HOME;
+  process.env.HQ_HOME = join(dir, "hq home");
   const company = openCompany({ home: companyHomeDir, repoRoot, clock });
-  company.agents.ensureProject({ slug, name: config.project.name, root: repoRoot });
-  company.agents.syncFromConfig(slug, config.team);
+  // The owner's row exists from the start (enrollment adds the credentials later), so commands run directly act as a real owner.
+  company.db.prepare("INSERT INTO humans(id, display_name, role, created_at) VALUES ('owner', 'Owner', 'owner', ?)").run(FIXTURE_START);
+  const slug = company.agents.ensureProject({ name: repo.name, root: repoRoot });
+  if (!opts.unseeded) seedProject(company, slug, team, defaultWorkflow(repo));
 
-  const hub = new Hub(repo, slug, config, loadPlan(repoRoot), { checks: [], checkedAt: FIXTURE_START } as never);
+  const configSource = () => company.settings.view(slug, { path: repoRoot, hqPort: 0 });
+  const hub = new Hub(repo, slug, configSource, company.plans.load(slug), { checks: [], checkedAt: FIXTURE_START } as never);
+  offerImport(hub, company);
   const inbox = new Inbox(hub, { type: async () => false, enter: async () => false });
-  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null);
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null, {
+    plans: company.plans,
+    projectId: slug,
+    roleOf: (id) => company.agents.get(slug, id)?.role ?? null,
+  });
   const auth = new AgentAuth({ projectSlug: slug, company, hub, limits: opts.limits });
   const setupFile = join(companyHomeDir, "owner-setup.txt");
   const newOwnerAuth = () =>
@@ -139,6 +184,8 @@ export async function makeHq(
     company.close();
     if (previousHome === undefined) delete process.env.HQ_COMPANY_HOME;
     else process.env.HQ_COMPANY_HOME = previousHome;
+    if (previousHqHome === undefined) delete process.env.HQ_HOME;
+    else process.env.HQ_HOME = previousHqHome;
     rmSync(dir, { recursive: true, force: true });
   });
 

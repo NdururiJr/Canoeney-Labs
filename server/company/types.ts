@@ -1,3 +1,5 @@
+import type { AgentMode, BoardStatus, TaskStatus } from "../../src/data/types";
+
 // Vocabulary of the company store. The SQL CHECK lists and seeds in the
 // migrations are literals (a merged migration never changes); the tripwire
 // test in schema.test.ts fails if a union here grows beyond its column's
@@ -62,3 +64,14 @@ export type SpendSource = (typeof SPEND_SOURCES)[number];
 
 export const ACTOR_KINDS = ["agent", "human", "hq"] as const;
 export type ActorKind = (typeof ACTOR_KINDS)[number];
+
+// Migration 006 (project state in the store). The compile-time checks below keep
+// these lists equal to the dashboard's types, so the tripwire covers them too.
+export const AGENT_MODES = ["sandbox", "local"] as const;
+export const BOARD_STATUSES = ["active", "planned", "done"] as const;
+export const TASK_STATUSES = ["todo", "in-progress", "in-review", "done", "blocked"] as const;
+
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export const _sameModes: Same<(typeof AGENT_MODES)[number], AgentMode> = true;
+export const _sameBoardStatuses: Same<(typeof BOARD_STATUSES)[number], BoardStatus> = true;
+export const _sameTaskStatuses: Same<(typeof TASK_STATUSES)[number], TaskStatus> = true;

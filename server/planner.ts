@@ -2,6 +2,8 @@
 // (agents) and the browser commands (you), so both follow the same rules.
 
 import type { Board, Task, TaskStatus } from "../src/data/types";
+import type { PlanStore } from "./company/planStore";
+import type { RoleId } from "./company/types";
 import type { Hub } from "./hub";
 import type { ActionItems } from "./actionItems";
 import type { Inbox } from "./inbox";
@@ -15,9 +17,19 @@ export interface NewTask {
   needs?: string[];
 }
 
-export type TaskPatch = Partial<Pick<Task, "title" | "description" | "files" | "doneWhen" | "needs" | "status" | "boardId" | "note" | "prNumber">>;
+export type TaskPatch = Partial<Pick<Task, "title" | "description" | "files" | "doneWhen" | "needs" | "status" | "boardId" | "note" | "prNumber" | "ownerId">>;
 
 const now = () => new Date().toISOString();
+
+/** SR-D-08: only a merge (or the CTO) closes a builder's task. */
+export const SELF_DONE = "HQ marks a task done when its PR is merged. Call set_my_status in-review with the PR number.";
+
+export interface PlannerStore {
+  plans: PlanStore;
+  projectId: string;
+  /** The agent's role in the company store, or null for an unknown agent. */
+  roleOf: (agentId: string) => RoleId | null;
+}
 
 export class Planner {
   private seq = 0;
@@ -27,8 +39,23 @@ export class Planner {
   /**
    * `ctoLookup` answers "who is the CTO" from the company store (M0-B). It is
    * the only answer: `isLead` in the repo config routes and grants nothing.
+   * Every board and task change is written to the store first (M0-D1): a
+   * write that fails changes nothing in memory.
    */
-  constructor(private hub: Hub, private inbox: Inbox, private ctoLookup: () => string | null) {}
+  constructor(
+    private hub: Hub,
+    private inbox: Inbox,
+    private ctoLookup: () => string | null,
+    private store: PlannerStore,
+  ) {}
+
+  private putBoard(board: Board) {
+    this.store.plans.putBoard(this.store.projectId, board);
+  }
+
+  private putTask(task: Task) {
+    this.store.plans.putTask(this.store.projectId, task);
+  }
 
   /** The project's CTO (the agent HQ calls "the lead"), or null. */
   ctoId(): string | null {
@@ -66,6 +93,7 @@ export class Planner {
     let id = base;
     for (let i = 2; this.snap.boards.some((b) => b.id === id); i++) id = `${base}${i}`;
     const board: Board = { id, title: clean, status, order: this.snap.boards.length };
+    this.putBoard(board);
     this.snap.boards.push(board);
     this.hub.emit({ type: "board.updated", board: { ...board } });
     this.hub.planChanged();
@@ -75,8 +103,11 @@ export class Planner {
   updateBoard(id: string, patch: Partial<Pick<Board, "title" | "status">>) {
     const board = this.snap.boards.find((b) => b.id === id);
     if (!board) throw new Error(`No board ${id}`);
-    if (patch.title?.trim()) board.title = patch.title.trim().slice(0, 80);
-    if (patch.status) board.status = patch.status;
+    const next: Board = { ...board };
+    if (patch.title?.trim()) next.title = patch.title.trim().slice(0, 80);
+    if (patch.status) next.status = patch.status;
+    this.putBoard(next);
+    Object.assign(board, next);
     this.hub.emit({ type: "board.updated", board: { ...board } });
     this.hub.planChanged();
     return board;
@@ -93,7 +124,9 @@ export class Planner {
     const task: Task = {
       id, boardId: board.id, title: input.title.trim().slice(0, 120), ownerId: null, status: "todo",
       needs: input.needs ?? [], prNumber: null, description: input.description ?? "", files: input.files ?? [], doneWhen: input.doneWhen ?? "", note: null,
+      createdBy: byId,
     };
+    this.putTask(task);
     this.snap.tasks.push(task);
     this.hub.emit({ type: "task.updated", task: { ...task } });
     this.hub.activity("task.created", byId === "you" ? null : byId, `${this.hub.name(byId)} added ${task.id}`, { quote: { author: this.hub.name(byId), text: task.title } });
@@ -104,7 +137,9 @@ export class Planner {
   updateTask(id: string, patch: TaskPatch): Task {
     const task = this.task(id);
     if (!task) throw new Error(`No task ${id}`);
-    Object.assign(task, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
+    const next: Task = { ...task, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) };
+    this.putTask(next);
+    Object.assign(task, next);
     if (task.status === "done") {
       for (const a of this.snap.agents) if (a.currentTaskId === task.id) this.hub.setStatus(a.agentId, { currentTaskId: null });
     }
@@ -120,12 +155,14 @@ export class Planner {
     if (!task) throw new Error(`No task ${taskId}`);
     if (!agentId) throw new Error(`No agent "${agentRef}". Team: ${this.snap.config.team.map((a) => a.id).join(", ")}`);
     const agent = this.hub.cfg(agentId)!;
-    task.ownerId = agentId;
-    if (task.status === "done") task.status = "todo";
+    const next: Task = { ...task, ownerId: agentId, status: task.status === "done" ? "todo" : task.status };
+    this.putTask(next);
+    Object.assign(task, next);
     this.hub.emit({ type: "task.updated", task: { ...task } });
     this.hub.setStatus(agentId, { currentTaskId: task.id });
     this.hub.planChanged();
-    this.hub.activity("task.assigned", byId === "you" ? null : byId, `${this.hub.name(byId)} assigned ${task.id} to ${agent.name}`, { quote: { author: this.hub.name(byId), text: task.title } });
+    // The title is quoted as written by whoever created the task, not by whoever assigns it.
+    this.hub.activity("task.assigned", byId === "you" ? null : byId, `${this.hub.name(byId)} assigned ${task.id} to ${agent.name}`, { quote: { author: this.hub.name(task.createdBy ?? null), text: task.title } });
     const by = byId === "you" ? "The user (your human)" : this.hub.name(byId);
     const text = `${by} assigned you ${task.id} (${task.title}). Pull main, start ${task.id}. Call the hq get_my_task tool for the details.`;
     this.record(byId, agentId, `Start ${task.id}: ${task.title}`);
@@ -136,9 +173,10 @@ export class Planner {
   setStatus(agentId: string, status: Extract<TaskStatus, "in-progress" | "blocked" | "in-review" | "done">, note?: string, prNumber?: number): Task {
     const task = this.currentTask(agentId);
     if (!task) throw new Error("You have no task. Ask the lead for one.");
-    task.status = status;
-    task.note = note?.slice(0, 300) || null;
-    if (prNumber) task.prNumber = prNumber;
+    if (status === "done" && this.store.roleOf(agentId) === "builder") throw Object.assign(new Error(SELF_DONE), { code: "SELF_DONE" });
+    const next: Task = { ...task, status, note: note?.slice(0, 300) || null, prNumber: prNumber || task.prNumber };
+    this.putTask(next);
+    Object.assign(task, next);
     if (status === "done") this.hub.setStatus(agentId, { currentTaskId: null });
     else this.hub.setStatus(agentId, { currentTaskId: task.id });
     this.hub.emit({ type: "task.updated", task: { ...task } });

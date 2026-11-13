@@ -6,6 +6,9 @@ import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
 import { HumanAccounts } from "./humanAccounts";
+import { PlanStore } from "./planStore";
+import { ProjectNotes } from "./projectNotes";
+import { ProjectSettings } from "./projectSettings";
 import { DashboardChannel } from "./slots/dashboardChannel";
 import { SqliteKnowledgeStore } from "./slots/knowledge";
 import { SqliteMemory } from "./slots/memory";
@@ -13,7 +16,7 @@ import { LocalRouter } from "./slots/router";
 import type { AuditSink, Channel, Memory, Router } from "./slots/types";
 
 export { SchemaTooNewError } from "./db";
-export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome, isInside } from "./home";
+export { COMPANY_DIRNAME, HQ_DIRNAME, companyHome, hqHome, isInside } from "./home";
 
 export interface Company {
   db: CompanyDb;
@@ -29,6 +32,12 @@ export interface Company {
   secrets: AgentSecrets;
   /** Humans who log in to the dashboard, and their credentials (M0-C). */
   humans: HumanAccounts;
+  /** Project and agent settings and grants: the only writer of configuration (M0-D1). */
+  settings: ProjectSettings;
+  /** Each project's boards and tasks (M0-D1). */
+  plans: PlanStore;
+  /** The owner-approved project notes (CLAUDE.md) agents read (M0-D1, SR-D-07). */
+  notes: ProjectNotes;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
@@ -45,9 +54,14 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
   const audit = new SqliteAuditSink(db, clock);
   const dashboard = new DashboardChannel(db, clock);
   const secrets = new AgentSecrets(db, clock, audit);
+  const agents = new AgentRegistry(db, clock, audit, secrets);
+  const settings = new ProjectSettings(db, clock, audit, agents);
   return {
-    agents: new AgentRegistry(db, clock, audit, secrets),
+    agents,
     secrets,
+    settings,
+    plans: new PlanStore(db),
+    notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
     home,
     db,
