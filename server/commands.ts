@@ -16,6 +16,7 @@ import { relaxes, type AgentField, type Authority, type ConfigChange } from "./c
 import type { AgentSettingsPatch } from "./company/projectSettings";
 import type { CommandCtx, CommandSpec } from "./dashboard";
 import { applyImport, boardTitles, hasRepoConfig, previewImport, readImport } from "./repoConfigImport";
+import { refreshProjectNotes } from "./projectNotesSync";
 import { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { Planner } from "./planner";
@@ -383,6 +384,15 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       await sbx.refresh();
       hub.emit({ type: "snapshot", snapshot: structuredClone(hub.snap) });
       hub.activity("config", null, `Welcome! Team created: ${hub.snap.config.team.map((a) => a.name).join(", ")}. Press Start team when you're ready.`);
+    } },
+
+    /** Approves the CLAUDE.md the owner read, for agents' next start. Refused when the file changed since (D3). */
+    approveProjectNotes: { role: "owner", pin: true, run: (ctx, sha) => {
+      const state = refreshProjectNotes(hub, company);
+      if (!state.pending || state.pending.sha256 !== str(sha, 64)) return hub.activity("config", null, "CLAUDE.md changed after you read it. Read it again before approving.");
+      const version = company.notes.approve(hub.slug, state.pending.sha256, state.pending.text, authorityOf(ctx));
+      refreshProjectNotes(hub, company);
+      hub.activity("config", null, `Approved CLAUDE.md version ${version}. Agents get it at their next start.`);
     } },
 
     /** Shows the owner what importing .jsmhq/config.json would write. Reads the file; writes nothing (SR-D-02). */

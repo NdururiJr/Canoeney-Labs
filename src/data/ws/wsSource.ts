@@ -125,6 +125,7 @@ export function createWsSource(): OfficeDataSource {
     completeWelcome: (input) => send("completeWelcome", input),
     previewRepoImport: () => send("previewRepoImport"),
     importRepoConfig: (sha256) => send("importRepoConfig", { sha256 }),
+    approveProjectNotes: (sha256) => send("approveProjectNotes", sha256),
     openShell: (id) => send("openShell", id),
     closeShell: (id) => send("closeShell", id),
     openHostShell: (dir, fresh) => send("openHostShell", dir, fresh === true),

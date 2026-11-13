@@ -92,7 +92,7 @@ HQ still reads the old files in exactly one place: a one-time import, built in M
 
 **What it costs:**
 - The generated role no longer includes the repo's `ROLE.md`.
-- The project's `CLAUDE.md` reaches agents only as the copy the owner approved.
+- The project's `CLAUDE.md` reaches agents only as the copy the owner approved. `ProjectNotes` keeps the approved versions, append-only. The owner approves the exact text HQ read, bound to its SHA-256 (D3). The role includes the latest approved version, under "Project notes".
 - Agents cannot see or change the excluded files, so a task like "update CLAUDE.md" goes to the owner.
 - A stack skill whose name the repo commits is not installed, and the activity feed says so. M0-F replaces the skill source.
 

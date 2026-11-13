@@ -32,6 +32,15 @@ New teams get names from The Office: Michael leads, then Dwight, Jim, Pam and so
 - **Its instructions.** HQ writes `.jsmhq-role.md` into that folder: the agent's role (the ROLE.md text from Settings → Team), the team, the rules and its tools. HQ also adds its hooks and MCP config there, and keeps all of these out of git. The clone leaves out the repo's own agent settings (`CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/`, `.codex/`), so a pull request can't change what every agent is told or may run.
 - **Its session.** On macOS and Linux each agent runs in a tmux session called `hq-<project>-<agent>`, so agents keep working if you close HQ or the browser. You can watch one from any terminal with `tmux attach -t hq-<project>-<agent>`, or open its drawer in HQ.
 
+## Project notes (`CLAUDE.md`)
+
+Agents never load the repo's own agent settings. The clone leaves out `CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/` and `.codex/` at any depth. A pull request that changes one of them changes no agent.
+
+- **Agents read `CLAUDE.md` only as the copy you approved.** When the repo's `CLAUDE.md` is new or has changed, **Action items** shows its text (as text an agent may have written, not rendered) with **Approve with PIN**. Approved copies are numbered and kept. Agents get the latest one in their role at their next start, for Claude Code and Codex alike. Until you approve, they keep the previous version, or have no project notes.
+- **What HQ offers:** only a regular file at the repo's root, of at most 20,000 characters. A link is not offered. If the file changes between your reading it and your PIN, the approval is refused: read it again.
+- **Agents can't see or change these files.** They are outside the agent's checkout, and `git add` refuses them there. So a task such as "update CLAUDE.md" can't go to an agent: edit the file yourself, then approve the new version.
+- **A skill the repo commits under `.claude/skills/` or `.agents/skills/`** isn't installed. If the stack has a skill with the same name, the agent starts without it, and the activity feed says so.
+
 ## Messages between agents
 
 Agents talk to each other and to HQ through an MCP server called `hq`, which HQ runs for them.

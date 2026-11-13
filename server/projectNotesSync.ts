@@ -1,0 +1,17 @@
+// Keeps the owner's view of the project notes current: the approved copy, and a
+// pending one when the repo's CLAUDE.md differs from it. HQ refreshes this at
+// startup and before each agent starts (SR-D-07).
+import type { ProjectNotesState } from "../src/data/types";
+import type { Company } from "./company";
+import type { Hub } from "./hub";
+
+export function refreshProjectNotes(hub: Hub, company: Company): ProjectNotesState {
+  const approved = company.notes.current(hub.slug);
+  const read = company.notes.readFrom(hub.repo.root);
+  const pending = "content" in read && read.sha256 !== approved?.sha256 ? { sha256: read.sha256, text: read.content } : null;
+  const state: ProjectNotesState = { approved: approved ? { version: approved.version, approvedAt: approved.approvedAt } : null, pending };
+  const before = JSON.stringify(hub.snap.projectNotes ?? null);
+  hub.snap.projectNotes = state;
+  if (JSON.stringify(state) !== before) hub.emit({ type: "projectNotes.updated", projectNotes: structuredClone(state) });
+  return state;
+}

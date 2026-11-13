@@ -7,6 +7,7 @@ import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { stackSkills } from "../src/data/stack";
 import { hasHqSkills, prepareSkills, skillSkippedText } from "./skills";
+import { refreshProjectNotes } from "./projectNotesSync";
 import { resolve, sep } from "node:path";
 import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
 import { adapters, localBinary } from "./adapters";
@@ -183,7 +184,11 @@ export class Sessions {
         const secret = this.company.secrets.issue(reg.companyId);
         issued = true;
         const ctoId = this.company.agents.cto(hub.slug, (cid) => !!hub.cfg(cid))?.agentId ?? null;
-        await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId });
+        // The owner sees a changed CLAUDE.md as pending; the agent gets only the approved copy (SR-D-07).
+        refreshProjectNotes(hub, this.company);
+        const approved = this.company.notes.current(hub.slug);
+        const notes = approved ? { version: approved.version, content: approved.content } : null;
+        await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId, notes });
         const specs = stackSkills(hub.snap.config.stack);
         if (specs.length || hasHqSkills(hub.slug, dir)) {
           hub.setSession(id, { detail: "Installing agent skills…" });

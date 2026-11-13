@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeCommands } from "./commands";
 import { offerImport } from "./repoConfigImport";
+import { refreshProjectNotes } from "./projectNotesSync";
 import { Dashboard } from "./dashboard";
 import { companyHome, openCompany } from "./company";
 import { AgentAuth } from "./agentAuth";
@@ -76,6 +77,7 @@ async function main() {
   const hub = new Hub(repo, slug, configSource, company.plans.load(slug), setup);
   // Until the owner completes the welcome or confirms an import, nothing is read from the repo.
   offerImport(hub, company);
+  refreshProjectNotes(hub, company);
   const sessions = new Sessions(hub, company);
   const inbox = new Inbox(hub, { type: (id, text) => sessions.typeInto(id, text), enter: (id) => sessions.pressEnter(id) });
   sessions.onSessionDown = (id) => inbox.sessionDown(id);

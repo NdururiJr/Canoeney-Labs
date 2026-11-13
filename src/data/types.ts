@@ -344,6 +344,8 @@ export interface OfficeSnapshot {
   importable?: true;
   /** What an import would write, shown to the owner before the PIN (never to a supervisor). */
   importPreview?: ImportPreview;
+  /** The project notes (CLAUDE.md) agents read: the approved version, and a changed copy awaiting the owner (owner only). */
+  projectNotes?: ProjectNotesState;
   setup: SetupState;
   sbx: SbxState;
   config: HqConfig;
@@ -417,4 +419,10 @@ export interface ImportPreview {
   /** Each board's task titles, from the file (agent text). */
   boards: { title: string; tasks: string[] }[];
   tasks: number;
+}
+
+/** The owner approves exactly `pending.text` (its `sha256`); agents read only the approved version. */
+export interface ProjectNotesState {
+  approved: { version: number; approvedAt: string } | null;
+  pending: { sha256: string; text: string } | null;
 }

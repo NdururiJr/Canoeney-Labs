@@ -27,6 +27,8 @@ export interface RoleExtras {
   role: RoleId;
   ctoId: string | null;
   hasEnvFile?: boolean;
+  /** The project notes the owner last approved (never the repo's file itself: D1, SR-D-07). */
+  notes?: { version: number; content: string } | null;
 }
 
 /** HQ ≤ 0.3 wrote its role to ROLE.md; recognise that so it can be cleaned up. */
@@ -153,6 +155,7 @@ export function roleMd(agent: AgentConfig, cfg: HqConfig, extras: RoleExtras): s
     "## Rules",
     ...rules.map((r) => `- ${r}`),
     "",
+    ...(extras.notes ? [`## Project notes (CLAUDE.md, version ${extras.notes.version}, approved by the owner)`, extras.notes.content.trim(), ""] : []),
     ...(stackRoleMd(cfg.stack) ? [stackRoleMd(cfg.stack), ""] : []),
     ...(extras.hasEnvFile
       ? [

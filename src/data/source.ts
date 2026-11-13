@@ -25,6 +25,7 @@ import type {
   SandboxSettings,
   Task,
   WorkflowPatch,
+  ProjectNotesState,
 } from "./types";
 
 export type OfficeEvent =
@@ -45,6 +46,7 @@ export type OfficeEvent =
   | { type: "activity"; event: ActivityEvent }
   | { type: "terminal.output"; agentId: string; data: string }
   | { type: "access.updated"; request: AccessRequest }
+  | { type: "projectNotes.updated"; projectNotes: ProjectNotesState }
   | { type: "mcp.updated"; mcp: McpState }
   | { type: "action.updated"; item: ActionItem }
   /** The answer to one command, sent only to the socket that sent it (M0-C). */
@@ -147,6 +149,8 @@ export interface OfficeDataSource {
   previewRepoImport(): void;
   /** Imports exactly the previewed files (needs the PIN; refused if they changed since). */
   importRepoConfig(sha256: string): void;
+  /** Approves the pending CLAUDE.md the owner read (needs the PIN; refused if it changed since). */
+  approveProjectNotes(sha256: string): void;
 
   dev?: DevControls;
 }

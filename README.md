@@ -89,7 +89,7 @@ Click any agent to open its drawer: its live terminal, a shell inside its sandbo
 
 More detail on workspaces, sandboxes, MCP servers, app variables and what HQ saves: **[How it works](docs/how-it-works.md)**.
 
-**Upgrading from an older HQ?** The team, permissions and tasks now live in HQ's company store, not in your repo's `.jsmhq/` files, so a pull request can't change them. The welcome screen offers a one-time import of the old `.jsmhq/config.json`. Review what it would change, then confirm it with your PIN. See [What HQ saves, and where](docs/how-it-works.md#what-hq-saves-and-where).
+**Upgrading from an older HQ?** The team, permissions and tasks now live in HQ's company store, not in your repo's `.jsmhq/` files, so a pull request can't change them. The welcome screen offers a one-time import of the old `.jsmhq/config.json`. Review what it would change, then confirm it with your PIN. See [What HQ saves, and where](docs/how-it-works.md#what-hq-saves-and-where). Agents also no longer load the repo's `CLAUDE.md`, `.claude/` or `.mcp.json`: they get `CLAUDE.md` only as the copy you approve in **Action items** ([Project notes](docs/how-it-works.md#project-notes-claudemd)).
 
 ## Troubleshooting
 

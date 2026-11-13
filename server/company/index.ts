@@ -7,6 +7,7 @@ import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
 import { HumanAccounts } from "./humanAccounts";
 import { PlanStore } from "./planStore";
+import { ProjectNotes } from "./projectNotes";
 import { ProjectSettings } from "./projectSettings";
 import { DashboardChannel } from "./slots/dashboardChannel";
 import { SqliteKnowledgeStore } from "./slots/knowledge";
@@ -35,6 +36,8 @@ export interface Company {
   settings: ProjectSettings;
   /** Each project's boards and tasks (M0-D1). */
   plans: PlanStore;
+  /** The owner-approved project notes (CLAUDE.md) agents read (M0-D1, SR-D-07). */
+  notes: ProjectNotes;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
@@ -52,11 +55,13 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
   const dashboard = new DashboardChannel(db, clock);
   const secrets = new AgentSecrets(db, clock, audit);
   const agents = new AgentRegistry(db, clock, audit, secrets);
+  const settings = new ProjectSettings(db, clock, audit, agents);
   return {
     agents,
     secrets,
-    settings: new ProjectSettings(db, clock, audit, agents),
+    settings,
     plans: new PlanStore(db),
+    notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
     home,
     db,

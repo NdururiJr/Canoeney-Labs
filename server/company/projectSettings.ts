@@ -141,7 +141,7 @@ export class ProjectSettings {
 
   /** The project's first settings. This counts as an import, so it needs the PIN. */
   create(projectId: string, init: { github: string | null; workflow: WorkflowConfig; stack?: StackConfig; officeName?: string }, by: Authority): void {
-    this.apply([{ kind: "import" }], by, projectId, () => {
+    this.authorized([{ kind: "import" }], by, projectId, () => {
       if (this.has(projectId)) throw new Error(`Project ${projectId} already has settings.`);
       this.db
         .prepare(
@@ -188,7 +188,7 @@ export class ProjectSettings {
       deploy: { ...before.deploy, ...patch.deploy },
     };
     if (same(before, after)) return;
-    this.apply([{ kind: "workflow", before, after }], by, projectId, () => {
+    this.authorized([{ kind: "workflow", before, after }], by, projectId, () => {
       this.db.prepare("UPDATE project_settings SET workflow_json = ?, updated_at = ? WHERE project_id = ?").run(JSON.stringify(after), this.now(), projectId);
       this.record(by, "settings.changed", projectId, { change: "workflow" });
     });
@@ -208,7 +208,7 @@ export class ProjectSettings {
       (field): ConfigChange => ({ kind: "project", field, before: current[field], after: patch[field] }),
     );
     if (changes.length === 0) return;
-    this.apply(changes, by, projectId, () => {
+    this.authorized(changes, by, projectId, () => {
       const at = this.now();
       for (const c of changes) {
         if (c.kind !== "project") continue;
@@ -233,7 +233,7 @@ export class ProjectSettings {
       (field): ConfigChange => ({ kind: "agent", field, before: current[field], after: patch[field] }),
     );
     if (changes.length === 0) return;
-    this.apply(changes, by, companyId, () => {
+    this.authorized(changes, by, companyId, () => {
       const next: Settings = { ...cur };
       for (const c of changes) {
         if (c.kind !== "agent") continue;
@@ -248,7 +248,7 @@ export class ProjectSettings {
 
   /** Registers the agent with a settings row and no grants (SR-D-11). Adding an agent relaxes a control. */
   addAgent(projectId: string, a: NewAgent, role: "cto" | "builder", by: Authority, managerId?: string | null): RegisteredAgent {
-    return this.apply([{ kind: "agent-added" }], by, projectId, () => {
+    return this.authorized([{ kind: "agent-added" }], by, projectId, () => {
       const registered = this.agents.register(projectId, { id: a.id, name: a.name, cli: a.cli }, role, this.actor(by), "dashboard", { authority: by.via }, managerId);
       const base = newAgent(a.id, a.name, a.displayRole, a.color, role === "cto");
       this.writeSettings(registered.companyId, {
@@ -274,13 +274,13 @@ export class ProjectSettings {
   /** False when the grant was already active. */
   grant(companyId: string, kind: PermissionKind, value: string, by: Authority): boolean {
     this.mustAgent(companyId);
-    return this.apply([{ kind: "grant", permission: kind, value }], by, companyId, () => this.writeGrant(companyId, kind, value, by));
+    return this.authorized([{ kind: "grant", permission: kind, value }], by, companyId, () => this.writeGrant(companyId, kind, value, by));
   }
 
   /** False when there was no active grant. */
   revoke(companyId: string, kind: PermissionKind, value: string, by: Authority): boolean {
     this.mustAgent(companyId);
-    return this.apply([{ kind: "revoke", permission: kind, value }], by, companyId, () => this.writeRevoke(companyId, kind, value, by));
+    return this.authorized([{ kind: "revoke", permission: kind, value }], by, companyId, () => this.writeRevoke(companyId, kind, value, by));
   }
 
   /** Makes the active grants of one kind equal to `values`. Each addition and removal is checked in its own direction. */
@@ -295,7 +295,7 @@ export class ProjectSettings {
       ...removed.map((value): ConfigChange => ({ kind: "revoke", permission: kind, value })),
     ];
     if (changes.length === 0) return { added, removed };
-    this.apply(changes, by, companyId, () => {
+    this.authorized(changes, by, companyId, () => {
       for (const v of added) this.writeGrant(companyId, kind, v, by);
       for (const v of removed) this.writeRevoke(companyId, kind, v, by);
     });
@@ -304,7 +304,8 @@ export class ProjectSettings {
 
   // ------------------------------------------------------------ internals
 
-  private apply<T>(changes: ConfigChange[], by: Authority, target: string, write: () => T): T {
+  /** Checks every change against `by`, then runs `write` in one immediate transaction; a refusal is audited and thrown. */
+  authorized<T>(changes: ConfigChange[], by: Authority, target: string, write: () => T): T {
     try {
       return this.tx(() => {
         for (const c of changes) {
@@ -362,7 +363,8 @@ export class ProjectSettings {
     return true;
   }
 
-  private record(by: Authority, action: string, target: string, data: Record<string, unknown>): void {
+  /** Appends an audit row for a write done with `by` (actor, decision id and data.authority). */
+  record(by: Authority, action: string, target: string, data: Record<string, unknown>): void {
     const actor = this.actor(by);
     this.audit.append({
       actorKind: actor.kind,
