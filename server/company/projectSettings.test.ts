@@ -272,3 +272,18 @@ test("SR-D-03 [T-S7.1] turning deploy off is tightening only when nothing else i
   c.settings.updateWorkflow("alpha", { deploy: { enabled: false } }, SESSION);
   assert.equal(c.settings.view("alpha", { path: "/r", hqPort: 1 }).workflow.deploy.enabled, false);
 });
+
+test("a model name holds plain characters only: anything that could run on a command line is refused", (t) => {
+  const c = fresh(t);
+  const before = dump(c.db);
+  for (const model of ['x"&echo INJECTED&rem "', "opus & calc", "a|b", "$(id)", "o pus"]) {
+    assert.throws(() => c.settings.updateAgent("alpha/ana", { model }, PIN), /model name/i, model);
+    assert.throws(
+      () => c.settings.addAgent("alpha", { id: "eve", name: "Eve", cli: "claude", displayRole: "Developer", color: "#000000", mode: "sandbox", model }, "builder", PIN),
+      /model name/i,
+      model,
+    );
+  }
+  assert.equal(dump(c.db), before);
+  for (const model of ["", "opus", "claude-opus-5-5", "gpt-5.2-codex", "us.anthropic.claude[1m]", "openrouter/model:free"]) c.settings.updateAgent("alpha/ana", { model }, SESSION);
+});

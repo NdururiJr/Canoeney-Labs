@@ -14,6 +14,19 @@ import type { CompanyDb } from "./db";
 import type { AuditEventInput, AuditSink } from "./slots/types";
 import type { PermissionKind } from "./types";
 
+/**
+ * A model name goes onto the agent's command line, and on Windows a CLI installed
+ * as a .cmd shim runs through cmd.exe, where a quote or & can start a second
+ * command. Only plain characters are stored (PR #8 review).
+ */
+export const MODEL_NAME = /^[A-Za-z0-9._:/\[\]-]*$/;
+
+function checkModel(model: string | undefined): void {
+  if (model !== undefined && (model.length > 100 || !MODEL_NAME.test(model))) {
+    throw new Error("A model name may use letters, digits and . _ : / [ ] - only.");
+  }
+}
+
 /** Used for a project with no settings row yet: every control at its tightest. */
 export const SAFE_WORKFLOW: WorkflowConfig = {
   review: { enabled: true, tool: "human", command: "" },
@@ -225,6 +238,7 @@ export class ProjectSettings {
   }
 
   updateAgent(companyId: string, patch: AgentSettingsPatch, by: Authority): void {
+    checkModel(patch.model);
     const agent = this.mustAgent(companyId);
     const cur = this.settingsOf(agent);
     const cli = this.cliOf(companyId);
@@ -248,6 +262,7 @@ export class ProjectSettings {
 
   /** Registers the agent with a settings row and no grants (SR-D-11). Adding an agent relaxes a control. */
   addAgent(projectId: string, a: NewAgent, role: "cto" | "builder", by: Authority, managerId?: string | null): RegisteredAgent {
+    checkModel(a.model);
     return this.authorized([{ kind: "agent-added" }], by, projectId, () => {
       const registered = this.agents.register(projectId, { id: a.id, name: a.name, cli: a.cli }, role, this.actor(by), "dashboard", { authority: by.via }, managerId);
       const base = newAgent(a.id, a.name, a.displayRole, a.color, role === "cto");

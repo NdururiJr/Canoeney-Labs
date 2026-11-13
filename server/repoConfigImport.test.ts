@@ -359,3 +359,14 @@ test("the welcome on a store that already has agents replaces the old team: one 
   for (const id of ["lead", "ana"]) assert.equal(hq.company.agents.get(hq.slug, id)?.status, "retired", id);
   assert.equal(hq.company.db.prepare("SELECT COUNT(*) AS n FROM agents WHERE role_id = 'cto' AND status <> 'retired'").get<{ n: number }>()?.n, 1);
 });
+
+test("an imported model name that is not plain is dropped, for new and existing agents", async (t) => {
+  const cfg = structuredClone(HOSTILE_CONFIG) as unknown as { team: Record<string, unknown>[] };
+  cfg.team[0].model = 'x"&echo INJECTED&rem "';
+  cfg.team[1].model = "sonnet";
+  const hq = await unseededWithFile(t, cfg);
+  const commands = commandsFor(hq);
+  await commands.previewRepoImport.run(OWNER);
+  await commands.importRepoConfig.run(WITH_PIN, { sha256: hq.hub.snap.importPreview!.sha256 });
+  assert.deepEqual([hq.hub.cfg("lead")?.model, hq.hub.cfg("ana")?.model], ["", "sonnet"]);
+});

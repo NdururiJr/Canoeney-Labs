@@ -10,7 +10,7 @@ import type { AgentCli, AgentMode, Board, HqConfig, ImportLine, Task, WorkflowCo
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { relaxes, type Authority, type ConfigChange } from "./company/authority";
-import { SAFE_WORKFLOW } from "./company/projectSettings";
+import { MODEL_NAME, SAFE_WORKFLOW } from "./company/projectSettings";
 import type { PermissionKind } from "./company/types";
 import { cleanStack, stackValues } from "./stackClean";
 import { newAgent } from "./store";
@@ -172,6 +172,9 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
     const mode: AgentMode = raw.mode === "local" ? "local" : "sandbox";
     const displayRole = str(raw.role, 40).trim() || "Developer";
     const color = /^#[0-9a-fA-F]{6}$/.test(str(raw.color, 7)) ? str(raw.color, 7) : "#29adff";
+    // A model name that is not plain is dropped (the CLI's default is used): it goes onto a command line.
+    const rawModel = str(raw.model, 60).trim();
+    const model = MODEL_NAME.test(rawModel) ? rawModel : "";
     const companyId = companyAgentId(slug, id);
     const existing = registered.get(id);
     if (existing?.status === "retired") continue;
@@ -186,7 +189,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
         change: { kind: "agent-added" },
         text: `Add an agent ${roleText}, using ${cli === "codex" ? "Codex" : "Claude Code"}${mode === "local" ? ", in Local mode: outside a sandbox, on this machine" : ""}`,
         fromFile: [name],
-        apply: (by) => s.addAgent(slug, { id, name, cli, displayRole, color, mode, model: str(raw.model, 60).trim() }, role, by),
+        apply: (by) => s.addAgent(slug, { id, name, cli, displayRole, color, mode, model }, role, by),
       });
       current = { cli, mode, roleMd: defaults.roleMd, workspacePath: null };
     } else {
@@ -197,7 +200,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
       for (const [field, before, after] of [
         ["displayRole", now?.role ?? "", displayRole],
         ["color", now?.color ?? "", color],
-        ["model", now?.model ?? "", str(raw.model, 60).trim()],
+        ["model", now?.model ?? "", model],
       ] as const) {
         if (after !== before) steps.push(agentStep(s, companyId, field, before, after, "", []));
       }
