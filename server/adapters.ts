@@ -4,8 +4,7 @@
 
 import { agentWrite } from "./lib/agentFs";
 import type { AgentCli, AgentConfig, HqConfig } from "../src/data/types";
-import { adoptRoleFile, excludeFromGit, HOOK_SCRIPT, type RoleExtras, hookCommand, hookScriptFor, hqUrl, MCP_CONFIG, roleMd, writeClaudeFiles, writeHookScript } from "./agentFiles";
-import { run } from "./lib/exec";
+import { removeOldRoleFile, excludeFromGit, HOOK_SCRIPT, type RoleExtras, hookCommand, hookScriptFor, hqUrl, MCP_CONFIG, roleMd, writeClaudeFiles, writeHookScript } from "./agentFiles";
 
 export interface Launch {
   sbxAgent: string; // agent name for `sbx run`
@@ -22,8 +21,8 @@ export interface CliAdapter {
 
 const claude: CliAdapter = {
   async writeFiles(dir, agent, cfg, token, extras) {
-    const ownRole = await adoptRoleFile(dir);
-    writeClaudeFiles(dir, agent, cfg, token, { ...extras, ownRole });
+    await removeOldRoleFile(dir);
+    writeClaudeFiles(dir, agent, cfg, token, extras);
   },
   launch(agent, dir) {
     // "Opus" / "Sonnet" / "Haiku" → Claude Code's aliases; anything else is passed as a full model id.
@@ -62,12 +61,10 @@ export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, di
 
 const codex: CliAdapter = {
   async writeFiles(dir, agent, cfg, token, extras) {
-    // A repo that commits its own Codex config can't take HQ's without changing a tracked file.
-    const tracked = await run("git", ["ls-files", "--error-unmatch", CODEX_CONFIG], { cwd: dir });
-    if (tracked.ok) throw new Error(`This repo commits ${CODEX_CONFIG}, so HQ can't add its Codex settings without changing a tracked file. Use Claude Code for this agent, or remove that file from the repo.`);
-    // The role goes in the config (developer_instructions); the folder's own ROLE.md is included, never overwritten.
-    const ownRole = await adoptRoleFile(dir);
-    agentWrite(dir, CODEX_CONFIG, codexConfig(agent, cfg, token, dir, { ...extras, ownRole }), { mode: 0o600 });
+    // A repo that commits .codex/config.toml is refused before this (workspace.ts, trackedHqFiles).
+    // The role goes in the config (developer_instructions), from the company store only.
+    await removeOldRoleFile(dir);
+    agentWrite(dir, CODEX_CONFIG, codexConfig(agent, cfg, token, dir, extras), { mode: 0o600 });
     if (hookScriptFor(agent, dir)) writeHookScript(dir);
     excludeFromGit(dir, [CODEX_CONFIG, HOOK_SCRIPT]);
   },

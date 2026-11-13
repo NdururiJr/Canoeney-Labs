@@ -73,3 +73,27 @@ HQ still reads the old files in exactly one place: a one-time import, built in M
 - A merged PR can no longer change who an agent is or what it may do. Changing that takes the owner's PIN, or later an approved decision (M1.4).
 - An approved decision currently authorises any relaxing change. M1.4 binds a decision to the change its stored parameters name, and lets it be used only once. That is in the overview's carry-forward table.
 - Teammates no longer share a project's configuration through git. Each HQ has its own store, as M0-G's always-on host will.
+
+## Agents ignore repo-carried configuration (D1, SR-D-07)
+
+**Decision (owner, 2026-11-12):** HQ supplies company agents' instructions, settings, MCP servers and skills itself. The repo's agent configuration stays in the repo, but agents don't load it.
+
+**Mechanism: git sparse checkout.**
+- HQ clones with `--no-checkout`, then runs `git sparse-checkout set --no-cone` with these patterns: `/*`, `!CLAUDE.md`, `!CLAUDE.local.md`, `!AGENTS.md`, `!AGENTS.override.md`, `!ROLE.md`, `!.mcp.json`, `!.claude/`, `!.agents/`, `!.codex/`. Only then does it check the files out.
+- The excluded files never reach the agent's disk, at any depth, and files the repo gains later never appear. So neither Claude Code nor Codex can load them.
+- An existing clone is isolated again on every start. Unmodified files leave the disk.
+- This needs git 2.35 or later. HQ says so if git refuses.
+
+**Why not command-line flags:** Claude Code's `--setting-sources` could add a second layer. It has not been checked whether HQ's own hooks still run with project settings turned off, so that check is carried to M0-G, on the Linux host. Sparse checkout works for both CLIs, and CI tests it with real git.
+
+**What HQ refuses:**
+- A folder with the repo's agent configuration on disk: a modified file in HQ's clone, or any such file in a folder the owner chose. HQ checks a chosen folder but never changes it.
+- A repo that tracks one of HQ's own files (`.jsmhq-role.md`, `.jsmhq-hook.mjs`, `.claude/settings.local.json`, `.claude/hq-mcp.json`, `.codex/config.toml`). HQ writes those with the agent's secret, and over a tracked path they could be committed.
+
+**What it costs:**
+- The generated role no longer includes the repo's `ROLE.md`.
+- The project's `CLAUDE.md` reaches agents only as the copy the owner approved.
+- Agents cannot see or change the excluded files, so a task like "update CLAUDE.md" goes to the owner.
+- A stack skill whose name the repo commits is not installed, and the activity feed says so. M0-F replaces the skill source.
+
+**What it does not stop:** an agent can turn sparse checkout off in its own folder. That changes only its own instructions, which it can already do (T-S6.10, accepted). What D1 closes is one merged PR changing every agent at once. CODEOWNERS review on these paths is the owner's second lock (with M0-E).

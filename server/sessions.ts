@@ -6,7 +6,7 @@ import { spawn as spawnPty, type IPty } from "@lydell/node-pty";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { stackSkills } from "../src/data/stack";
-import { hasHqSkills, prepareSkills } from "./skills";
+import { hasHqSkills, prepareSkills, skillSkippedText } from "./skills";
 import { resolve, sep } from "node:path";
 import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
 import { adapters, localBinary } from "./adapters";
@@ -189,6 +189,7 @@ export class Sessions {
           hub.setSession(id, { detail: "Installing agent skills…" });
           const skills = await prepareSkills(hub.slug, dir, specs);
           if (skills.error) hub.activity("session", id, `${agent.name}: some agent skills didn't install (${skills.error.slice(0, 120)}). Starting anyway.`);
+          for (const rel of skills.skipped) hub.activity("session", id, skillSkippedText(agent.name, rel));
         }
         const launch = adapter.launch(agent, dir);
         const envFile = this.envFileFor(id);
