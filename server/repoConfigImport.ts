@@ -7,12 +7,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentCli, AgentMode, Board, HqConfig, ImportLine, Task, WorkflowConfig } from "../src/data/types";
-import type { StackConfig } from "../src/data/stack";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { relaxes, type Authority, type ConfigChange } from "./company/authority";
 import { SAFE_WORKFLOW } from "./company/projectSettings";
 import type { PermissionKind } from "./company/types";
+import { cleanStack, stackValues } from "./stackClean";
 import { newAgent } from "./store";
 
 const PLAIN_ID = /^[a-z0-9][a-z0-9-]*$/;
@@ -90,22 +90,32 @@ const str = (v: unknown, max: number): string => (typeof v === "string" ? v.slic
 const list = (v: unknown, max = 200): string[] =>
   Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string").map((x) => x.trim().slice(0, max)).filter(Boolean))] : [];
 
-const GRANT_TEXT: Record<PermissionKind, (who: string) => string> = {
-  "network-allow": (who) => `${who}'s sandbox may reach a site`,
-  "network-deny": (who) => `${who}'s sandbox is blocked from a site`,
-  "mcp-server": (who) => `${who} gets an MCP server`,
-  "secret-name": (who) => `${who} gets a key`,
-  tool: (who) => `${who} gets a tool`,
-  skill: (who) => `${who} gets a skill`,
+/** Preview texts are HQ's own words; the agent's name and the value from the file go in fromFile. */
+const GRANT_TEXT: Record<PermissionKind, string> = {
+  "network-allow": "An agent's sandbox may reach a site",
+  "network-deny": "An agent's sandbox is blocked from a site",
+  "mcp-server": "An agent gets an MCP server",
+  "secret-name": "An agent gets a key",
+  tool: "An agent gets a tool",
+  skill: "An agent gets a skill",
 };
 
+const REVIEW_TOOLS = ["coderabbit", "greptile", "copilot", "human", "custom"] as const;
+const DEPLOY_TOOLS = ["instacloud", "vercel", "custom"] as const;
+
+/** The file's workflow with every field checked: a value outside its list falls back to the safe default. */
 function workflowOf(raw: unknown): WorkflowConfig {
-  const w = (raw ?? {}) as Partial<WorkflowConfig>;
-  const base = structuredClone(SAFE_WORKFLOW);
+  const w = (raw ?? {}) as { review?: Record<string, unknown>; merge?: Record<string, unknown>; deploy?: Record<string, unknown> };
+  const pick = <T extends string>(v: unknown, list: readonly T[], dflt: T): T => (list.includes(v as T) ? (v as T) : dflt);
   return {
-    review: { ...base.review, ...(w.review ?? {}) },
+    review: { enabled: w.review?.enabled !== false, tool: pick(w.review?.tool, REVIEW_TOOLS, "human"), command: str(w.review?.command, 300) },
     merge: { by: w.merge?.by === "lead" ? "lead" : "human" },
-    deploy: { ...base.deploy, ...(w.deploy ?? {}) },
+    deploy: {
+      enabled: w.deploy?.enabled === true,
+      tool: pick(w.deploy?.tool, DEPLOY_TOOLS, "instacloud"),
+      command: str(w.deploy?.command, 300),
+      perAgentEnvironments: w.deploy?.perAgentEnvironments === true,
+    },
   };
 }
 
@@ -134,9 +144,10 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
       apply: (by) => s.updateProject(slug, { github }, by),
     });
   }
-  if (config.stack) {
-    const stack = config.stack as StackConfig;
-    steps.push({ change: { kind: "project", field: "stack", before: null, after: stack }, text: "The project's stack", fromFile: [], apply: (by) => s.updateProject(slug, { stack }, by) });
+  const stack = cleanStack(config.stack);
+  if (stack) {
+    // Checked against the catalog; its free text goes into every agent's role, so it is shown.
+    steps.push({ change: { kind: "project", field: "stack", before: null, after: stack }, text: "The project's stack (it goes into every agent's instructions)", fromFile: stackValues(stack), apply: (by) => s.updateProject(slug, { stack }, by) });
   }
   const officeName = str(project.officeName, 40).trim();
   if (officeName) steps.push({ change: { kind: "project", field: "officeName", before: "", after: officeName }, text: "Office name", fromFile: [officeName], apply: (by) => s.updateProject(slug, { officeName }, by) });
@@ -167,27 +178,43 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
     const role = raw === lead ? "cto" : "builder";
 
     let current: { cli: AgentCli; mode: AgentMode; roleMd: string; workspacePath: string | null };
+    const now = view.team.find((a) => a.id === id);
     if (!existing) {
       const defaults = newAgent(id, name, displayRole, color, role === "cto");
       const roleText = role === "cto" ? "as the CTO (the lead)" : "as a builder";
       steps.push({
         change: { kind: "agent-added" },
-        text: `Add ${name} ${roleText}, using ${cli === "codex" ? "Codex" : "Claude Code"}${mode === "local" ? ", in Local mode: outside a sandbox, on this machine" : ""}`,
+        text: `Add an agent ${roleText}, using ${cli === "codex" ? "Codex" : "Claude Code"}${mode === "local" ? ", in Local mode: outside a sandbox, on this machine" : ""}`,
         fromFile: [name],
         apply: (by) => s.addAgent(slug, { id, name, cli, displayRole, color, mode, model: str(raw.model, 60).trim() }, role, by),
       });
       current = { cli, mode, roleMd: defaults.roleMd, workspacePath: null };
     } else {
-      const now = view.team.find((a) => a.id === id);
       current = { cli: now?.cli ?? "claude", mode: now?.mode ?? "sandbox", roleMd: now?.roleMd ?? "", workspacePath: now?.workspacePath ?? null };
-      if (mode !== current.mode) steps.push(agentStep(s, companyId, name, "mode", current.mode, mode, mode === "local" ? `${name} runs in Local mode: outside a sandbox, on this machine` : `${name} runs in a sandbox`, []));
-      if (cli !== current.cli) steps.push(agentStep(s, companyId, name, "cli", current.cli, cli, `${name} uses ${cli === "codex" ? "Codex" : "Claude Code"}`, []));
+      if (mode !== current.mode) steps.push(agentStep(s, companyId, "mode", current.mode, mode, mode === "local" ? "An agent runs in Local mode: outside a sandbox, on this machine" : "An agent runs in a sandbox", [name]));
+      if (cli !== current.cli) steps.push(agentStep(s, companyId, "cli", current.cli, cli, `An agent uses ${cli === "codex" ? "Codex" : "Claude Code"}`, [name]));
+      // Cosmetic settings: written (and audited) with the import, not preview lines.
+      for (const [field, before, after] of [
+        ["displayRole", now?.role ?? "", displayRole],
+        ["color", now?.color ?? "", color],
+        ["model", now?.model ?? "", str(raw.model, 60).trim()],
+      ] as const) {
+        if (after !== before) steps.push(agentStep(s, companyId, field, before, after, "", []));
+      }
     }
     const roleMd = str(raw.roleMd, 8000);
-    if (roleMd && roleMd !== current.roleMd) steps.push(agentStep(s, companyId, name, "roleMd", current.roleMd, roleMd, `${name}'s role text`, [roleMd]));
+    if (roleMd && roleMd !== current.roleMd) steps.push(agentStep(s, companyId, "roleMd", current.roleMd, roleMd, "An agent's role text", [name, roleMd]));
     const workspacePath = str(raw.workspacePath, 500).trim() || null;
     if (workspacePath && workspacePath !== current.workspacePath) {
-      steps.push(agentStep(s, companyId, name, "workspacePath", current.workspacePath, workspacePath, `${name} works in a folder they chose`, [workspacePath]));
+      steps.push(agentStep(s, companyId, "workspacePath", current.workspacePath, workspacePath, "An agent works in a folder of its own choosing", [name, workspacePath]));
+    }
+    const res = raw.sandbox?.resources as { cpus?: unknown; memoryGb?: unknown } | undefined;
+    const resources = {
+      cpus: typeof res?.cpus === "number" && res.cpus >= 1 && res.cpus <= 256 ? Math.round(res.cpus) : null,
+      memoryGb: typeof res?.memoryGb === "number" && res.memoryGb >= 0.5 && res.memoryGb <= 1024 ? res.memoryGb : null,
+    };
+    if (resources.cpus !== null || resources.memoryGb !== null) {
+      steps.push(agentStep(s, companyId, "resources", { cpus: null, memoryGb: null }, resources, "", []));
     }
     const grants: [PermissionKind, string[]][] = [
       ["network-allow", list(raw.sandbox?.allow)],
@@ -197,7 +224,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
     ];
     for (const [kind, values] of grants) {
       for (const value of values) {
-        steps.push({ change: { kind: "grant", permission: kind, value }, text: GRANT_TEXT[kind](name), fromFile: [value], apply: (by) => void s.grant(companyId, kind, value, by) });
+        steps.push({ change: { kind: "grant", permission: kind, value }, text: GRANT_TEXT[kind], fromFile: [name, value], apply: (by) => void s.grant(companyId, kind, value, by) });
       }
     }
   }
@@ -229,8 +256,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
 function agentStep(
   s: Company["settings"],
   companyId: string,
-  _name: string,
-  field: "mode" | "cli" | "roleMd" | "workspacePath",
+  field: "mode" | "cli" | "roleMd" | "workspacePath" | "displayRole" | "color" | "model" | "resources",
   before: unknown,
   after: unknown,
   text: string,

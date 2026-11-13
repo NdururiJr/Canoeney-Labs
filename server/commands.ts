@@ -5,7 +5,8 @@
 
 import { SERVICE_KEYS, type AgentCli, type AgentConfig, type AgentPatch, type ReviewTool, type WelcomeInput, type NewMcpServer, type Board, type NewAgentInput, type ProjectConfig, type RemoveAgentOptions, type SandboxSettings, type SetupCheckId, type WorkflowPatch } from "../src/data/types";
 import { LEAD_NAME, OFFICE_NAME_MAX } from "../src/data/names";
-import { STACK_CATEGORIES, stackSkills, stackTool, type StackChoice, type StackConfig } from "../src/data/stack";
+import { stackSkills } from "../src/data/stack";
+import { cleanStack } from "./stackClean";
 import { resolveAccess } from "./access";
 import { ensureSkillCache } from "./skills";
 import { run } from "./lib/exec";
@@ -25,30 +26,6 @@ import type { SbxMcp } from "./sbxMcp";
 import type { Sessions } from "./sessions";
 import { mergeByNotice } from "./githubSync";
 
-/** A stack from the browser, checked against the catalog. Null when nothing is chosen. */
-function cleanStack(raw: unknown): StackConfig | null {
-  const input = (raw ?? {}) as Partial<StackConfig>;
-  const choice = (c: unknown, category: string): StackChoice | null => {
-    const v = (c ?? {}) as Partial<StackChoice>;
-    const id = str(v.id, 40);
-    const known = id === "other" || stackTool(id)?.category === category;
-    if (!known) return null;
-    const out: StackChoice = { id };
-    if (typeof v.where === "string" && v.where.trim()) out.where = str(v.where, 120).trim();
-    if (id === "other") {
-      if (typeof v.name === "string" && v.name.trim()) out.name = str(v.name, 60).trim();
-      if (typeof v.docsUrl === "string" && v.docsUrl.trim()) out.docsUrl = str(v.docsUrl, 300).trim();
-    }
-    return out;
-  };
-  const frameworks = (Array.isArray(input.frameworks) ? input.frameworks : []).slice(0, 10).map((f) => choice(f, "framework")).filter((f): f is StackChoice => !!f);
-  const tools: StackConfig["tools"] = {};
-  for (const c of STACK_CATEGORIES) {
-    const picked = choice(input.tools?.[c.id], c.id);
-    if (picked) tools[c.id] = picked;
-  }
-  return frameworks.length || Object.keys(tools).length ? { frameworks, tools } : null;
-}
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "agent";
 const str = (v: unknown, max = 2000) => (typeof v === "string" ? v.slice(0, max) : "");

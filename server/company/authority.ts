@@ -56,7 +56,10 @@ function workflowRelaxes(b: WorkflowConfig, a: WorkflowConfig): boolean {
   if (b.review.tool !== a.review.tool || b.review.command !== a.review.command) return true;
   if (b.merge.by !== "lead" && a.merge.by === "lead") return true;
   // Any deploy change except turning it off.
-  if (!same(b.deploy, a.deploy) && !(b.deploy.enabled && !a.deploy.enabled)) return true;
+  // Turning deploy off is tightening only when nothing else in deploy changes with it: a new
+  // command or tool would run, unconfirmed, the next time deploy is turned on.
+  const turnedOffOnly = b.deploy.enabled && !a.deploy.enabled && same({ ...b.deploy, enabled: false }, a.deploy);
+  if (!same(b.deploy, a.deploy) && !turnedOffOnly) return true;
   return false;
 }
 
