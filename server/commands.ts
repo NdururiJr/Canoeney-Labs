@@ -129,7 +129,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     forwardPort: { role: "owner", target: first, run: (_ctx, agentId, port) => sbx.forwardPort(str(agentId, 80), num(port)) },
     unforwardPort: { role: "owner", target: first, run: (_ctx, agentId, port) => sbx.unforwardPort(str(agentId, 80), num(port)) },
     resizeTerminal: { role: "owner", localOnly: true, audit: "collapsed", target: first, run: (_ctx, id, cols, rows) => sessions.resize(str(id, 80), num(cols), num(rows)) },
-    startAgent: { role: "owner", target: first, run: (_ctx, id) => sessions.start(str(id, 80)) },
+    startAgent: { role: "owner", target: first, run: (ctx, id) => sessions.start(str(id, 80), ctx.actor) },
     stopAgent: { role: "supervisor", target: first, run: (_ctx, id) => sessions.stop(str(id, 80)) },
     openWorkspace: { role: "owner", localOnly: true, target: first, run: (_ctx, id) => sessions.openWorkspace(str(id, 80)) },
     recreateSandbox: { role: "owner", target: first, run: (_ctx, id) => sessions.recreate(str(id, 80)) },

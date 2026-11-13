@@ -8,6 +8,17 @@ import { agentConfigOnDisk, isolateClone, trackedHqFiles } from "./agentIsolatio
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
 
+/** A folder HQ will not start an agent in. `reason` goes into the audit row (SR-D-04, SR-D-07). */
+export class WorkspaceRefusedError extends Error {
+  constructor(
+    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorkspaceRefusedError";
+  }
+}
+
 /**
  * The agent's folder. Throws if it is the company store or inside it: agents
  * must never work in, or be pointed at, the company's records. A folder someone
@@ -17,10 +28,10 @@ import type { RepoInfo } from "./repo";
  */
 export function workspaceFor(agent: AgentConfig, projectSlug: string, roots: { store: string; hq: string } = { store: companyHome(), hq: hqHome() }): string {
   const dir = agent.workspacePath || managedWorkspace(projectSlug, agent.id);
-  if (isInside(dir, roots.store)) throw new Error(`${dir} is inside the company store (${roots.store}). Choose a folder outside it for ${agent.name}.`);
+  if (isInside(dir, roots.store)) throw new WorkspaceRefusedError("store", `${dir} is inside the company store (${roots.store}). Choose a folder outside it for ${agent.name}.`);
   if (agent.workspacePath) {
-    if (isInside(roots.store, dir)) throw new Error(`${dir} holds the company store (${roots.store}). Choose a folder outside it for ${agent.name}.`);
-    if (isInside(dir, roots.hq) || isInside(roots.hq, dir)) throw new Error(`${dir} is, holds or sits inside HQ's home (${roots.hq}), where HQ keeps its records. Choose another folder for ${agent.name}.`);
+    if (isInside(roots.store, dir)) throw new WorkspaceRefusedError("store", `${dir} holds the company store (${roots.store}). Choose a folder outside it for ${agent.name}.`);
+    if (isInside(dir, roots.hq) || isInside(roots.hq, dir)) throw new WorkspaceRefusedError("hq-home", `${dir} is, holds or sits inside HQ's home (${roots.hq}), where HQ keeps its records. Choose another folder for ${agent.name}.`);
   }
   return dir;
 }
@@ -69,10 +80,10 @@ async function checkFolder(dir: string, chosen: boolean): Promise<void> {
   const config = await agentConfigOnDisk(dir);
   if (config.length) {
     const end = chosen ? "Use an HQ-managed folder for this agent." : "Commit or discard the change in " + dir + ", then start again.";
-    throw new Error(`${dir} has the repo's agent settings on disk (${config[0]}). HQ keeps them out of agent folders. ${end}`);
+    throw new WorkspaceRefusedError("agent-config", `${dir} has the repo's agent settings on disk (${config[0]}). HQ keeps them out of agent folders. ${end}`);
   }
   const own = await trackedHqFiles(dir);
-  if (own.length) throw new Error(`The repo commits ${own[0]}, which HQ writes with the agent's secret. Remove it from the repo, then start again.`);
+  if (own.length) throw new WorkspaceRefusedError("hq-file", `The repo commits ${own[0]}, which HQ writes with the agent's secret. Remove it from the repo, then start again.`);
 }
 
 /** Fills the index and the working tree from HEAD, within the sparse patterns. */

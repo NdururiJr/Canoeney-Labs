@@ -241,7 +241,9 @@ test("SR-D-03 [T-S7.1] each relaxing command asks for the PIN, and the store ref
   for (const [cmd, args] of relaxing.filter(([c]) => !["answerApproval", "resolveAccess", "completeWelcome", "importRepoConfig"].includes(c))) {
     const refused = hq.company.audit.query({ action: "settings.refused" }).length;
     await assert.rejects(Promise.resolve().then(() => commands[cmd].run(OWNER, ...args)), AuthorityError, cmd);
-    assert.equal(hq.company.audit.query({ action: "settings.refused" }).length, refused + 1, cmd);
+    const rows = hq.company.audit.query({ action: "settings.refused" });
+    assert.equal(rows.length, refused + 1, cmd);
+    assert.deepEqual([rows.at(-1)!.actorKind, rows.at(-1)!.actorId], ["human", "owner"], cmd);
     assert.equal(storeDump(hq), before, cmd);
   }
   // Tightening needs no PIN.

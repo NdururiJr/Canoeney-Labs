@@ -11,7 +11,10 @@ export function refreshProjectNotes(hub: Hub, company: Company): ProjectNotesSta
   const pending = "content" in read && read.sha256 !== approved?.sha256 ? { sha256: read.sha256, text: read.content } : null;
   const state: ProjectNotesState = { approved: approved ? { version: approved.version, approvedAt: approved.approvedAt } : null, pending };
   const before = JSON.stringify(hub.snap.projectNotes ?? null);
+  const newPending = pending && pending.sha256 !== hub.snap.projectNotes?.pending?.sha256;
   hub.snap.projectNotes = state;
+  // Once per new version: agents keep the approved copy (or none) until the owner reads this one.
+  if (newPending) hub.activity("config", null, "CLAUDE.md in the repo changed. Agents keep the approved version until you read and approve it in Action items.");
   if (JSON.stringify(state) !== before) hub.emit({ type: "projectNotes.updated", projectNotes: structuredClone(state) });
   return state;
 }

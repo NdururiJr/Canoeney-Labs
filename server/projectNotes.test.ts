@@ -106,3 +106,17 @@ test("the supervisor's view has no project notes", () => {
   assert.equal("projectNotes" in seen.snapshot, false);
   assert.equal(viewFor("supervisor", { type: "projectNotes.updated", projectNotes }), null);
 });
+
+test("a changed CLAUDE.md asks for the owner's attention once", async (t) => {
+  const hq = await makeHq(t);
+  writeFileSync(notesFile(hq), "delta notes");
+  refreshProjectNotes(hq.hub, hq.company);
+  refreshProjectNotes(hq.hub, hq.company);
+  const lines = hq.hub.snap.activity.filter((a) => /CLAUDE\.md/.test(a.text));
+  assert.equal(lines.length, 1, "one activity line per new version");
+  assert.equal(lines[0].quote, undefined, "the activity line holds none of the file's text");
+  const { selectAttention } = await import("../src/store/attention");
+  const attention = selectAttention(hq.hub.snap);
+  assert.equal(attention.notes, 1);
+  assert.ok(attention.total >= 1);
+});

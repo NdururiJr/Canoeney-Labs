@@ -12,7 +12,7 @@ import { resolve, sep } from "node:path";
 import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
 import { adapters, localBinary } from "./adapters";
 import type { Company } from "./company";
-import { companyAgentId } from "./company/agents";
+import { companyAgentId, type Actor } from "./company/agents";
 import type { Hub } from "./hub";
 import { sessionBackend, type LaunchSpec, type TermHandle } from "./backends";
 import { resolveCommand } from "./backends/pty";
@@ -22,7 +22,7 @@ import { run } from "./lib/exec";
 import { log } from "./lib/log";
 import { projectHome, sessionName } from "./paths";
 import { POLICY_NOT_INITIALIZED, policyVerdict, runSetupChecks } from "./setup";
-import { ensureWorkspace, workspaceFor } from "./workspace";
+import { ensureWorkspace, workspaceFor, WorkspaceRefusedError } from "./workspace";
 
 const TERM_ENV = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<string, string>;
 /**
@@ -58,6 +58,8 @@ export function sbxRunArgs(o: { name: string; size: string[]; envFile: string | 
 
 /** Starts bash (else sh) in a sandbox, with links and browser opening set up (see SHELL_ENV, SANDBOX_BROWSER). */
 const SANDBOX_SHELL = `export FORCE_HYPERLINK=1; [ -x ${SANDBOX_BROWSER} ] && export BROWSER=${SANDBOX_BROWSER}; command -v bash >/dev/null && exec bash -l || exec sh -l`;
+
+const HQ_ACTOR: Actor = { kind: "hq", id: "hq" };
 
 export class Sessions {
   readonly backend = sessionBackend();
@@ -119,6 +121,15 @@ export class Sessions {
   // Start, stop, recreate and remove run one at a time per agent (a lane), so a
   // stop pressed while the agent is still starting waits and then stops it: the
   // agent ends stopped, with no live secret (M0-B carry-forward).
+  /** A refused folder leaves an audit row: who asked, which agent, and why; never the folder's content. */
+  private auditRefusal(id: string, err: WorkspaceRefusedError, by: Actor) {
+    try {
+      this.company.audit.append({ actorKind: by.kind, actorId: by.id, action: "workspace.refused", target: companyAgentId(this.hub.slug, id), data: { reason: err.reason } });
+    } catch {
+      /* the refusal stands even if it cannot be recorded */
+    }
+  }
+
   private lanes = new Map<string, Promise<unknown>>();
   private lane<T>(id: string, fn: () => Promise<T>): Promise<T> {
     const next = (this.lanes.get(id) ?? Promise.resolve()).then(fn, fn);
@@ -126,8 +137,9 @@ export class Sessions {
     return next;
   }
 
-  start(id: string) {
-    return this.lane(id, () => this.startNow(id));
+  /** `by` is who asked (the owner from the dashboard); a refused folder is audited with it. */
+  start(id: string, by: Actor = HQ_ACTOR) {
+    return this.lane(id, () => this.startNow(id, by));
   }
 
   stop(id: string) {
@@ -142,7 +154,7 @@ export class Sessions {
     return this.lane(id, () => this.recreateNow(id));
   }
 
-  private async startNow(id: string) {
+  private async startNow(id: string, by: Actor = HQ_ACTOR) {
     const hub = this.hub;
     const agent = hub.cfg(id);
     const st = hub.status(id);
@@ -227,6 +239,7 @@ export class Sessions {
       // A secret this call issued has no session to use it. A reattached
       // session's secret is left alone: that agent is still running.
       if (issued) this.revokeSecret(id);
+      if (err instanceof WorkspaceRefusedError) this.auditRefusal(id, err, by);
       fail(err instanceof Error ? err.message : String(err));
     }
   }
@@ -516,7 +529,10 @@ export class Sessions {
         workspace = workspaceFor(agent, this.hub.slug);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        if (st.session.state !== "failed" || st.session.detail !== detail) this.hub.setSession(agent.id, { state: "failed", detail });
+        if (st.session.state !== "failed" || st.session.detail !== detail) {
+          this.hub.setSession(agent.id, { state: "failed", detail });
+          if (err instanceof WorkspaceRefusedError) this.auditRefusal(agent.id, err, HQ_ACTOR);
+        }
         return;
       }
       this.attach(agent.id);

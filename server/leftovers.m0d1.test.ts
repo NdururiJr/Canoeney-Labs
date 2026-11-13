@@ -1,5 +1,7 @@
 // The M0-B and M0-C carry-forward items that M0-D1 Task 4 closes.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { OfficeEvent } from "../src/data/source";
@@ -31,6 +33,9 @@ test("a refused folder is marked failed once, not on every poll", async (t) => {
   assert.match(hq.hub.status("ana")?.session.detail ?? "", /company store/);
   assert.equal(failed.length, 1);
   assert.equal(attached, 0, "a refused folder is never attached");
+  // SR-D-04: the refusal is audited, once.
+  const rows = hq.company.audit.query({ action: "workspace.refused" });
+  assert.deepEqual(rows.map((r) => [r.actorId, r.target, r.data.reason]), [["hq", `${hq.slug}/ana`, "store"]]);
 });
 
 test("stop during start leaves the agent stopped with no live secret", async (t) => {
@@ -84,4 +89,26 @@ test("activity lines for sbx failures never repeat sbx's text", async (t) => {
   const texts = hq.hub.snap.activity.map((a) => a.text);
   assert.ok(texts.some((x) => /Couldn't allow/.test(x)), texts.join("\n"));
   assert.equal(texts.some((x) => x.includes(MARK) || x.includes("evil.example.com")), false, texts.join("\n"));
+});
+
+test("SR-D-04 SR-D-07 [T-S7.6 T-S7.3] a refused folder at start is audited with the owner who started it", async (t) => {
+  const hq = await makeHq(t);
+  const { sessions } = withSessions(t, hq);
+  const OWNER_ACTOR = { kind: "human" as const, id: "owner" };
+  // A chosen folder holding the repo's CLAUDE.md (SR-D-07).
+  const dir = hq.hub.cfg("ana")!.workspacePath!;
+  writeFileSync(join(dir, "CLAUDE.md"), "notes");
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "CLAUDE.md"], { cwd: dir });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "notes"], { cwd: dir });
+  await sessions.start("ana", OWNER_ACTOR);
+  assert.equal(hq.hub.status("ana")?.session.state, "failed");
+  // A chosen folder inside the company store (SR-D-04).
+  hq.hub.cfg("ben")!.workspacePath = join(hq.companyHomeDir, "inside");
+  await sessions.start("ben", OWNER_ACTOR);
+  const rows = hq.company.audit.query({ action: "workspace.refused" });
+  assert.deepEqual(rows.map((r) => [r.actorId, r.target, r.data.reason]), [
+    ["owner", `${hq.slug}/ana`, "agent-config"],
+    ["owner", `${hq.slug}/ben`, "store"],
+  ]);
+  assert.equal(JSON.stringify(rows).includes("notes"), false, "the row names the reason, not the file's content");
 });
