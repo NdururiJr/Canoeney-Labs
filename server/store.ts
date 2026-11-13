@@ -3,7 +3,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentConfig, Board, HqConfig, SandboxSettings, Task } from "../src/data/types";
+import type { AgentConfig, Board, HqConfig, SandboxSettings, Task, WorkflowConfig } from "../src/data/types";
 import { LEAD_NAME, WORKER_NAMES } from "../src/data/names";
 import { slugify } from "./paths";
 import type { RepoInfo } from "./repo";
@@ -54,15 +54,20 @@ export function newAgent(id: string, name: string, role: string, color: string, 
   };
 }
 
+/** The workflow a new project starts with, from what the repo already uses. */
+export function defaultWorkflow(repo: RepoInfo): WorkflowConfig {
+  return {
+    review: { enabled: true, tool: repo.hasCodeRabbit ? "coderabbit" : "human", command: "" },
+    merge: { by: "human" },
+    deploy: { enabled: repo.hasInsta, tool: "instacloud", command: "", perAgentEnvironments: repo.hasInsta },
+  };
+}
+
 function defaultConfig(repo: RepoInfo, port: number): HqConfig {
   return {
     project: { id: slugify(repo.name), name: repo.name, repo: repo.github ?? repo.name, path: repo.root, hqPort: port },
     team: [newAgent(slugify(LEAD_NAME), LEAD_NAME, "Lead", "#ff77a8", true), newAgent(slugify(WORKER_NAMES[0]), WORKER_NAMES[0], "Developer", "#29adff", false)],
-    workflow: {
-      review: { enabled: true, tool: repo.hasCodeRabbit ? "coderabbit" : "human", command: "" },
-      merge: { by: "human" },
-      deploy: { enabled: repo.hasInsta, tool: "instacloud", command: "", perAgentEnvironments: repo.hasInsta },
-    },
+    workflow: defaultWorkflow(repo),
   };
 }
 

@@ -6,6 +6,7 @@ import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
 import { HumanAccounts } from "./humanAccounts";
+import { ProjectSettings } from "./projectSettings";
 import { DashboardChannel } from "./slots/dashboardChannel";
 import { SqliteKnowledgeStore } from "./slots/knowledge";
 import { SqliteMemory } from "./slots/memory";
@@ -29,6 +30,8 @@ export interface Company {
   secrets: AgentSecrets;
   /** Humans who log in to the dashboard, and their credentials (M0-C). */
   humans: HumanAccounts;
+  /** Project and agent settings and grants: the only writer of configuration (M0-D1). */
+  settings: ProjectSettings;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
@@ -45,9 +48,11 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
   const audit = new SqliteAuditSink(db, clock);
   const dashboard = new DashboardChannel(db, clock);
   const secrets = new AgentSecrets(db, clock, audit);
+  const agents = new AgentRegistry(db, clock, audit, secrets);
   return {
-    agents: new AgentRegistry(db, clock, audit, secrets),
+    agents,
     secrets,
+    settings: new ProjectSettings(db, clock, audit, agents),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
     home,
     db,

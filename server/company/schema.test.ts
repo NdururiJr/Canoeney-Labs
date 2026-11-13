@@ -3,7 +3,9 @@ import { test } from "node:test";
 import { openCompanyDb, type CompanyDb } from "./db";
 import {
   ACTOR_KINDS,
+  AGENT_MODES,
   AGENT_STATUSES,
+  BOARD_STATUSES,
   DECISION_CATEGORIES,
   DECISION_STATUSES,
   DEPARTMENT_IDS,
@@ -12,6 +14,7 @@ import {
   PERMISSION_KINDS,
   ROLE_IDS,
   SPEND_SOURCES,
+  TASK_STATUSES,
   URGENCIES,
   VERIFICATIONS,
 } from "./types";
@@ -312,4 +315,39 @@ test("a permission grant must record who granted it", (t) => {
   assert.throws(() => grant("git", null, null), /CHECK/);
   grant("git", null, "h1");
   grant("npm", decisionId, null);
+});
+
+test("migration 006: agent mode, board status and task status accept their unions and refuse one outside", (t) => {
+  const db = fresh(t);
+  db.prepare("INSERT INTO projects(id, name, repo, kind, created_at) VALUES ('p', 'p', '/r', 'company', ?)").run(NOW);
+  const mode = (id: string, m: string) => {
+    addAgent(db, id);
+    db.prepare("INSERT INTO agent_settings(agent_id, display_role, color, mode, role_md, updated_at) VALUES (?, 'r', '#000', ?, 'x', ?)").run(id, m, NOW);
+  };
+  for (const m of AGENT_MODES) mode(`m-${m}`, m);
+  assert.throws(() => mode("m-bad", "remote"), /CHECK/, "AGENT_MODES grew beyond agent_settings.mode");
+
+  const board = (id: string, s: string) =>
+    db.prepare("INSERT INTO boards(project_id, id, title, status, ord) VALUES ('p', ?, 't', ?, 0)").run(id, s);
+  for (const s of BOARD_STATUSES) board(`b-${s}`, s);
+  assert.throws(() => board("b-bad", "archived"), /CHECK/, "BOARD_STATUSES grew beyond boards.status");
+
+  const task = (id: string, s: string) =>
+    db.prepare("INSERT INTO tasks(project_id, id, board_id, title, status, ord) VALUES ('p', ?, 'b-active', 't', ?, 0)").run(id, s);
+  for (const s of TASK_STATUSES) task(`t-${s}`, s);
+  assert.throws(() => task("t-bad", "cancelled"), /CHECK/, "TASK_STATUSES grew beyond tasks.status");
+});
+
+test("migration 006: approved project notes are append-only and name who approved them", (t) => {
+  const db = fresh(t);
+  db.prepare("INSERT INTO projects(id, name, repo, kind, created_at) VALUES ('p', 'p', '/r', 'company', ?)").run(NOW);
+  addHuman(db, "h1", "owner");
+  const note = (v: number, human: string | null) =>
+    db
+      .prepare("INSERT INTO project_notes(project_id, version, sha256, content, approved_by_human_id, approved_at) VALUES ('p', ?, ?, 'c', ?, ?)")
+      .run(v, "a".repeat(64), human, NOW);
+  assert.throws(() => note(1, null), /CHECK/);
+  note(1, "h1");
+  assert.throws(() => db.prepare("UPDATE project_notes SET content = 'x'").run(), /append-only/);
+  assert.throws(() => db.prepare("DELETE FROM project_notes").run(), /append-only/);
 });
