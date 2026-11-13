@@ -8,29 +8,33 @@ import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { run } from "./lib/exec";
 
-/** Non-cone sparse patterns: everything, except the agent configuration at any depth. */
-export const AGENT_CONFIG_PATTERNS: readonly string[] = [
-  "/*",
-  "!CLAUDE.md",
-  "!CLAUDE.local.md",
-  "!AGENTS.md",
-  "!AGENTS.override.md",
-  "!ROLE.md",
-  "!.mcp.json",
-  "!.claude/",
-  "!.agents/",
-  "!.codex/",
-];
+const CONFIG_FILE_NAMES = ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md", "ROLE.md", ".mcp.json"];
+const CONFIG_DIR_NAMES = [".claude", ".agents", ".codex"];
 
-const CONFIG_FILES = new Set(["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md", "ROLE.md", ".mcp.json"]);
-const CONFIG_DIRS = new Set([".claude", ".agents", ".codex"]);
+/**
+ * A name as a pattern that matches it in any letter case ("[cC][lL]…"). Windows and
+ * macOS file systems ignore case, so Claude Code would load a tracked "Claude.md";
+ * git's own sparse matching ignores case only where core.ignorecase is set. Writing
+ * the case into the pattern makes every platform leave out the same files.
+ */
+const anyCase = (name: string): string => name.replace(/[a-z]/gi, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
+
+/**
+ * Non-cone sparse patterns: everything, except the agent configuration at any depth
+ * and in any letter case. These are the plan's patterns (!CLAUDE.md, !.claude/, …)
+ * with the case written out.
+ */
+export const AGENT_CONFIG_PATTERNS: readonly string[] = ["/*", ...CONFIG_FILE_NAMES.map((n) => `!${anyCase(n)}`), ...CONFIG_DIR_NAMES.map((n) => `!${anyCase(n)}/`)];
+
+const CONFIG_FILES = new Set(CONFIG_FILE_NAMES.map((n) => n.toLowerCase()));
+const CONFIG_DIRS = new Set(CONFIG_DIR_NAMES);
 
 /** HQ's own files in an agent's folder. A repo that tracks one could commit the agent's secret. */
 export const HQ_OWN_FILES: readonly string[] = [".jsmhq-role.md", ".jsmhq-hook.mjs", ".claude/settings.local.json", ".claude/hq-mcp.json", ".codex/config.toml"];
 
 /** True for a repo path the sparse patterns leave out of an agent's folder. */
 export function isAgentConfigPath(rel: string): boolean {
-  const parts = rel.replace(/\\/g, "/").split("/").filter(Boolean);
+  const parts = rel.replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
   if (parts.length === 0) return false;
   return CONFIG_FILES.has(parts[parts.length - 1]) || parts.slice(0, -1).some((p) => CONFIG_DIRS.has(p));
 }
@@ -64,8 +68,8 @@ export async function agentConfigOnDisk(dir: string): Promise<string[]> {
   });
 }
 
-/** HQ's own file names that the repo tracks. */
+/** The repo's tracked paths that are one of HQ's own file names, in any letter case. */
 export async function trackedHqFiles(dir: string): Promise<string[]> {
-  const all = new Set(await tracked(dir));
-  return HQ_OWN_FILES.filter((f) => all.has(f));
+  const own = new Set(HQ_OWN_FILES.map((f) => f.toLowerCase()));
+  return (await tracked(dir)).filter((rel) => own.has(rel.toLowerCase()));
 }

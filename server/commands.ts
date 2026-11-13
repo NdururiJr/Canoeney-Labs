@@ -343,6 +343,9 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const projectName = typeof input.projectName === "string" && input.projectName.trim() ? str(input.projectName, 80).trim() : null;
       // One transaction: the settings, the team (its lead is the CTO) and no grants.
       company.settings.transaction(() => {
+        // Agents an older install registered (no settings, no config file imported) are replaced, not kept
+        // beside the new team: one CTO. Retiring revokes their secrets; their ids are never given out again.
+        for (const old of company.agents.list(hub.slug)) if (old.status !== "retired") company.agents.setStatus(hub.slug, old.agentId, "retired", ctx.actor);
         company.settings.create(hub.slug, { github: hub.repo.github ?? null, workflow, ...(stack ? { stack } : {}) }, by);
         if (projectName) company.settings.updateProject(hub.slug, { name: projectName }, by);
         const cto = company.settings.addAgent(hub.slug, lead, "cto", by);

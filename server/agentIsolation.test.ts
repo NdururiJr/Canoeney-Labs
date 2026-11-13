@@ -6,7 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { HqConfig } from "../src/data/types";
 import { adapters, CODEX_CONFIG } from "./adapters";
-import { isAgentConfigPath } from "./agentIsolation";
+import { AGENT_CONFIG_PATTERNS, isAgentConfigPath } from "./agentIsolation";
 import { MCP_CONFIG, ROLE_FILE } from "./agentFiles";
 import { managedWorkspace, projectHome } from "./paths";
 import type { RepoInfo } from "./repo";
@@ -169,4 +169,31 @@ test("a stack skill whose name the repo commits is skipped, and the activity say
   // Neither copy of x is on disk: the repo's is outside the sparse set, and HQ's was not installed.
   assert.equal(existsSync(join(dir, ".claude", "skills", "x")), false);
   assert.equal(skillSkippedText("Ana", ".claude/skills/x"), "The repo commits .claude/skills/x, so Ana starts without the stack's x skill.");
+});
+
+test("a clone whose first checkout never finished is checked out at its next start, not left empty", async (t) => {
+  const { repo } = setup(t);
+  // What a failed first start leaves: a no-checkout clone with the sparse patterns set, and an empty index.
+  const dir = managedWorkspace("demo", "ana");
+  git(dirname(dir), "clone", "-q", "--no-checkout", repo.root, dir);
+  execFileSync("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], { cwd: dir, input: AGENT_CONFIG_PATTERNS.join("\n") + "\n" });
+  assert.equal(git(dir, "ls-files"), "");
+  await ensureWorkspace(builder(), "demo", repo);
+  assert.deepEqual(onDisk(dir), ["src/a.ts"]);
+  assert.equal(git(dir, "status", "--porcelain"), "", "nothing staged as deleted");
+});
+
+test("agent configuration is matched whatever its letter case, on every platform", async (t) => {
+  assert.equal(isAgentConfigPath("other/Claude.md"), true);
+  assert.equal(isAgentConfigPath("lib/.CLAUDE/x.json"), true);
+  assert.equal(isAgentConfigPath("docs/claude-notes.md"), false);
+  const { repo } = setup(t, { "other/Claude.md": "case variant", "lib/.CLAUDE/x.json": "{}", "src/b.ts": "export {};\n" });
+  const dir = await ensureWorkspace(builder(), "demo", repo);
+  assert.deepEqual(onDisk(dir), ["src/a.ts", "src/b.ts"]);
+  for (const line of git(dir, "ls-files", "-t").trim().split("\n")) assert.equal(line.startsWith("S "), isAgentConfigPath(line.slice(2)), line);
+});
+
+test("a repo that commits a case variant of one of HQ's own files is refused", async (t) => {
+  const { repo } = setup(t, { ".JSMHQ-ROLE.md": "committed" });
+  await assert.rejects(ensureWorkspace(builder(), "demo", repo), /commits \.JSMHQ-ROLE\.md/);
 });

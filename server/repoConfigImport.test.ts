@@ -344,3 +344,16 @@ test("importing into a store that already has the agents keeps each agent's sett
   assert.deepEqual([ana.role, ana.color, ana.model, ana.mode], ["QA", "#00ff00", "sonnet", "local"]);
   assert.equal(hq.planner.ctoId(), "lead", "the store's CTO stays; isLead in the file grants nothing");
 });
+
+test("the welcome on a store that already has agents replaces the old team: one CTO", async (t) => {
+  const hq = await makeHq(t, { unseeded: true });
+  // An install from before M0-D1 without its config file: agent rows, no settings.
+  for (const id of ["lead", "ana"]) hq.company.agents.register(hq.slug, { id, name: id, cli: "claude" }, id === "lead" ? "cto" : "builder", { kind: "hq", id: "hq" }, "config");
+  hq.hub.configChanged();
+  const commands = makeCommands(hq.hub, stub(), hq.planner, hq.inbox, stub(), stub(), hq.company);
+  await commands.completeWelcome.run(WITH_PIN, { lead: { name: "Boss" }, workers: [{ name: "Zed", role: "Developer" }] });
+  assert.deepEqual(hq.hub.snap.config.team.map((a) => [a.id, a.isLead]), [["boss", true], ["zed", false]]);
+  assert.equal(hq.planner.ctoId(), "boss");
+  for (const id of ["lead", "ana"]) assert.equal(hq.company.agents.get(hq.slug, id)?.status, "retired", id);
+  assert.equal(hq.company.db.prepare("SELECT COUNT(*) AS n FROM agents WHERE role_id = 'cto' AND status <> 'retired'").get<{ n: number }>()?.n, 1);
+});

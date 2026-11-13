@@ -1,6 +1,6 @@
 // Agent folders: an HQ-managed clone per agent, or a folder the user chose.
 
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import type { AgentConfig } from "../src/data/types";
 import { companyHome, hqHome, isInside } from "./company/home";
 import { run } from "./lib/exec";
@@ -42,12 +42,21 @@ export async function ensureWorkspace(agent: AgentConfig, projectSlug: string, r
     // No checkout until the sparse patterns are set, so the repo's agent settings never reach the disk (SR-D-07).
     const clone = await run("git", ["clone", "--quiet", "--no-checkout", repo.root, dir], { timeoutMs: 300_000 });
     if (!clone.ok) throw new Error(`git clone failed: ${clone.stderr.trim()}`);
-    await isolateClone(dir);
-    const checkout = await run("git", ["checkout", "--quiet"], { cwd: dir, timeoutMs: 300_000 });
-    if (!checkout.ok) throw new Error(`git checkout failed: ${checkout.stderr.trim()}`);
+    try {
+      await isolateClone(dir);
+      await checkoutHead(dir);
+    } catch (err) {
+      // A half-made clone would start next time as an empty folder with the whole repo staged as deleted.
+      rmSync(dir, { recursive: true, force: true });
+      throw err;
+    }
   } else {
     // An existing clone (perhaps from before this change) is isolated again on every start.
     await isolateClone(dir);
+    // A clone whose first checkout never finished has an empty index: check it out now.
+    const tracked = await run("git", ["ls-files"], { cwd: dir });
+    const head = await run("git", ["ls-tree", "-r", "--name-only", "HEAD"], { cwd: dir });
+    if (tracked.ok && !tracked.stdout.trim() && head.ok && head.stdout.trim()) await checkoutHead(dir);
   }
   await checkFolder(dir, false);
   // A local clone points origin at the folder; agents need the real remote to push.
@@ -64,4 +73,10 @@ async function checkFolder(dir: string, chosen: boolean): Promise<void> {
   }
   const own = await trackedHqFiles(dir);
   if (own.length) throw new Error(`The repo commits ${own[0]}, which HQ writes with the agent's secret. Remove it from the repo, then start again.`);
+}
+
+/** Fills the index and the working tree from HEAD, within the sparse patterns. */
+async function checkoutHead(dir: string): Promise<void> {
+  const r = await run("git", ["read-tree", "-mu", "HEAD"], { cwd: dir, timeoutMs: 300_000 });
+  if (!r.ok) throw new Error(`git checkout failed: ${r.stderr.trim()}`);
 }
