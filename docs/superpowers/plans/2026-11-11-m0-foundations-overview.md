@@ -114,4 +114,5 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | M0-C final review (deferred): `OwnerAuth`'s failure maps are never pruned; `reset-owner` does not check that HQ is stopped | M0-G (always-on host) |
 | M0-C plan: the read-only supervisor UI | M1 (M1.11) |
 | M0-D1 plan: check on the Linux host whether `claude --setting-sources user` (project and local settings off) still runs the hooks HQ passes with `--settings`, and whether Codex has a switch that stops `AGENTS.md`. If they work, add them as a second layer to D1's sparse checkout | M0-G, on the Linux host |
+| PR #7 review (non-blocking): `README.md:38`, `README.md:74` and `docs/getting-started.md:7` still say HQ works on macOS, but CI no longer runs on a Mac (owner decision, 2026-11-13). Say macOS is untested in this fork, or record why the docs stay | M0-H (the rename rewrites these docs) |
 | M0-D1 plan: an agent can turn sparse checkout off in its own folder and read the repo's `CLAUDE.md` there. This reaches only that agent (T-S6.10, accepted). Security & Audit can flag it from the agent's shell history | M1 (M1.8) |
