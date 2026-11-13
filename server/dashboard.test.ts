@@ -62,6 +62,7 @@ function sampleArgs(d: DashboardHq): Record<string, unknown[]> {
     completeWelcome: [{}],
     previewRepoImport: [],
     importRepoConfig: [{ sha256: "x" }],
+    approveProjectNotes: ["x"],
     updateWorkflow: [{}],
     updateProject: [{ name: "Fixture" }],
     createBoard: ["Board"],
