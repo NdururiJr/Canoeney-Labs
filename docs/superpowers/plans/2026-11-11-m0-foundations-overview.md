@@ -12,7 +12,7 @@ M0 has 18 goals that fall into separate pieces of software. Each piece gets its 
 | **M0-B Agent identity and roles** | M0.2 per-agent secrets on `/mcp` and `/hook` (S1, S2); M0.14 roles mapped to tool sets, replacing `isLead` | A | No |
 | **M0-C Owner login and a safe dashboard** | M0.7 login, TOTP, approval PIN, escaping, sanitised markdown, CSP (S10); M0.14 per-command human-role checks and owner-started changes as direct PIN-confirmed actions (S5); §9.6 terminal disabled for remote sessions | A | No |
 | **M0-D1 Company store holds the configuration** (`2026-11-12-m0d1-company-store.md`) | M0.11 config and `plan.json` move to the company store (S7); D1: agents ignore the agent configuration a repo carries; the M0-D carry-forward | A, B, C | No (D1 decided 2026-11-12) |
-| **M0-D2 One HQ, many projects** | M0.12 many projects under one company with a project switcher, HQ source off-limits (SR-D-05), company website as first project; per-project isolation (SR-D-09); M0.14 company-level workspaces (SR-D-06) | D1 | No |
+| **M0-D2 One HQ, many projects** (`2026-11-13-m0d2-many-projects.md`) | M0.12 many projects under one company with a project switcher, HQ source off-limits (SR-D-05), company website as first project; per-project isolation (SR-D-09); M0.14 company-level workspaces (SR-D-06) | D1 | No |
 | **M0-E Least-privilege GitHub** | M0.10 scoped identity per agent, branch protection, no global consequential secrets, no Local mode for company agents (S3); merge-by as a gated setting; Actions hardening (S9) | B, D | **Yes:** GitHub App or bot accounts, and whether private-repo branch protection needs a paid plan (spend) |
 | **M0-F Per-role skills** | M0.18 skills vendored into company-owned forks, pinned by hash, installed per role, changes as category 2 (S12) | A, B | No (the company skill repo is created by the owner) |
 | **M0-G Always-on operations** | M0.6 Linux host; M0.15 external uptime check, public health path, daily heartbeat; M0.16 encrypted nightly off-host backup, daily audit-head anchor, tested restore | A (and C for the public endpoint) | **Yes:** host and monthly budget, after the virtualisation check |
@@ -34,6 +34,7 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | Done 2026-11-13 | CI stops building on macOS: production runs on Linux and the owner's desktop is Windows. GitHub's macOS runners had no capacity for PR #6 in four attempts. `build (macos-latest)` removed from `main`'s required checks; the workflow change is PR #7. Plans from M0-D1 on require Ubuntu, Windows and `linux-bare`; merged plans keep their wording | Spec M0 goal 6 |
 | With M0-E (branch protection) | Add CODEOWNERS in each managed repo making `CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.claude/`, `.mcp.json`, `.agents/` and `.codex/` owner-reviewed: D1's second lock. `.github/` is the owner's, so the builder does not write it | Threat model §4.7 D1 |
 | Before M0-E | Decide D2: env files and owner replies that carry secret values into sandboxes | Threat model §4.7 |
+| Before M0-D2's exit check | Create the company website repo on GitHub (or name an existing one). M0.12 makes it the first project, and M0-E's live checks run on it | Spec M0.12 |
 | Before M0-G | Decide D9: anchor the audit head after every PIN-confirmed action as well as daily | Threat model §4.7 |
 | Before the M1 plan | Decide D4 (email approves nothing), D5 (width of a network grant), D7 (message delivery by tool) and D10 (the 17 extra §6 tests) | Threat model §4.7 |
 | Any time | Decide D11: keep X1–X4 as cross-cutting groups, or promote them to S13–S16 | Threat model §4.7 |
@@ -118,3 +119,18 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | PR #6 review (non-blocking): a stack skill whose name the repo commits is skipped, so a PR can take that skill away from every agent. M0-D1 reports it in the activity (plan Task 5). Install HQ's skills where a repo path cannot shadow them | M0-F |
 | PR #7 review (non-blocking): `README.md:38`, `README.md:74` and `docs/getting-started.md:7` still say HQ works on macOS, but CI no longer runs on a Mac (owner decision, 2026-11-13). Say macOS is untested in this fork, or record why the docs stay | M0-H (the rename rewrites these docs) |
 | M0-D1 plan: an agent can turn sparse checkout off in its own folder and read the repo's `CLAUDE.md` there. This reaches only that agent (T-S6.10, accepted). Security & Audit can flag it from the agent's shell history | M1 (M1.8) |
+| PR #6 review, round 2 (non-blocking): show each board's task titles in the import preview, as agent text | Done (M0-D1 plan Task 3, PR #8) |
+| PR #8 review, round 1 (non-blocking): `planner.ts`'s self-close rule names builders only. Refuse unless the role is the CTO, and test a third role | M0-D2 (plan Task 4) |
+| PR #8 review, round 1 (non-blocking): a chosen folder is checked only when its agent starts; a later pull there can bring `CLAUDE.md` in. Say so in how-it-works | M0-D2 (plan Task 6) |
+| PR #8 review, round 1 (non-blocking): a key set "for every sandbox" has no row in `permissions` (beside D5 and SR-M1-16) | M0-E (no global consequential secrets) |
+| PR #8 review, round 1 (non-blocking): the import does not clean domains (lower case, `DOMAIN`) or MCP names (`MCP_NAME`) the way the dashboard does | M0-D2 (plan Task 6) |
+| PR #8 review, rounds 1 and 2 (non-blocking): `backends/pty.ts` quotes `"` as `\"` for cmd.exe, which is unsafe for any argument; and `MODEL_NAME` still allows a leading `-`, which the CLI could read as an option | M0-D2 (plan Task 6) |
+| PR #8, owner question: a repo in a reused folder name inherits a deleted repo's project, grants, Local mode and notes. Recognise a move only when the GitHub remote matches too | M0-D2 (plan Task 1), if the owner agrees |
+| PR #8, M0-D1 exit check: an M0-C install upgraded with the import, an agent started in a real sandbox, and its folder listed (`sbx` is not on the build machine). The owner accepted the move on 2026-11-13 | M0-G, on the Linux host |
+| M0-D1 final review (deferred): `syncFromConfig` is dead code; `defaultWorkflow` is unused | M0-D2 (plan Tasks 1 and 6) |
+| M0-D1 final review (deferred): `imported_at` is never written; `readImport` follows links and gives a generic error for a broken file; the SR-D-02 scan misses the literal `".jsmhq/config.json"`; importing resets running agents' statuses | M0-D2 (plan Task 6) |
+| M0-D1 final review (deferred): SR-D-01's test does not run HQ's startup | M0-D2 (plan Task 2, through `startHq`) |
+| M0-D1 final review (deferred): a chosen folder that is a repo subfolder misses a root `CLAUDE.md`; `allowAll` grants are not in one transaction | M0-D2 (plan Task 6) |
+| M0-D1 final review (deferred): the import's hash covers the file bytes, not the store state its plan reads | M1 (M1.4, when a decision binds to the change it names) |
+| M0-D1 final review (deferred): approved project notes cannot be withdrawn | M1 (with the charter, M1.1) |
+| M0-D1 final review (deferred): Stop waits behind a long clone with no feedback | M0-G (always-on host) |
