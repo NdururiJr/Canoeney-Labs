@@ -172,14 +172,14 @@ export class Projects {
     return [...this.runtimes.keys()];
   }
 
-  stopAll(): void {
-    for (const rt of this.runtimes.values()) {
-      try {
-        rt.stop();
-      } catch (err) {
-        log.warn(`project ${rt.slug} did not stop cleanly: ${err instanceof Error ? err.message : err}`);
-      }
-    }
+  /** Stops every runtime; waits up to 5 s for their GitHub tokens to be revoked. */
+  async stopAll(): Promise<void> {
+    const stops = [...this.runtimes.values()].map((rt) =>
+      Promise.resolve()
+        .then(() => rt.stop())
+        .catch((err) => log.warn(`project ${rt.slug} did not stop cleanly: ${err instanceof Error ? err.message : err}`)),
+    );
+    await Promise.race([Promise.all(stops), new Promise((r) => setTimeout(r, 5000).unref())]);
   }
 
   /**

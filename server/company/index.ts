@@ -42,6 +42,8 @@ export interface Company {
   notes: ProjectNotes;
   /** Each agent's own GitHub App, its private key sealed with the owner key (M0-E). */
   githubApps: GitHubApps;
+  /** The GitHub REST client the Apps and tokens use (a fake in tests). */
+  githubApi: GitHubApi;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
@@ -60,6 +62,7 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
   const secrets = new AgentSecrets(db, clock, audit);
   const agents = new AgentRegistry(db, clock, audit, secrets);
   const settings = new ProjectSettings(db, clock, audit, agents);
+  const githubApi = opts.githubApi ?? fetchGitHubApi();
   return {
     agents,
     secrets,
@@ -67,7 +70,8 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
     plans: new PlanStore(db),
     notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
-    githubApps: new GitHubApps({ db, audit, clock, keyFile: join(home, "owner.key"), api: opts.githubApi ?? fetchGitHubApi() }),
+    githubApps: new GitHubApps({ db, audit, clock, keyFile: join(home, "owner.key"), api: githubApi }),
+    githubApi,
     home,
     db,
     clock,

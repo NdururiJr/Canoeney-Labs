@@ -41,7 +41,8 @@ export interface RunningHq {
   /** Where the owner's setup code is, while no owner is enrolled. */
   setupFile: string | null;
   server: Server;
-  close(): void;
+  /** Revokes every agent's GitHub token, then stops. */
+  close(): Promise<void>;
 }
 
 export async function startHq(o: StartOptions): Promise<RunningHq> {
@@ -84,10 +85,10 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     opened.startAll();
 
     let closed = false;
-    const close = () => {
+    const close = async () => {
       if (closed) return;
       closed = true;
-      opened.stopAll();
+      await opened.stopAll();
       try {
         // The collapsed terminal rows still counting go in before HQ stops (M0-C final review).
         dashboard.flush(true);
@@ -105,7 +106,7 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     };
     return { projects: opened, url: `${o.uiOrigin}/`, setupFile, server, close };
   } catch (err) {
-    projects?.stopAll();
+    await projects?.stopAll();
     company.close();
     throw err;
   }

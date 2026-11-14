@@ -74,9 +74,8 @@ async function main() {
   }
 
   const quit = () => {
-    log.info("stopping HQ and its agents — tmux sessions keep running; sandboxes and folders are kept");
-    hq.close();
-    process.exit(0);
+    log.info("stopping HQ and its agents — tmux sessions keep running; sandboxes and folders are kept; GitHub tokens are revoked");
+    void hq.close().finally(() => process.exit(0));
   };
   process.on("SIGINT", quit);
   process.on("SIGTERM", quit);

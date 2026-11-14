@@ -180,3 +180,19 @@ test("an agent whose session name another project's agent already has is refused
   // A different id in the same project is fine.
   agents.register("a-b", member("d"), "builder", DASHBOARD_ACTOR, "dashboard");
 });
+
+test("a status change is announced once, after it commits, with who made it", (t) => {
+  const { agents } = fresh(t);
+  team(agents, "alpha", "ana");
+  const heard: [string, string, string][] = [];
+  const off = agents.onStatusChange((id, to, by) => void heard.push([id, to, by.id]));
+  agents.setStatus("alpha", "ana", "paused", DASHBOARD_ACTOR);
+  agents.setStatus("alpha", "ana", "paused", DASHBOARD_ACTOR); // no change: no announcement
+  agents.setStatus("alpha", "ana", "retired", DASHBOARD_ACTOR);
+  off();
+  agents.setStatus("alpha", "lead", "paused", DASHBOARD_ACTOR);
+  assert.deepEqual(heard, [
+    ["alpha/ana", "paused", "owner"],
+    ["alpha/ana", "retired", "owner"],
+  ]);
+});

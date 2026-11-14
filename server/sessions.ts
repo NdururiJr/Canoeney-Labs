@@ -80,6 +80,11 @@ export class Sessions {
   onSandboxRemoved: (agentId: string) => void = () => {};
   /** The agent's env file, if it has one (passed with --env-file / sourced). */
   envFileFor: (agentId: string) => string | null = () => null;
+  /**
+   * The agent's own GitHub token (M0-E): delivered before its sandbox starts and when HQ
+   * reattaches to it, revoked when it stops. Null until the project runtime wires it.
+   */
+  github: { deliver(agentId: string): Promise<"issued" | "no-identity">; revoke(agentId: string, reason: "stopped", by?: Actor): Promise<void> } | null = null;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
   githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => null;
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
@@ -95,6 +100,17 @@ export class Sessions {
 
   private name(agentId: string) {
     return sessionName(this.hub.slug, agentId);
+  }
+
+  /** Gives the agent its GitHub token. A failure is reported, never fatal: the agent starts without GitHub. */
+  private async deliverGithub(agentId: string, name: string): Promise<void> {
+    if (!this.github) return;
+    try {
+      if ((await this.github.deliver(agentId)) === "no-identity")
+        this.hub.activity("session", agentId, `${name} has no GitHub identity: it can't push or open pull requests. Create one in Settings → Team, then install it on this project's repo.`);
+    } catch (err) {
+      this.hub.activity("session", agentId, `${name} couldn't get a GitHub token: ${err instanceof Error ? err.message.slice(0, 120) : "unknown error"}`);
+    }
   }
 
   /** Revokes the agent's live secret: HQ ended its session, so no one should use it any more. */
@@ -202,6 +218,9 @@ export class Sessions {
           throw new WorkspaceRefusedError("github-credential", `${agent.name} is a company-level agent and must not reach GitHub, but ${where} would reach it. Remove it, then start again.`, { names });
         }
       }
+      // The agent's own GitHub token, before its sandbox exists or is reattached (M0-E). Company-level
+      // agents never get one (SR-D-06); an agent without a sandbox has nowhere to put it.
+      if (!company && agent.mode === "sandbox") await this.deliverGithub(id, agent.name);
       const adapter = adapters[agent.cli];
       // A session that is still running (tmux outlives HQ) keeps the secret and the
       // files it was started with. HQ keeps only a hash of the secret, so it could
@@ -272,6 +291,7 @@ export class Sessions {
     this.closeShell(id);
     await this.backend.kill(name);
     this.revokeSecret(id);
+    await this.github?.revoke(id, "stopped").catch(() => {});
     // Stop (not remove) the VM so it can resume later with its state.
     if (agent.mode === "sandbox") void run("sbx", ["stop", name], { timeoutMs: 30_000 });
     hub.setSession(id, { state: "stopped", detail: null });
@@ -558,6 +578,9 @@ export class Sessions {
         this.hub.setSession(agent.id, { state: "running", detail: null, workspace });
         this.hub.setStatus(agent.id, { note: "Reattached" });
         this.onSessionReattached(agent.id);
+        // Its token may have expired while HQ was stopped: a fresh one (M0-E).
+        const role = this.company.agents.get(this.hub.slug, agent.id)?.role;
+        if (agent.mode === "sandbox" && role && workspaceKind(role) === "project") void this.deliverGithub(agent.id, agent.name);
         this.noteOldKey(agent.id);
       }
       if (agent.cli === "codex") await this.watchCodexScreen(agent.id, name);

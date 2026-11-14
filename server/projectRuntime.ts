@@ -20,6 +20,8 @@ import { offerImport } from "./repoConfigImport";
 import { Sbx } from "./sbx";
 import { SbxMcp } from "./sbxMcp";
 import { Sessions } from "./sessions";
+import { companyAgentId } from "./company/agents";
+import { AgentTokens } from "./github/tokens";
 import { runSetupChecks } from "./setup";
 
 export interface RuntimeParts {
@@ -34,7 +36,7 @@ export interface RuntimeParts {
   commands: Record<string, CommandSpec>;
   /** Starts polling and syncing; `stop` undoes it. */
   start?: () => void;
-  stop?: () => void;
+  stop?: () => void | Promise<void>;
 }
 
 export class ProjectRuntime {
@@ -48,7 +50,7 @@ export class ProjectRuntime {
   readonly mcp: SbxMcp;
   readonly commands: Record<string, CommandSpec>;
   private readonly onStart: () => void;
-  private readonly onStop: () => void;
+  private readonly onStop: () => void | Promise<void>;
   private started = false;
 
   constructor(p: RuntimeParts) {
@@ -88,6 +90,15 @@ export class ProjectRuntime {
     sessions.lastHookAt = (id) => inbox.lastHookAt(id);
     const sbx = new Sbx(hub, company);
     sessions.envFileFor = (id) => (existsSync(sbx.envFile(id)) ? sbx.envFile(id) : null);
+    // Each agent's own one-hour GitHub token (M0-E, SR-E-04, SR-E-07).
+    const tokens = new AgentTokens({ apps: company.githubApps, api: company.githubApi, sbx, clock: company.clock, audit: company.audit });
+    sessions.github = {
+      deliver: (id) => tokens.deliver(id, companyAgentId(slug, id), repo.github),
+      revoke: (id, reason, by) => tokens.revoke(id, reason, by),
+    };
+    const unwatch = company.agents.onStatusChange((cid, to, by) => {
+      if ((to === "paused" || to === "retired") && cid.startsWith(`${slug}/`)) void tokens.revoke(cid.slice(slug.length + 1), to, by);
+    });
     // Read fresh before a company-level agent starts: a key set a moment ago must count (SR-D-06).
     sessions.githubKeyFor = async (id) => {
       await sbx.refresh();
@@ -132,7 +143,9 @@ export class ProjectRuntime {
         github = new GitHubSync(hub, planner, repo.github);
         github.start();
       },
-      stop: () => {
+      stop: async () => {
+        unwatch();
+        await tokens.revokeAll("hq-stopped");
         sessions.shutdown();
         sbx.stopApprovalPolling();
         github?.stop();
@@ -148,8 +161,8 @@ export class ProjectRuntime {
     this.onStart();
   }
 
-  /** What stopping HQ does for this project: sessions shut down (tmux ones keep running), polling stops. */
-  stop(): void {
-    this.onStop();
+  /** What stopping HQ does for this project: tokens revoked, sessions shut down (tmux ones keep running), polling stops. */
+  async stop(): Promise<void> {
+    await this.onStop();
   }
 }
