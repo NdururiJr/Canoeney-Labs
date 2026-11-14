@@ -110,13 +110,19 @@ export class Sbx {
    * Whether sbx's GitHub service key reaches this agent's sandbox, as of the
    * last refresh(): set for every sandbox ("global"), for this one, or not at all.
    */
-  githubKeyFor(agentId: string): "global" | "sandbox" | null {
+  githubKeyFor(agentId: string): "global" | "sandbox" | "unknown" | null {
+    // Not read, or the read failed: HQ cannot say no key reaches the sandbox.
+    if (!this.keysRead) return "unknown";
     if (this.state.globalKeys.includes("github")) return "global";
     if (this.state.agents[agentId]?.keys.includes("github")) return "sandbox";
     return null;
   }
 
+  /** True when the last refresh() read sbx's keys; githubKeyFor answers "unknown" otherwise (SR-D-06). */
+  private keysRead = false;
+
   async refresh() {
+    this.keysRead = false;
     if (!this.hub.snap.setup.sandboxReady) {
       this.state.agents = Object.fromEntries(this.hub.snap.config.team.map((a) => [a.id, this.emptyAgent(a.id)]));
       return this.publish();
@@ -129,7 +135,9 @@ export class Sbx {
     ]);
     let secrets: { scope: string; type: string; name: string }[] = [];
     try {
-      secrets = parseCliJson<{ secrets?: typeof secrets }>(keysOut.stdout)?.secrets ?? [];
+      const parsed = keysOut.ok ? parseCliJson<{ secrets?: typeof secrets }>(keysOut.stdout) : null;
+      secrets = parsed?.secrets ?? [];
+      this.keysRead = !!parsed && Array.isArray(parsed.secrets ?? []);
     } catch {
       /* sbx down */
     }

@@ -26,6 +26,8 @@ export class Projects {
   private readonly runtimes = new Map<string, ProjectRuntime>();
   /** Registered projects found to be HQ's own source: never opened. */
   private readonly hqSource = new Set<string>();
+  /** Why each registered project that is not open was not opened. */
+  private readonly notOpened = new Map<string, string>();
   private readonly listeners = new Set<(list: ProjectSummary[]) => void>();
   /** The project HQ was started in, if any: dashboards start on it. */
   private startId: string | null = null;
@@ -59,29 +61,51 @@ export class Projects {
     return this.list().find((p) => p.state === "open")?.id ?? null;
   }
 
-  /** Opens every registered project whose folder is a git repo and is not HQ's source; the others are listed as missing. */
+  /**
+   * Opens every registered project whose folder is a git repo, is not HQ's
+   * source, and still holds the project's GitHub repo; the others are listed as
+   * missing. Nothing starts here: startAll() does, once HQ is serving (a second
+   * HQ that cannot get the port must not reattach to or stop anything).
+   */
   async openAll(): Promise<void> {
     const rows = this.company.db.prepare("SELECT id, repo FROM projects ORDER BY created_at, rowid").all<{ id: string; repo: string }>();
     for (const row of rows) {
       if (this.runtimes.has(row.id)) continue;
+      const skip = (why: string) => {
+        this.notOpened.set(row.id, why);
+        log.warn(`project ${row.id} (${row.repo}) is not opened: ${why}.`);
+      };
       try {
         if (await hqSourceReason(row.repo)) {
           // Registered by an older HQ started in its own source. Its agents' clones stay on disk, untouched.
           this.hqSource.add(row.id);
-          log.warn(`project ${row.id} is HQ's own source (${row.repo}); it is not opened.`);
+          skip("HQ's own source");
           continue;
         }
         if (inHqHome(row.repo)) {
-          log.warn(`project ${row.id} is inside HQ's home (${row.repo}); it is not opened.`);
+          skip("inside HQ's home");
           continue;
         }
         const repo = await this.detect(row.repo);
         await this.openRuntime(repo, row.id);
+        this.notOpened.delete(row.id);
       } catch (err) {
-        log.warn(`project ${row.id} is missing: ${err instanceof Error ? err.message : err}`);
+        skip(err instanceof ProjectRefusedError && err.reason === "other-repo" ? "the folder holds a different GitHub repo" : "folder missing");
       }
     }
     this.changed();
+  }
+
+  /** Starts every open project's polling and syncing. Called once HQ serves. */
+  startAll(): void {
+    for (const rt of this.runtimes.values()) rt.start();
+  }
+
+  /** "<id>: <why>" for each registered project that is not open. */
+  notOpenedList(): string[] {
+    return this.list()
+      .filter((p) => p.state !== "open")
+      .map((p) => `${p.id}: ${this.notOpened.get(p.id) ?? (p.state === "hq-source" ? "HQ's own source" : "folder missing")}`);
   }
 
   /**
@@ -113,7 +137,7 @@ export class Projects {
   /** The owner adds a project from the dashboard (PIN checked by ProjectSettings). Opens and starts it. */
   async add(path: string, by: Authority): Promise<string> {
     const actor = actorOf(by);
-    const refuse = (reason: "not-a-repo" | "hq-home", target: string): never => {
+    const refuse = (reason: "not-a-repo" | "hq-home" | "other-repo", target: string): never => {
       this.company.audit.append({ actorKind: actor.kind, actorId: actor.id, action: "project.refused", target, data: { reason } });
       throw new ProjectRefusedError(reason);
     };
@@ -125,8 +149,15 @@ export class Projects {
     }
     await refuseHqSource(this.company, repo.root, actor);
     if (inHqHome(repo.root)) refuse("hq-home", repo.root);
+    const known = this.company.agents.projectForRoot(repo.root);
+    if (known && !this.sameRepo(known, repo)) refuse("other-repo", repo.root);
     const id = this.company.settings.addProject(repo, by);
-    if (!this.runtimes.has(id)) await this.openRuntime(repo, id);
+    if (!this.runtimes.has(id)) {
+      await this.openRuntime(repo, id);
+      // HQ is already serving: the new project starts right away.
+      this.runtimes.get(id)?.start();
+    }
+    this.notOpened.delete(id);
     this.changed();
     return id;
   }
@@ -151,10 +182,20 @@ export class Projects {
     }
   }
 
+  /**
+   * True unless the project has a stored GitHub repo and the folder now holds
+   * another one (or none): a re-cloned folder must not inherit the old
+   * project's grants and notes (owner decision 2026-11-14).
+   */
+  private sameRepo(id: string, repo: RepoInfo): boolean {
+    const stored = this.company.db.prepare("SELECT github FROM project_settings WHERE project_id = ?").get<{ github: string | null }>(id)?.github;
+    return !stored || (repo.github ?? "").toLowerCase() === stored.toLowerCase();
+  }
+
   private async openRuntime(repo: RepoInfo, id: string): Promise<void> {
+    if (!this.sameRepo(id, repo)) throw new ProjectRefusedError("other-repo");
     const rt = await this.open(repo, id);
     this.runtimes.set(id, rt);
-    rt.start();
   }
 
   private changed(): void {

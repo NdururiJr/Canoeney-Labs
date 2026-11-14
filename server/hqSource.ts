@@ -14,7 +14,7 @@ import { run } from "./lib/exec";
 export const HQ_SOURCE_REPOS: readonly string[] = ["jsmastery-pro/jsm-hq", "ndururijr/canoeney-labs"];
 
 export type HqSourceReason = "hq-remote" | "hq-package" | "hq-folder";
-export type ProjectRefusal = HqSourceReason | "not-a-repo" | "hq-home";
+export type ProjectRefusal = HqSourceReason | "not-a-repo" | "hq-home" | "other-repo";
 
 const MESSAGES: Record<ProjectRefusal, string> = {
   "hq-remote": "This repo is HQ's own source (one of its remotes is HQ's repo). HQ never manages its own source as a project.",
@@ -22,6 +22,7 @@ const MESSAGES: Record<ProjectRefusal, string> = {
   "hq-folder": "This folder is, holds or sits inside the folder HQ runs from. HQ never manages its own source as a project.",
   "not-a-repo": "This folder is not a git repository.",
   "hq-home": "This folder is inside HQ's home, where HQ keeps agents' folders and its records. Choose a repo outside it.",
+  "other-repo": "This folder now holds a different GitHub repo from the project registered there, so it is not opened as that project. Move the new repo to another folder.",
 };
 
 export class ProjectRefusedError extends Error {

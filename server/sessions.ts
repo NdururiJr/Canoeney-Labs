@@ -81,7 +81,7 @@ export class Sessions {
   /** The agent's env file, if it has one (passed with --env-file / sourced). */
   envFileFor: (agentId: string) => string | null = () => null;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
-  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | null> = async () => null;
+  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => null;
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
   onSessionReattached: (agentId: string) => void = () => {};
   /** When the agent's last hook arrived (from the inbox). */
@@ -194,6 +194,8 @@ export class Sessions {
       const dir = company ? await ensureCompanyWorkspace(hub.slug, id) : await ensureWorkspace(agent, hub.slug, hub.repo);
       if (company) {
         const key = await this.githubKeyFor(id);
+        if (key === "unknown")
+          throw new WorkspaceRefusedError("keys-unread", `HQ couldn't read sbx's keys, so it can't tell whether a GitHub key would reach ${agent.name}'s sandbox. Check that sbx is running, then start again.`);
         const names = [...(key ? ["github"] : []), ...githubCredentialIn(this.envFileFor(id))];
         if (names.length) {
           const where = key === "global" ? "an sbx GitHub key set for every sandbox" : key ? "an sbx GitHub key for its sandbox" : `${names.join(", ")} in its env file`;

@@ -206,6 +206,7 @@ export async function makeHq(
     detect: async (root) => repos.get(root) ?? detectRepo(root),
   });
   await projects.openAll();
+  projects.startAll();
   const runtime = (s: string) => {
     const rt = projects.get(s);
     if (!rt) throw new Error(`project ${s} is not open`);

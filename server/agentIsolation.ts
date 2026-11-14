@@ -5,7 +5,7 @@
 // disk: neither Claude Code nor Codex can load them. One merged PR therefore
 // cannot change what every agent is told or may run.
 import { lstatSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { run } from "./lib/exec";
 
 const CONFIG_FILE_NAMES = ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md", "ROLE.md", ".mcp.json"];
@@ -78,5 +78,12 @@ export async function agentConfigOnDisk(dir: string): Promise<string[]> {
 /** The repo's tracked paths that are one of HQ's own file names, in any letter case. */
 export async function trackedHqFiles(dir: string): Promise<string[]> {
   const own = new Set(HQ_OWN_FILES.map((f) => f.toLowerCase()));
-  return (await tracked(dir)).files.filter((rel) => own.has(rel.toLowerCase()));
+  const { top, files } = await tracked(dir);
+  // HQ writes its files into `dir`, which can be a subfolder: compare paths relative to it.
+  const under = relative(top, dir).replace(/\\/g, "/");
+  const prefix = under ? `${under}/` : "";
+  return files
+    .filter((rel) => rel.toLowerCase().startsWith(prefix.toLowerCase()))
+    .map((rel) => rel.slice(prefix.length))
+    .filter((rel) => own.has(rel.toLowerCase()));
 }

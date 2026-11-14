@@ -117,6 +117,11 @@ function handle(e: OfficeEvent) {
     useOffice.setState((s) => ({ workspaceInfo: { ...s.workspaceInfo, [e.info.agentId]: e.info } }));
     return;
   }
+  // A refused command that says why (adding a project): shown in the activity feed, in this browser only.
+  if (e.type === "command.result" && !e.ok && e.message) {
+    const note = { id: `local-${Date.now()}`, at: new Date().toISOString(), type: "config" as const, agentId: null, text: e.message };
+    useOffice.setState((s) => (s.snap ? { snap: { ...s.snap, activity: [note, ...s.snap.activity].slice(0, 50) } } : {}));
+  }
   if (e.type === "snapshot") clearTerminals();
   useOffice.setState((s) => {
     const base = s.snap ?? (e.type === "snapshot" ? e.snapshot : null);

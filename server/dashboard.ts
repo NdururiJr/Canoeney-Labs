@@ -38,11 +38,13 @@ export interface CommandSpec {
   audit?: "per-call" | "collapsed";
   /** Takes a secret value: no error text from it reaches a reply, the feed or the log. */
   secret?: true;
+  /** For a failure whose text is HQ's own (never a value or another program's output): the message for the reply. */
+  explain?: (err: unknown) => string | null;
   run: (ctx: CommandCtx, ...args: unknown[]) => unknown;
 }
 
 export type CommandError = "unknown" | "forbidden" | "remote" | "pin-required" | "pin-wrong" | "pin-locked" | "rate-limited" | "failed";
-export type CommandResult = { ok: true } | { ok: false; error: CommandError };
+export type CommandResult = { ok: true } | { ok: false; error: CommandError; message?: string };
 
 interface Message {
   cmd?: unknown;
@@ -64,7 +66,7 @@ const rank = (r: HumanRole) => (r === "owner" ? 2 : 1);
 
 export class Dashboard {
   private readonly limits: DashboardLimits;
-  private collapsed = new Map<string, { start: number; count: number; actor: string; cmd: string; target: string | null }>();
+  private collapsed = new Map<string, { start: number; count: number; actor: string; cmd: string; target: string | null; project: string | null }>();
 
   constructor(
     /** Commands that act on the company (adding a project), or the only table when there are no project tables. */
@@ -143,7 +145,8 @@ export class Dashboard {
       if (spec.secret) log.warn(`command ${cmd} failed`);
       else log.warn(`command ${cmd} failed:`, String(err instanceof Error ? err.message : err).slice(0, 200));
       this.tryAppend(ctx, "dashboard.command-failed", target, { cmd });
-      return { ok: false, error: "failed" };
+      const message = !spec.secret && spec.explain ? safe(() => spec.explain!(err)) : null;
+      return message ? { ok: false, error: "failed", message: message.slice(0, 300) } : { ok: false, error: "failed" };
     }
   }
 
@@ -154,7 +157,7 @@ export class Dashboard {
       if (!all && now < w.start + MINUTE) continue;
       this.collapsed.delete(key);
       try {
-        this.o.audit.append({ actorKind: "human", actorId: w.actor, action: "dashboard.terminal", target: w.target, data: { cmd: w.cmd, count: w.count } });
+        this.o.audit.append({ actorKind: "human", actorId: w.actor, action: "dashboard.terminal", target: w.target, data: { cmd: w.cmd, count: w.count, ...(w.project ? { project: w.project } : {}) } });
       } catch {
         /* best effort: the keystrokes were already delivered */
       }
@@ -163,10 +166,12 @@ export class Dashboard {
 
   private countCollapsed(ctx: CommandCtx, cmd: string, target: string | null): void {
     this.flush();
-    const key = `${ctx.sessionId}\n${cmd}\n${target ?? ""}`;
+    // Keyed by project too: two projects can each have an agent with this id (SR-D-09).
+    const project = typeof ctx.projectId === "string" ? ctx.projectId : null;
+    const key = `${ctx.sessionId}\n${project ?? ""}\n${cmd}\n${target ?? ""}`;
     const w = this.collapsed.get(key);
     if (w) w.count++;
-    else this.collapsed.set(key, { start: this.now(), count: 1, actor: ctx.actor.id, cmd, target });
+    else this.collapsed.set(key, { start: this.now(), count: 1, actor: ctx.actor.id, cmd, target, project });
   }
 
   private refuse(ctx: CommandCtx, cmd: string, target: string | null, reason: CommandError): CommandResult {

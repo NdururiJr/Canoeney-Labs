@@ -53,7 +53,7 @@ export type OfficeEvent =
   /** The projects HQ manages changed: one was added, or its state changed (M0-D2). */
   | { type: "projects.updated"; projects: ProjectSummary[] }
   /** The answer to one command, sent only to the socket that sent it (M0-C). */
-  | { type: "command.result"; id: string; ok: boolean; error?: string };
+  | { type: "command.result"; id: string; ok: boolean; error?: string; message?: string };
 
 export type SimSpeed = 1 | 2 | 4;
 

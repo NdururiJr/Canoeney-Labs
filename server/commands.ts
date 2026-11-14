@@ -13,7 +13,8 @@ import { run } from "./lib/exec";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
-import { relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { ProjectRefusedError } from "./hqSource";
 import type { AgentSettingsPatch } from "./company/projectSettings";
 import type { CommandCtx, CommandSpec } from "./dashboard";
 import { applyImport, boardTitles, hasRepoConfig, previewImport, readImport } from "./repoConfigImport";
@@ -467,6 +468,13 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
  */
 export function makeCompanyCommands(projects: Projects): Record<string, CommandSpec> {
   return {
-    addProject: { role: "owner", pin: true, target: () => null, run: async (ctx, path) => void (await projects.add(str(path, 1000).trim(), authorityOf(ctx))) },
+    addProject: {
+      role: "owner",
+      pin: true,
+      target: () => null,
+      run: async (ctx, path) => void (await projects.add(str(path, 1000).trim(), authorityOf(ctx))),
+      // HQ's own refusal texts only; any other failure stays a bare "failed".
+      explain: (err) => (err instanceof ProjectRefusedError || err instanceof AuthorityError ? err.message : null),
+    },
   };
 }

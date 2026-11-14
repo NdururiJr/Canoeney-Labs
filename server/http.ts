@@ -183,6 +183,8 @@ export function startHttp(o: Options) {
     const sendEvent = (e: OfficeEvent) => {
       // A remote socket gets no terminal output: the page has no terminal there (SR-C-08).
       if (remote && e.type === "terminal.output") return;
+      // A hub's own snapshot (after the welcome or an import) does not know which projects there are.
+      if (e.type === "snapshot" && projectId) e = { type: "snapshot", snapshot: { ...e.snapshot, projectId, projects: o.projects.list() } };
       const v = viewFor(session.role, e);
       if (v && ws.readyState === ws.OPEN) ws.send(JSON.stringify(v));
     };

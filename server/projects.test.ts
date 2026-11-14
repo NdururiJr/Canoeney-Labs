@@ -80,7 +80,7 @@ test("adding HQ's own source from the dashboard is refused", async (t) => {
   await hq.enroll();
   const before = hq.projects.list().length;
   const r = await hq.dashboard.dispatch(ownerCtx(hq.slug), { cmd: "addProject", args: [hqSourceRoot()], pin: OWNER_PIN });
-  assert.deepEqual(r, { ok: false, error: "failed" });
+  assert.deepEqual([r.ok, (r as { error?: string }).error], [false, "failed"]);
   const refused = hq.company.audit.query({ action: "project.refused" });
   assert.equal(refused.length, 1);
   assert.equal(refused[0].actorId, "owner");
@@ -110,7 +110,8 @@ test("a folder inside HQ's home cannot be added as a project", async (t) => {
   await hq.enroll();
   const clone = gitRepo(join(process.env.HQ_HOME!, hq.slug, "ana"));
   const r = await hq.dashboard.dispatch(ownerCtx(hq.slug), { cmd: "addProject", args: [clone], pin: OWNER_PIN });
-  assert.deepEqual(r, { ok: false, error: "failed" });
+  assert.deepEqual([r.ok, (r as { error?: string }).error], [false, "failed"]);
+  assert.match((r as { message?: string }).message ?? "", /inside HQ's home/);
   assert.equal(hq.company.audit.query({ action: "project.refused" })[0]?.data.reason, "hq-home");
   assert.equal(hq.projects.list().length, 1);
 });

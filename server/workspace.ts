@@ -15,7 +15,7 @@ import type { RepoInfo } from "./repo";
  */
 export class WorkspaceRefusedError extends Error {
   constructor(
-    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source" | "company-git" | "github-credential" | "local-mode",
+    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source" | "company-git" | "github-credential" | "keys-unread" | "local-mode",
     message: string,
     readonly data: Record<string, unknown> = {},
   ) {
