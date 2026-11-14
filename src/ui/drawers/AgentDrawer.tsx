@@ -7,6 +7,7 @@ import { DrawerHeader } from "./Drawer";
 import { PortBanner, PortsRow } from "./Ports";
 import { TerminalView } from "./TerminalView";
 import { AgentMarkdown, AgentText } from "../agentText";
+import { ApprovalRow } from "./ApprovalRow";
 import { StatusNote } from "../systemItems";
 import { useRemote } from "../../store/auth";
 
@@ -155,17 +156,7 @@ function BlockedRequests({ agent }: { agent: AgentConfig }) {
       </div>
       <ul className="mt-1">
         {shown.map((a) => (
-          <li key={a.id} className="flex items-center gap-2 py-0.5">
-            <span className="min-w-0 flex-1 truncate font-term text-[16px]" title={`${a.title ?? a.host} — ${a.detail}`}>
-              <AgentText inline author={agent.name} text={a.title ?? a.host} />
-            </span>
-            <button className="btn px-1.5 text-[11px]" disabled={busy} onClick={() => act(a.id, "allow")}>
-              Allow
-            </button>
-            <button className="btn px-1.5 text-[11px]" disabled={busy} onClick={() => act(a.id, "dismiss")}>
-              Dismiss
-            </button>
-          </li>
+          <ApprovalRow key={a.id} approval={a} author={agent.name} busy={busy} onAct={act} />
         ))}
       </ul>
       {approvals.length > 3 && (

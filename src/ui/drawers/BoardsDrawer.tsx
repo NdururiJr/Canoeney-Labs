@@ -5,6 +5,7 @@ import { ui, useUi } from "../../store/ui";
 import { Dot } from "../kit";
 import { DrawerHeader } from "./Drawer";
 import { AgentText } from "../agentText";
+import { TaskCardTitle } from "./TaskCardTitle";
 
 const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: "todo", label: "To do", color: "#83769c" },
@@ -95,12 +96,7 @@ function TaskCard({ task }: { task: Task }) {
         {task.id}
         {task.prNumber && <span className="ml-1.5">#{task.prNumber}</span>}
       </div>
-      <div
-        className={`text-[14px] font-semibold leading-tight ${task.status === "done" ? "line-through" : ""}`}
-        title={[task.description, task.files?.length ? `Files: ${task.files.join(", ")}` : "", task.doneWhen ? `Done when: ${task.doneWhen}` : ""].filter(Boolean).join("\n\n") || undefined}
-      >
-        <AgentText inline author="an agent" text={task.title} />
-      </div>
+      <TaskCardTitle task={task} authorName={snap?.config.team.find((a) => a.id === task.createdBy)?.name ?? "an agent"} />
       {task.status === "blocked" && task.note && (
         <div className="text-[12px] text-red">
           <AgentText inline author="an agent" text={task.note} />

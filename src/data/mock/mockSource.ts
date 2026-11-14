@@ -36,9 +36,12 @@ export function createMockSource(): OfficeDataSource {
     openShells.clear();
   }
 
+  /** The demo's projects: the first two presets, each its own office (M0-D2). */
+  const demoProjects = () => presets.slice(0, 2).map((p) => ({ id: p.id, name: p.label.split(" · ")[0], state: "open" as const }));
+
   function boot() {
     world.setEmitter((e) => listener?.(e));
-    listener?.({ type: "snapshot", snapshot: structuredClone(world.snap) });
+    listener?.({ type: "snapshot", snapshot: { ...structuredClone(world.snap), projectId: presetId, projects: demoProjects() } });
     sim.start();
   }
 
@@ -503,6 +506,16 @@ export function createMockSource(): OfficeDataSource {
         world.activity("config", req.agentId, `You allowed ${req.domain} for ${decision === "everyone" ? "every agent" : who}`);
       }
       if (world.status(req.agentId)?.state === "needs-input") world.setStatus(req.agentId, { state: "working", note: decision === "deny" ? "Continuing without it" : `Reading ${req.domain}` });
+    },
+
+    selectProject(id) {
+      if (id === presetId || !demoProjects().some((p) => p.id === id)) return;
+      presetId = id;
+      reset();
+      boot();
+    },
+    addProject() {
+      world.activity("config", null, "Demo data: adding a project needs the real HQ.");
     },
 
     dev: {

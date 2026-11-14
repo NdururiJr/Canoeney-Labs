@@ -76,6 +76,11 @@ export interface DevControls {
 export interface OfficeDataSource {
   connect(onEvent: (e: OfficeEvent) => void, onStatus?: (s: ConnectionStatus) => void): () => void; // returns disconnect
 
+  /** Views another project: HQ answers with its snapshot (M0-D2). */
+  selectProject(id: string): void;
+  /** The owner adds a repo on this machine as a project. Needs the PIN: HQ asks for it as for any relaxing change. */
+  addProject(path: string): void;
+
   /** Sends a command again with the approval PIN (real HQ only, M0-C). */
   sendWithPin?(cmd: string, args: unknown[], pin: string): void;
 

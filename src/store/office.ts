@@ -9,6 +9,7 @@ import { createWsSource } from "../data/ws/wsSource";
 import type { StackConfig } from "../data/stack";
 import type { AccessDecision, NewMcpServer, AgentConfig, AgentStatus, OfficeSnapshot, RemoveAgentOptions, SetupCheckId, WelcomeInput, WorkspaceInfo } from "../data/types";
 import { appendTerminal, clearTerminals } from "./terminal";
+import { ui, useUi } from "./ui";
 
 export interface LoggedEvent {
   n: number;
@@ -145,6 +146,16 @@ export function connectOffice() {
 export const officeActions = {
   /** Sends a command again with the approval PIN (the PIN dialog). */
   sendWithPin: (cmd: string, args: unknown[], pin: string) => source.sendWithPin?.(cmd, args, pin),
+  /** Views another project. What belonged to the last one (drawers, the selected agent, terminal tabs) is closed. */
+  selectProject(id: string) {
+    if (useOffice.getState().snap?.projectId === id) return;
+    ui.closeDrawer();
+    ui.closeSettings();
+    useUi.setState({ hover: null, planBoardId: null, setupOpen: false });
+    useOffice.setState({ workspaceInfo: {} });
+    source.selectProject(id);
+  },
+  addProject: (path: string) => source.addProject(path),
   previewRepoImport: () => source.previewRepoImport(),
   importRepoConfig: (sha256: string) => source.importRepoConfig(sha256),
   approveProjectNotes: (sha256: string) => source.approveProjectNotes(sha256),

@@ -1,7 +1,11 @@
+import { useState } from "react";
 import type { SimSpeed } from "../../data/source";
+import { useAuth } from "../../store/auth";
 import { officeActions, selectAttention, useOffice } from "../../store/office";
 import { ui, useUi } from "../../store/ui";
 import { LogoutButton } from "../auth/AuthScreens";
+import { AddProjectDialog } from "../setup/AddProjectDialog";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 const SPEEDS: SimSpeed[] = [1, 2, 4];
 
@@ -26,6 +30,8 @@ export function TopBar() {
   const attention = selectAttention(snap).total;
   const debugOpen = useUi((s) => s.debugOpen);
   const live = useOffice((s) => s.live);
+  const isOwner = useAuth((s) => s.state?.session?.role !== "supervisor");
+  const [adding, setAdding] = useState(false);
   if (!snap) return null;
   const setupIssues = snap.setup.checks.filter((c) => c.status !== "ok").length;
   const stopped = snap.agents.filter((a) => a.session.state === "stopped" || a.session.state === "failed");
@@ -54,6 +60,11 @@ export function TopBar() {
         </span>
       </div>
       <div className="flex-1" />
+
+      {snap.projects && snap.projects.length > 0 && (
+        <ProjectSwitcher projects={snap.projects} current={snap.projectId ?? null} isOwner={isOwner} onSelect={officeActions.selectProject} onAdd={() => setAdding(true)} />
+      )}
+      {adding && <AddProjectDialog onClose={() => setAdding(false)} />}
 
       <label className="flex items-center gap-2 text-[14px]">
         <span className="text-muted">Plan wall</span>
