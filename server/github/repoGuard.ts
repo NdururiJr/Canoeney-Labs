@@ -89,7 +89,7 @@ export function mainProtection() {
 interface ProtectionNow {
   required_status_checks?: { strict?: boolean; contexts?: string[]; checks?: { context: string; app_id?: number | null }[] } | null;
   restrictions?: { users?: { login: string }[]; teams?: { slug: string }[]; apps?: { slug: string }[] } | null;
-  required_pull_request_reviews?: { required_approving_review_count?: number };
+  required_pull_request_reviews?: { required_approving_review_count?: number; bypass_pull_request_allowances?: { users?: unknown[]; teams?: unknown[]; apps?: unknown[] } };
 }
 
 /**
@@ -100,6 +100,10 @@ interface ProtectionNow {
 function protectionBody(now: ProtectionNow | null) {
   const checks = now?.required_status_checks;
   const rest = now?.restrictions;
+  // Only an organization's repo can name who bypasses the review; GitHub refuses the field
+  // elsewhere (422, found in the exit check). Sent empty only to clear one that names someone.
+  const bp = now?.required_pull_request_reviews?.bypass_pull_request_allowances;
+  const bypassNamed = !!bp && [bp.users, bp.teams, bp.apps].some((x) => Array.isArray(x) && x.length > 0);
   return {
     required_status_checks: checks ? { strict: !!checks.strict, ...(checks.checks?.length ? { checks: checks.checks } : { contexts: checks.contexts ?? [] }) } : null,
     enforce_admins: true,
@@ -107,7 +111,7 @@ function protectionBody(now: ProtectionNow | null) {
       dismiss_stale_reviews: true,
       require_code_owner_reviews: true,
       required_approving_review_count: Math.max(1, now?.required_pull_request_reviews?.required_approving_review_count ?? 1),
-      bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
+      ...(bypassNamed ? { bypass_pull_request_allowances: { users: [], teams: [], apps: [] } } : {}),
     },
     restrictions: rest ? { users: (rest.users ?? []).map((u) => u.login), teams: (rest.teams ?? []).map((t) => t.slug), apps: (rest.apps ?? []).map((a) => a.slug) } : null,
     allow_force_pushes: false,
@@ -118,7 +122,13 @@ function protectionBody(now: ProtectionNow | null) {
 /** Actions allowed only from the repo itself, or only GitHub's own: both restricted. */
 const RESTRICTED_ACTIONS = new Set(["selected", "local_only"]);
 
-const sortedJson = (v: unknown) => JSON.stringify(v, (_k, x) => (Array.isArray(x) ? [...x].map((y) => (typeof y === "object" ? JSON.stringify(y) : y)).sort() : x));
+/** JSON with object keys sorted and arrays as sets: GitHub answers keys in its own order (exit check). */
+const sortedJson = (v: unknown): string =>
+  Array.isArray(v)
+    ? `[${v.map(sortedJson).sort().join(",")}]`
+    : v !== null && typeof v === "object"
+      ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${sortedJson((v as Record<string, unknown>)[k])}`).join(",")}}`
+      : JSON.stringify(v);
 const sameRuleBody = (a: Partial<Ruleset>, b: Ruleset) =>
   a.enforcement === b.enforcement &&
   sortedJson((a.rules ?? []).map((r) => r.type)) === sortedJson(b.rules.map((r) => r.type)) &&
@@ -250,25 +260,32 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
 
 /** Sets every fixable setting, then reads the repo again. CODEOWNERS and workflow files are never written. */
 export async function applyRepoGuard(gh: GitHubApi, repo: string, o: { agents: GuardAgent[]; spendingConfirmed: boolean }): Promise<Finding[]> {
-  const r = (method: string, path: string, body?: unknown) => gh.request(method, `/repos/${repo}${path}`, { body });
-  await r("PATCH", "", { allow_auto_merge: false });
+  const refused: Finding[] = [];
+  /** A change GitHub refuses is a finding of its own, never silence (exit check: a 422 left `main` unprotected). */
+  const r = async (method: string, path: string, body?: unknown, key?: string, what?: string) => {
+    const res = await gh.request(method, `/repos/${repo}${path}`, { body });
+    if (key && (res.status < 200 || res.status >= 300))
+      refused.push({ name: `apply-failed:${key}`, detail: `GitHub refused HQ's change to ${what} on ${repo} (HTTP ${res.status || "no answer"}).`, fixable: false });
+    return res;
+  };
+  await r("PATCH", "", { allow_auto_merge: false }, "auto-merge", "auto-merge");
   const now = await r("GET", "/branches/main/protection");
-  await r("PUT", "/branches/main/protection", protectionBody(now.status === 200 ? (now.json as ProtectionNow) : null));
+  await r("PUT", "/branches/main/protection", protectionBody(now.status === 200 ? (now.json as ProtectionNow) : null), "main-protection", "main's protection");
   const listed = (await r("GET", "/rulesets")).json;
   const existing = new Map((Array.isArray(listed) ? (listed as { id: number; name: string }[]) : []).map((x) => [x.name, x.id]));
   for (const want of desiredRulesets(o.agents)) {
     const id = existing.get(want.name);
-    if (id !== undefined) await r("PUT", `/rulesets/${id}`, want);
-    else await r("POST", "/rulesets", want);
+    if (id !== undefined) await r("PUT", `/rulesets/${id}`, want, `ruleset:${want.name}`, `the ${want.name} rule`);
+    else await r("POST", "/rulesets", want, `ruleset:${want.name}`, `the ${want.name} rule`);
   }
   // Actions the owner turned off, or limited to the repo's own, stay so: HQ only tightens.
   const actions = (await r("GET", "/actions/permissions")).json as { enabled?: boolean; allowed_actions?: string } | null;
   if (actions && actions.enabled !== false && actions.allowed_actions !== "local_only") {
-    await r("PUT", "/actions/permissions", { enabled: true, allowed_actions: "selected" });
-    await r("PUT", "/actions/permissions/selected-actions", { github_owned_allowed: true, verified_allowed: false, patterns_allowed: [] });
+    await r("PUT", "/actions/permissions", { enabled: true, allowed_actions: "selected" }, "actions", "the Actions settings");
+    await r("PUT", "/actions/permissions/selected-actions", { github_owned_allowed: true, verified_allowed: false, patterns_allowed: [] }, "selected-actions", "the allowed actions");
   }
-  await r("PUT", "/actions/permissions/workflow", { default_workflow_permissions: "read", can_approve_pull_request_reviews: false });
-  return checkRepo(gh, repo, o);
+  await r("PUT", "/actions/permissions/workflow", { default_workflow_permissions: "read", can_approve_pull_request_reviews: false }, "workflow-token", "the workflow token");
+  return [...refused, ...(await checkRepo(gh, repo, o))];
 }
 
 const HQ: Actor = { kind: "hq", id: "hq" };

@@ -28,8 +28,8 @@ function goodRepo() {
 }
 type Repo = ReturnType<typeof goodRepo>;
 
-/** A fake GitHub over `r`, recording every call. */
-function fake(r: Repo) {
+/** A fake GitHub over `r`, recording every call. `refuse` gives a write's HTTP status instead of 200. */
+function fake(r: Repo, refuse: (method: string, path: string) => number | undefined = () => undefined) {
   const calls: { method: string; path: string; body?: unknown }[] = [];
   const ok = (json: unknown) => ({ status: 200, json: json as never });
   const b64 = (s: string) => Buffer.from(s).toString("base64");
@@ -37,7 +37,10 @@ function fake(r: Repo) {
     async request(method, path, o = {}) {
       calls.push({ method, path, body: o.body });
       const p = path.replace(`/repos/${REPO}`, "");
-      if (method !== "GET") return { status: 200, json: {} as never };
+      if (method !== "GET") {
+        const status = refuse(method, p);
+        return status ? { status, json: { message: "Validation Failed" } as never } : { status: 200, json: {} as never };
+      }
       if (p === "") return ok({ ...r.repo, visibility: r.repo.private ? "private" : "public" });
       if (p === "/branches/main/protection") return r.protection ? ok(r.protection) : { status: 404, json: null };
       if (p === "/rulesets") return ok(r.rulesets.map(({ id, name }) => ({ id, name })));
@@ -231,4 +234,44 @@ test("gh api output is read as status and JSON", async () => {
   assert.deepEqual(seen[0].slice(0, 5), ["api", "-i", "-X", "GET", "repos/acme/site/branches/main/protection"]);
   const ok = ghCliApi(async () => ({ ok: true, stdout: "HTTP/2.0 200 OK\nX: y\n\n[1,2]" }));
   assert.deepEqual(await ok.request("PUT", "/x", { body: { a: 1 } }), { status: 200, json: [1, 2] });
+});
+
+// Found in the M0-E exit check on a real repo (NdururiJr/CanoeneyLabsWebste).
+
+test("rulesets read back in GitHub's own key order are not reported as changed", async () => {
+  const r = goodRepo();
+  // GitHub answers `exclude` before `include`, and orders each bypass actor's keys its own way.
+  r.rulesets = r.rulesets.map((x) => ({
+    ...x,
+    conditions: { ref_name: { exclude: x.conditions.ref_name.exclude, include: x.conditions.ref_name.include } },
+    bypass_actors: x.bypass_actors.map((b) => ({ bypass_mode: b.bypass_mode, actor_type: b.actor_type, actor_id: b.actor_id })),
+  })) as typeof r.rulesets;
+  assert.deepEqual(await names(r), []);
+});
+
+test("main's protection on a personal repo is sent without the org-only bypass list", async () => {
+  const r = goodRepo();
+  r.protection = null;
+  const { api, calls } = fake(r);
+  await applyRepoGuard(api, REPO, { agents: AGENTS, spendingConfirmed: false });
+  const put = calls.find((c) => c.method === "PUT" && c.path.endsWith("/branches/main/protection"));
+  const reviews = (put?.body as { required_pull_request_reviews: Record<string, unknown> }).required_pull_request_reviews;
+  assert.equal("bypass_pull_request_allowances" in reviews, false, "GitHub refuses it with 422 outside an organization");
+  // An org repo whose protection names someone who may bypass: the PUT clears them.
+  const org = goodRepo();
+  (org.protection as { required_pull_request_reviews: Record<string, unknown> }).required_pull_request_reviews.bypass_pull_request_allowances = { users: [{ login: "x" }], teams: [], apps: [] };
+  const f = fake(org);
+  await applyRepoGuard(f.api, REPO, { agents: AGENTS, spendingConfirmed: false });
+  const put2 = f.calls.find((c) => c.method === "PUT" && c.path.endsWith("/branches/main/protection"));
+  assert.deepEqual((put2?.body as { required_pull_request_reviews: Record<string, unknown> }).required_pull_request_reviews.bypass_pull_request_allowances, { users: [], teams: [], apps: [] });
+});
+
+test("a change GitHub refuses while applying is a named finding, never silence", async () => {
+  const r = goodRepo();
+  r.protection = null;
+  const { api } = fake(r, (method, p) => (method === "PUT" && p === "/branches/main/protection" ? 422 : undefined));
+  const findings = await applyRepoGuard(api, REPO, { agents: AGENTS, spendingConfirmed: false });
+  const failed = findings.find((f) => f.name === "apply-failed:main-protection");
+  assert.ok(failed, findings.map((f) => f.name).join(", "));
+  assert.match(failed.detail, /HTTP 422/);
 });
