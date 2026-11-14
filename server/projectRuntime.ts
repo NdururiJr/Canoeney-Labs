@@ -99,6 +99,10 @@ export class ProjectRuntime {
     const unwatch = company.agents.onStatusChange((cid, to, by) => {
       if ((to === "paused" || to === "retired") && cid.startsWith(`${slug}/`)) void tokens.revoke(cid.slice(slug.length + 1), to, by);
     });
+    sessions.globalGithubKey = async () => {
+      await sbx.refresh();
+      return sbx.globalGithubKey();
+    };
     // Read fresh before a company-level agent starts: a key set a moment ago must count (SR-D-06).
     sessions.githubKeyFor = async (id) => {
       await sbx.refresh();

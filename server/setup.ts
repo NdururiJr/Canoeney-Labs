@@ -160,16 +160,29 @@ function checkRemote(repo: RepoInfo): Check {
   };
 }
 
-async function checkGithubSecret(sbxOk: boolean): Promise<Check> {
-  const base = { id: "github-secret" as const, label: "GitHub access inside sandboxes", neededFor: "sandbox" as const };
+/**
+ * No GitHub key for every sandbox (M0-E, SR-E-05). Each agent gets its own GitHub
+ * App's one-hour token instead; a key "for every sandbox" would let every agent
+ * merge and change settings, so while one exists no agent starts.
+ */
+export async function checkGithubSecret(sbxOk: boolean, exec: typeof run = run): Promise<Check> {
+  const base = { id: "github-secret" as const, label: "No GitHub key shared by every sandbox", neededFor: "sandbox" as const };
   if (!sbxOk) return { ...base, status: "missing", detail: "Waiting for sbx.", fix: null };
-  const r = await run("sbx", ["secret", "ls"], { timeoutMs: 10_000 });
-  if (r.ok && /\bgithub\b/.test(r.stdout)) return { ...base, status: "ok", detail: "Stored in Docker's secret store; injected by the proxy.", fix: null };
+  const r = await exec("sbx", ["secret", "ls", "--json"], { timeoutMs: 10_000 });
+  let global: boolean | null = null;
+  try {
+    const list = r.ok ? parseCliJson<{ secrets?: { name: string; scope: string; type?: string }[] }>(r.stdout)?.secrets : undefined;
+    if (list) global = list.some((s) => s.name === "github" && s.scope === "global");
+  } catch {
+    /* sbx down */
+  }
+  if (global === null) return { ...base, status: "warning", detail: "Couldn't read sbx's keys. HQ checks again before each agent starts.", fix: null };
+  if (!global) return { ...base, status: "ok", detail: "Each agent works on GitHub as its own App (Settings → Team).", fix: null };
   return {
     ...base,
     status: "missing",
-    detail: "Agents can't push or open PRs until this is set.",
-    fix: fix("sbx secret set github --command 'gh auth token'", true, "https://docs.docker.com/ai/sandboxes/get-started/"),
+    detail: "A GitHub key is set for every sandbox: every agent could merge and change repo settings. HQ starts no agent until it is removed.",
+    fix: fix("sbx secret rm github --force", true, null),
   };
 }
 

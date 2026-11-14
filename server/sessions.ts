@@ -85,6 +85,8 @@ export class Sessions {
    * reattaches to it, revoked when it stops. Null until the project runtime wires it.
    */
   github: { deliver(agentId: string): Promise<"issued" | "no-identity">; revoke(agentId: string, reason: "stopped", by?: Actor): Promise<void> } | null = null;
+  /** Whether a `github` key is set for every sandbox, read fresh (SR-E-05). False until the project runtime wires it. */
+  globalGithubKey: () => Promise<boolean | "unknown"> = async () => false;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
   githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => null;
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
@@ -217,6 +219,14 @@ export class Sessions {
           const where = key === "global" ? "an sbx GitHub key set for every sandbox" : key ? "an sbx GitHub key for its sandbox" : `${names.join(", ")} in its env file`;
           throw new WorkspaceRefusedError("github-credential", `${agent.name} is a company-level agent and must not reach GitHub, but ${where} would reach it. Remove it, then start again.`, { names });
         }
+      }
+      // A GitHub key for every sandbox would give this agent the owner's GitHub powers (SR-E-05).
+      if (agent.mode === "sandbox") {
+        const global = await this.globalGithubKey();
+        if (global === "unknown")
+          throw new WorkspaceRefusedError("keys-unread", `HQ couldn't read sbx's keys, so it can't tell whether a GitHub key is set for every sandbox. Check that sbx is running, then start ${agent.name} again.`);
+        if (global)
+          throw new WorkspaceRefusedError("global-github-key", `A GitHub key is set for every sandbox, which would let ${agent.name} merge and change repo settings. Remove it (sbx secret rm github --force), then start again.`);
       }
       // The agent's own GitHub token, before its sandbox exists or is reattached (M0-E). Company-level
       // agents never get one (SR-D-06); an agent without a sandbox has nowhere to put it.

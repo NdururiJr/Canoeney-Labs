@@ -30,6 +30,13 @@ import type { Sessions } from "./sessions";
 import { mergeByNotice } from "./githubSync";
 
 
+/** HQ's own refusal text: no value from the command reaches it. */
+class GlobalKeyRefused extends Error {
+  constructor() {
+    super("A GitHub key for every sandbox would let every agent merge and change repo settings. Give each agent its own GitHub identity in Settings → Team instead.");
+  }
+}
+
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "agent";
 const str = (v: unknown, max = 2000) => (typeof v === "string" ? v.slice(0, max) : "");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -243,12 +250,19 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const svc = str(service, 40);
       if (!(SERVICE_KEYS as readonly string[]).includes(svc) || typeof value !== "string" || !value.trim()) return;
       if (agentId && !hub.cfg(agentId)) return;
+      // A GitHub key for every sandbox gives every agent the owner's GitHub powers (SR-E-05).
+      if (agentId === null && svc === "github") {
+        company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "settings.refused", target: null, data: { change: "key", service: "github", scope: "global", reason: "consequential", authority: authorityOf(ctx).via } });
+        throw new GlobalKeyRefused();
+      }
       // The store records which key the owner set for which agent, never the value (SR-D-10).
       return attempt(agentId, `Stored the ${svc} key ${agentId ? `for ${hub.name(agentId)}'s sandbox` : "for every sandbox"}`, async () => {
         await sbx.setKey(agentId, svc, value);
         if (agentId) company.settings.grant(cid(agentId), "secret-name", svc, authorityOf(ctx));
+        // A key for every sandbox has no permissions row: the audit trail records it (PR #8 carry-forward).
+        else company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "sbx.key-changed", target: null, data: { service: svc, scope: "global", change: "set", authority: authorityOf(ctx).via } });
       }, true);
-    } },
+    }, explain: (err) => (err instanceof GlobalKeyRefused ? err.message : null) },
     removeSecret: { role: "owner", target: first, run: (ctx, id, service) => {
       const agentId = id === null ? null : str(id, 80);
       const svc = str(service, 40);
@@ -256,6 +270,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       return attempt(agentId, `Removed the ${svc} key ${agentId ? `from ${hub.name(agentId)}'s sandbox` : "from every sandbox"}`, async () => {
         await sbx.removeKey(agentId, svc);
         if (agentId) company.settings.revoke(cid(agentId), "secret-name", svc, authorityOf(ctx));
+        else company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "sbx.key-changed", target: null, data: { service: svc, scope: "global", change: "removed", authority: authorityOf(ctx).via } });
       });
     } },
     setProxy: { role: "owner", pin: true, secret: true, run: (_ctx, url) => {

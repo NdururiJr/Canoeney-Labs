@@ -110,6 +110,12 @@ export class Sbx {
    * Whether sbx's GitHub service key reaches this agent's sandbox, as of the
    * last refresh(): set for every sandbox ("global"), for this one, or not at all.
    */
+  /** A `github` key set for every sandbox, as of the last refresh(): "unknown" when the read failed (SR-E-05). */
+  globalGithubKey(): boolean | "unknown" {
+    if (!this.keysRead) return "unknown";
+    return this.state.globalKeys.includes("github");
+  }
+
   githubKeyFor(agentId: string): "global" | "sandbox" | "unknown" | null {
     // Not read, or the read failed: HQ cannot say no key reaches the sandbox.
     if (!this.keysRead) return "unknown";

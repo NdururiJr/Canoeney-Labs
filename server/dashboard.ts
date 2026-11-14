@@ -149,7 +149,8 @@ export class Dashboard {
       if (spec.secret) log.warn(`command ${cmd} failed`);
       else log.warn(`command ${cmd} failed:`, String(err instanceof Error ? err.message : err).slice(0, 200));
       this.tryAppend(ctx, "dashboard.command-failed", target, { cmd });
-      const message = !spec.secret && spec.explain ? safe(() => spec.explain!(err)) : null;
+      // explain is opt-in and returns HQ's own words only, so it applies to secret commands too.
+      const message = spec.explain ? safe(() => spec.explain!(err)) : null;
       return message ? { ok: false, error: "failed", message: message.slice(0, 300) } : { ok: false, error: "failed" };
     }
   }
