@@ -17,6 +17,7 @@ import { startHq } from "./startHq";
 import { newAgent } from "./store";
 import { makeHq, openTestRuntime, openWs, OWNER_PIN } from "./testing/hqFixture";
 import { withSessions } from "./testing/sessionFixture";
+import { trackedHqFiles } from "./agentIsolation";
 import { ensureWorkspace, WorkspaceRefusedError } from "./workspace";
 
 const OWNER = { kind: "human", id: "owner" } as const;
@@ -158,4 +159,21 @@ test("a folder that now holds a different GitHub repo is not opened as the old p
   await restarted.openAll();
   assert.equal(restarted.get("site"), null);
   assert.equal(restarted.list().find((p) => p.id === "site")?.state, "missing");
+});
+
+test("HQ's own tracked files are found through a Windows short (8.3) path too", { skip: process.platform !== "win32" && "short paths exist only on Windows" }, async (t) => {
+  const repo = mkdtempSync(join(tmpdir(), "hq long name "));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  mkdirSync(join(repo, "sub"));
+  git(repo, "init", "-q");
+  writeFileSync(join(repo, ".jsmhq-role.md"), "x");
+  writeFileSync(join(repo, "sub", ".jsmhq-role.md"), "x");
+  git(repo, "add", ".");
+  const short = execFileSync("powershell", ["-NoProfile", "-Command", `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${repo}').ShortPath`], { encoding: "utf8" }).trim();
+  if (!short || short.toLowerCase() === repo.toLowerCase()) {
+    t.skip("this volume has no short names");
+    return;
+  }
+  assert.deepEqual(await trackedHqFiles(short), [".jsmhq-role.md"]);
+  assert.deepEqual(await trackedHqFiles(join(short, "sub")), [".jsmhq-role.md"]);
 });
