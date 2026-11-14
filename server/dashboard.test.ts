@@ -115,9 +115,9 @@ test("SR-C-04 [T-S5.2 T-S5.7] a supervisor is refused every owner command, and a
 test("SR-C-05 [T-S5.6] a PIN confirms only the command it came with", async (t) => {
   const d = await makeDashboardHq(t);
   const c = await d.connect();
-  assert.deepEqual(await c.send("setSecret", ["ana", "github", "v1"], OWNER_PIN), { ok: true });
+  assert.deepEqual(await c.send("setSecret", ["ana", "anthropic", "v1"], OWNER_PIN), { ok: true });
   assert.deepEqual(await c.send("setProxy", ["http://proxy.example:8080"]), { ok: false, error: "pin-required" });
-  assert.deepEqual(await c.send("setSecret", ["ana", "github", "v2"], "000000"), { ok: false, error: "pin-wrong" });
+  assert.deepEqual(await c.send("setSecret", ["ana", "anthropic", "v2"], "000000"), { ok: false, error: "pin-wrong" });
   assert.equal(d.calls.filter((x) => x.name === "sbx.setKey").length, 1);
   assert.equal(d.calls.filter((x) => x.name === "sbx.setProxy").length, 0);
   c.close();
@@ -221,7 +221,7 @@ test("SR-C-17 [T-S5.10] a secret value goes to its store and nowhere else", asyn
   const { out } = await captureLog(async () => {
     for (const fail of [false, true]) {
       d.failWith.text = fail ? `rejected ${marker} and http://user:${marker}@proxy.example:8080` : null;
-      await c.send("setSecret", ["ana", "github", marker], OWNER_PIN);
+      await c.send("setSecret", ["ana", "anthropic", marker], OWNER_PIN);
       await c.send("setProxy", [`http://user:${marker}@proxy.example:8080`], OWNER_PIN);
       await c.send("addMcp", [{ name: `docs${fail ? "2" : "1"}`, url: "https://mcp.example", apiKey: marker }], OWNER_PIN);
     }

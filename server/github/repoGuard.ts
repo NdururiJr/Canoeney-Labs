@@ -32,7 +32,7 @@ const ADMIN = { actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"
 
 interface Ruleset {
   name: string;
-  target: "branch";
+  target: "branch" | "tag";
   enforcement: "active";
   conditions: { ref_name: { include: string[]; exclude: string[] } };
   rules: { type: string }[];
@@ -66,6 +66,8 @@ export function desiredRulesets(agents: GuardAgent[]): Ruleset[] {
       rules: rules("creation", "update"),
       bypass_actors: [{ ...ADMIN }],
     },
+    // Tags: an agent App's contents:write could otherwise create, move or delete them, release tags included.
+    { name: "hq-tags", target: "tag", enforcement: "active", conditions: branch(["~ALL"], []), rules: rules("creation", "update", "deletion"), bypass_actors: [{ ...ADMIN }] },
   ];
 }
 
@@ -84,15 +86,37 @@ export function mainProtection() {
   };
 }
 
-/** The body that sets it. */
-const PROTECTION_BODY = {
-  required_status_checks: null,
-  enforce_admins: true,
-  required_pull_request_reviews: { dismiss_stale_reviews: true, require_code_owner_reviews: true, required_approving_review_count: 1, bypass_pull_request_allowances: { users: [], teams: [], apps: [] } },
-  restrictions: null,
-  allow_force_pushes: false,
-  allow_deletions: false,
-};
+interface ProtectionNow {
+  required_status_checks?: { strict?: boolean; contexts?: string[]; checks?: { context: string; app_id?: number | null }[] } | null;
+  restrictions?: { users?: { login: string }[]; teams?: { slug: string }[]; apps?: { slug: string }[] } | null;
+  required_pull_request_reviews?: { required_approving_review_count?: number };
+}
+
+/**
+ * The body that sets it. The owner's own stricter settings are kept: required status
+ * checks, push restrictions, and a higher review count (final review: a PUT replaces the
+ * whole protection, and HQ only ever tightens).
+ */
+function protectionBody(now: ProtectionNow | null) {
+  const checks = now?.required_status_checks;
+  const rest = now?.restrictions;
+  return {
+    required_status_checks: checks ? { strict: !!checks.strict, ...(checks.checks?.length ? { checks: checks.checks } : { contexts: checks.contexts ?? [] }) } : null,
+    enforce_admins: true,
+    required_pull_request_reviews: {
+      dismiss_stale_reviews: true,
+      require_code_owner_reviews: true,
+      required_approving_review_count: Math.max(1, now?.required_pull_request_reviews?.required_approving_review_count ?? 1),
+      bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
+    },
+    restrictions: rest ? { users: (rest.users ?? []).map((u) => u.login), teams: (rest.teams ?? []).map((t) => t.slug), apps: (rest.apps ?? []).map((a) => a.slug) } : null,
+    allow_force_pushes: false,
+    allow_deletions: false,
+  };
+}
+
+/** Actions allowed only from the repo itself, or only GitHub's own: both restricted. */
+const RESTRICTED_ACTIONS = new Set(["selected", "local_only"]);
 
 const sortedJson = (v: unknown) => JSON.stringify(v, (_k, x) => (Array.isArray(x) ? [...x].map((y) => (typeof y === "object" ? JSON.stringify(y) : y)).sort() : x));
 const sameRuleBody = (a: Partial<Ruleset>, b: Ruleset) =>
@@ -108,15 +132,27 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
   const out: Finding[] = [];
   const add = (name: string, detail: string, fixable: boolean) => out.push({ name, detail, fixable });
   const get = <T>(path: string) => gh.request<T>("GET", `/repos/${repo}${path}`);
+  /**
+   * A read HQ could not make is a finding of its own, never a false "missing" and never
+   * a silent all-clear (final review): gh logged out, offline, or a 403 on a free plan.
+   */
+  const failed = (key: string, what: string, status: number) => add(`read-failed:${key}`, `HQ couldn't read ${what} on ${repo} (HTTP ${status || "no answer"}). Check that gh is signed in, then check again.`, false);
+  /** `key` names the finding; `what` is how the owner reads it. */
+  const read = async <T>(key: string, what: string, path: string, ok404 = false): Promise<T | null | undefined> => {
+    const r = await get<T>(path);
+    if (r.status === 200 && r.json !== null) return r.json;
+    if (r.status === 404 && ok404) return null;
+    failed(key, what, r.status);
+    return undefined;
+  };
 
-  const info = (await get<{ private?: boolean; allow_auto_merge?: boolean }>("")).json ?? {};
-  if (info.allow_auto_merge) add("auto-merge-on", "Auto-merge is on: an agent could set its PR to merge the moment you approve it.", true);
+  const info = await read<{ private?: boolean; allow_auto_merge?: boolean }>("repository", "the repository", "");
+  if (info?.allow_auto_merge) add("auto-merge-on", "Auto-merge is on: an agent could set its PR to merge the moment you approve it.", true);
 
-  const prot = await get<ReturnType<typeof mainProtection>>("/branches/main/protection");
-  if (prot.status !== 200 || !prot.json) {
+  const p = await read<ReturnType<typeof mainProtection>>("main-protection", "main's protection", "/branches/main/protection", true);
+  if (p === null) {
     add("main-missing-or-unprotected", "`main` is missing or unprotected. Make the first commit (with CODEOWNERS), then apply the protection.", true);
-  } else {
-    const p = prot.json;
+  } else if (p) {
     const pr = p.required_pull_request_reviews;
     if (pr?.require_code_owner_reviews !== true) add("code-owner-review-off", "A pull request into `main` does not need your code-owner review.", true);
     if ((pr?.required_approving_review_count ?? 0) < 1) add("review-count", "A pull request into `main` needs no approving review.", true);
@@ -128,48 +164,67 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
     if (p.allow_deletions?.enabled) add("deletion-allowed", "`main` can be deleted.", true);
   }
 
-  const list = (await get<{ id: number; name: string }[]>("/rulesets")).json ?? [];
-  const byName = new Map<string, Partial<Ruleset>>();
-  for (const r of list.filter((x) => x.name.startsWith("hq-"))) byName.set(r.name, (await get<Partial<Ruleset>>(`/rulesets/${r.id}`)).json ?? {});
-  for (const want of desiredRulesets(o.agents)) {
-    const have = byName.get(want.name);
-    const agent = want.name.startsWith("hq-agent-") ? want.name.slice("hq-agent-".length) : null;
-    if (!have) {
-      if (want.name === "hq-main") add("main-ruleset-missing", "No rule stops agents from updating `main`.", true);
-      else if (agent) add(`agent-ruleset-missing:${agent}`, `Nothing keeps other agents off ${agent}'s branches.`, true);
-      else add("unclaimed-ruleset-missing", "Agents may create branches outside their own names.", true);
-      continue;
+  const list = await read<{ id: number; name: string }[]>("rulesets", "the rulesets", "/rulesets");
+  if (list !== undefined && !Array.isArray(list)) failed("rulesets", "the rulesets", 200);
+  else if (Array.isArray(list)) {
+    const byName = new Map<string, Partial<Ruleset>>();
+    let complete = true;
+    for (const r of list.filter((x) => typeof x?.name === "string" && x.name.startsWith("hq-"))) {
+      const one = await read<Partial<Ruleset>>(`ruleset:${r.name}`, `the ${r.name} rule`, `/rulesets/${r.id}`);
+      if (one) byName.set(r.name, one);
+      else complete = false;
     }
-    if (agent && !sameBypass(have, want)) add(`agent-ruleset-bypass:${agent}`, `Someone besides ${agent}'s App and you may write ${agent}'s branches.`, true);
-    else if (!sameBypass(have, want) || !sameRuleBody(have, want)) add(`ruleset-changed:${want.name}`, `The ${want.name} rule was changed on GitHub.`, true);
+    for (const want of complete ? desiredRulesets(o.agents) : []) {
+      const have = byName.get(want.name);
+      const agent = want.name.startsWith("hq-agent-") ? want.name.slice("hq-agent-".length) : null;
+      if (!have) {
+        if (want.name === "hq-main") add("main-ruleset-missing", "No rule stops agents from updating `main`.", true);
+        else if (want.name === "hq-tags") add("tags-ruleset-missing", "Agents may create, move or delete tags.", true);
+        else if (agent) add(`agent-ruleset-missing:${agent}`, `Nothing keeps other agents off ${agent}'s branches.`, true);
+        else add("unclaimed-ruleset-missing", "Agents may create branches outside their own names.", true);
+        continue;
+      }
+      if (agent && !sameBypass(have, want)) add(`agent-ruleset-bypass:${agent}`, `Someone besides ${agent}'s App and you may write ${agent}'s branches.`, true);
+      else if (!sameBypass(have, want) || !sameRuleBody(have, want)) add(`ruleset-changed:${want.name}`, `The ${want.name} rule was changed on GitHub.`, true);
+    }
   }
   for (const a of o.agents) {
     if (!a.installed) add(`app-not-installed:${a.id}`, `${a.id}'s GitHub App is not installed on ${repo}.`, false);
     else if (a.selection === "all") add(`app-all-repositories:${a.id}`, `${a.id}'s GitHub App is installed on all your repositories. Reinstall it on ${repo} only.`, false);
   }
 
-  const actions = (await get<{ enabled?: boolean; allowed_actions?: string }>("/actions/permissions")).json ?? {};
-  if (actions.enabled !== false) {
-    let restricted = actions.allowed_actions === "selected";
-    if (restricted) {
-      const sel = (await get<{ github_owned_allowed?: boolean; verified_allowed?: boolean; patterns_allowed?: string[] }>("/actions/permissions/selected-actions")).json ?? {};
-      restricted = sel.verified_allowed !== true && !(sel.patterns_allowed ?? []).length;
+  const actions = await read<{ enabled?: boolean; allowed_actions?: string }>("actions", "the Actions settings", "/actions/permissions");
+  if (actions && actions.enabled !== false) {
+    let restricted = RESTRICTED_ACTIONS.has(actions.allowed_actions ?? "");
+    if (actions.allowed_actions === "selected") {
+      const sel = await read<{ github_owned_allowed?: boolean; verified_allowed?: boolean; patterns_allowed?: string[] }>("selected-actions", "the allowed actions", "/actions/permissions/selected-actions");
+      restricted = !!sel && sel.verified_allowed !== true && !(sel.patterns_allowed ?? []).length;
+      if (!sel) restricted = true; // reported as a failed read already
     }
     if (!restricted) add("actions-unrestricted", "Workflows may use any action, not only GitHub's own.", true);
   }
-  const wf = (await get<{ default_workflow_permissions?: string; can_approve_pull_request_reviews?: boolean }>("/actions/permissions/workflow")).json ?? {};
-  if (wf.default_workflow_permissions !== "read") add("workflow-token-write", "Workflows get a token that can write to the repo.", true);
-  if (wf.can_approve_pull_request_reviews) add("actions-approve-prs", "Workflows may approve pull requests.", true);
-  if (((await get<{ total_count?: number }>("/actions/secrets")).json?.total_count ?? 0) > 0) add("repo-secrets", "The repo has a repository secret, which a workflow could read. Remove it on GitHub.", false);
-  if (((await get<{ total_count?: number }>("/actions/runners")).json?.total_count ?? 0) > 0) add("self-hosted-runner", "A self-hosted runner is registered. Remove it on GitHub.", false);
+  const wf = await read<{ default_workflow_permissions?: string; can_approve_pull_request_reviews?: boolean }>("workflow-token", "the workflow token settings", "/actions/permissions/workflow");
+  if (wf) {
+    if (wf.default_workflow_permissions !== "read") add("workflow-token-write", "Workflows get a token that can write to the repo.", true);
+    if (wf.can_approve_pull_request_reviews) add("actions-approve-prs", "Workflows may approve pull requests.", true);
+  }
+  const secrets = await read<{ total_count?: number }>("secrets", "the repository secrets", "/actions/secrets");
+  if ((secrets?.total_count ?? 0) > 0) add("repo-secrets", "The repo has a repository secret, which a workflow could read. Remove it on GitHub.", false);
+  const runners = await read<{ total_count?: number }>("runners", "the self-hosted runners", "/actions/runners");
+  if ((runners?.total_count ?? 0) > 0) add("self-hosted-runner", "A self-hosted runner is registered. Remove it on GitHub.", false);
 
   let owners: string | null = null;
+  let ownersUnread = false;
   for (const at of [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]) {
-    const r = await get<{ content?: string }>(`/contents/${at}`);
-    if (r.status === 200 && (owners = decode(r.json)) !== null) break;
+    const r = await read<{ content?: string }>("codeowners", "CODEOWNERS", `/contents/${at}`, true);
+    if (r === undefined) {
+      ownersUnread = true;
+      break;
+    }
+    if (r && (owners = decode(r)) !== null) break;
   }
-  if (owners === null) add("codeowners-missing", "The repo has no CODEOWNERS file, so nothing needs your review.", false);
-  else {
+  if (!ownersUnread && owners === null) add("codeowners-missing", "The repo has no CODEOWNERS file, so nothing needs your review.", false);
+  else if (owners !== null) {
     const owner = `@${repo.split("/")[0]}`.toLowerCase();
     const owned = new Set(
       owners
@@ -181,14 +236,15 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
     for (const path of ["*", ...CODEOWNERS_PATHS]) if (!owned.has(path)) add(`codeowners-path:${path}`, `CODEOWNERS does not make ${path} yours to review.`, false);
   }
 
-  const files = await get<{ name: string; path: string; type: string }[]>("/contents/.github/workflows");
-  for (const f of files.status === 200 ? (files.json ?? []) : []) {
+  const files = await read<{ name: string; path: string; type: string }[]>("workflows", "the workflow files", "/contents/.github/workflows", true);
+  for (const f of Array.isArray(files) ? files : []) {
     if (f.type !== "file" || !/\.ya?ml$/i.test(f.name)) continue;
-    const text = decode((await get<{ content?: string }>(`/contents/${f.path}`)).json);
+    const file = await read<{ content?: string }>(`workflow:${f.name}`, f.path, `/contents/${f.path}`);
+    const text = file ? decode(file) : null;
     if (text !== null) out.push(...scanWorkflow(f.path, text));
   }
 
-  if (info.private && !o.spendingConfirmed) add("spending-limit-unconfirmed", "This private repo's Actions spending limit is not confirmed. Set it on GitHub, then confirm it in HQ.", false);
+  if (info?.private && !o.spendingConfirmed) add("spending-limit-unconfirmed", "This private repo's Actions spending limit is not confirmed. Set it on GitHub, then confirm it in HQ.", false);
   return out;
 }
 
@@ -196,16 +252,18 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
 export async function applyRepoGuard(gh: GitHubApi, repo: string, o: { agents: GuardAgent[]; spendingConfirmed: boolean }): Promise<Finding[]> {
   const r = (method: string, path: string, body?: unknown) => gh.request(method, `/repos/${repo}${path}`, { body });
   await r("PATCH", "", { allow_auto_merge: false });
-  await r("PUT", "/branches/main/protection", PROTECTION_BODY);
-  const existing = new Map(((await r("GET", "/rulesets")).json as { id: number; name: string }[] | null ?? []).map((x) => [x.name, x.id]));
+  const now = await r("GET", "/branches/main/protection");
+  await r("PUT", "/branches/main/protection", protectionBody(now.status === 200 ? (now.json as ProtectionNow) : null));
+  const listed = (await r("GET", "/rulesets")).json;
+  const existing = new Map((Array.isArray(listed) ? (listed as { id: number; name: string }[]) : []).map((x) => [x.name, x.id]));
   for (const want of desiredRulesets(o.agents)) {
     const id = existing.get(want.name);
     if (id !== undefined) await r("PUT", `/rulesets/${id}`, want);
     else await r("POST", "/rulesets", want);
   }
-  // Actions the owner turned off entirely stay off.
-  const actions = (await r("GET", "/actions/permissions")).json as { enabled?: boolean } | null;
-  if (actions?.enabled !== false) {
+  // Actions the owner turned off, or limited to the repo's own, stay so: HQ only tightens.
+  const actions = (await r("GET", "/actions/permissions")).json as { enabled?: boolean; allowed_actions?: string } | null;
+  if (actions && actions.enabled !== false && actions.allowed_actions !== "local_only") {
     await r("PUT", "/actions/permissions", { enabled: true, allowed_actions: "selected" });
     await r("PUT", "/actions/permissions/selected-actions", { github_owned_allowed: true, verified_allowed: false, patterns_allowed: [] });
   }

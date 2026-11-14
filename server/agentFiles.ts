@@ -137,11 +137,16 @@ type Settings = { hooks?: Record<string, HookEntry[]>; permissions?: { allow?: s
 /** A POSIX single-quoted word: the folder path can hold spaces or quotes. */
 const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-/** The hook command: the secret comes from `authFile` (`curl -H @file`), never from the command line. */
-export function hookCommand(url: string, authFile: string, agentId: string, event: string): string {
+/**
+ * The hook command: the secret comes from the agent folder's auth file (`curl -H @file`),
+ * never from the command line. The path is resolved where the hook runs, inside the
+ * sandbox: Claude Code sets $CLAUDE_PROJECT_DIR, and Codex runs hooks in the folder
+ * (final review: a host path such as C:\… would not resolve there).
+ */
+export function hookCommand(url: string, agentId: string, event: string): string {
   // Stop prints HQ's reply: {"decision":"block","reason":…} hands over queued messages.
   const out = event === "Stop" ? "2>/dev/null" : ">/dev/null 2>&1";
-  return `curl -sf -m 4 -X POST -H @${sq(authFile)} -H 'Content-Type: application/json' --data-binary @- ${sq(`${url}/hook/${agentId}/${event}`)} ${out} || true ${MARK}`;
+  return `curl -sf -m 4 -X POST -H @"\${CLAUDE_PROJECT_DIR:-.}/${HOOK_AUTH}" -H 'Content-Type: application/json' --data-binary @- ${sq(`${url}/hook/${agentId}/${event}`)} ${out} || true ${MARK}`;
 }
 
 /** The hooks' auth file: `Authorization: Bearer <secret>`, written owner-only. Returns its path. */
@@ -155,7 +160,7 @@ export function writeHookAuth(dir: string, token: string): string {
  * adds to the session's context. Existing user hooks are kept.
  */
 export function writeSettings(dir: string, agent: AgentConfig, port: number, token: string) {
-  const auth = writeHookAuth(dir, token);
+  writeHookAuth(dir, token);
   const file = ".claude/settings.local.json";
   let settings: Settings = {};
   const existing = agentRead(dir, file); // a symlink reads as missing: never pull in a host file
@@ -172,7 +177,7 @@ export function writeSettings(dir: string, agent: AgentConfig, port: number, tok
     const kept = (hooks[event] ?? [])
       .map((e) => ({ ...e, hooks: e.hooks.filter((h) => !isOurs(h.command)) }))
       .filter((e) => e.hooks.length);
-    const ours: HookEntry["hooks"] = [{ type: "command", command: hookCommand(url, auth, agent.id, event), timeout: 5 }];
+    const ours: HookEntry["hooks"] = [{ type: "command", command: hookCommand(url, agent.id, event), timeout: 5 }];
     if (event === "SessionStart") ours.unshift({ type: "command", command: `cat "$CLAUDE_PROJECT_DIR/${ROLE_FILE}" 2>/dev/null || true ${MARK}` });
     hooks[event] = [...kept, event === "PreToolUse" || event === "PostToolUse" ? { matcher: "*", hooks: ours } : { hooks: ours }];
   }

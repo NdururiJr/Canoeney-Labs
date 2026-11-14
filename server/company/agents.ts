@@ -223,14 +223,20 @@ export class AgentRegistry {
       this.audit.append({ actorKind: by.kind, actorId: by.id, action: "agent.status-changed", target: a.companyId, data: { from: a.status, to: status } });
       return a.companyId;
     });
-    if (!changed || this.db.inTransaction) return;
-    for (const fn of this.statusListeners) {
-      try {
-        fn(changed, status, by);
-      } catch {
-        /* a listener's failure does not undo the change */
+    if (!changed) return;
+    const announce = () => {
+      for (const fn of this.statusListeners) {
+        try {
+          fn(changed, status, by);
+        } catch {
+          /* a listener's failure does not undo the change */
+        }
       }
-    }
+    };
+    // Inside an outer transaction (the setup retiring an old team): announced once this turn ends.
+    // Revoking a token is safe even if that transaction later rolls back (final review).
+    if (this.db.inTransaction) queueMicrotask(announce);
+    else announce();
   }
 
   private must(projectSlug: string, agentId: string): RegisteredAgent {

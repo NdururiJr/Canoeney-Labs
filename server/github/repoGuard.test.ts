@@ -166,6 +166,7 @@ test("applying the guard sets only fixable settings, and never writes CODEOWNERS
     "POST /rulesets",
     "POST /rulesets",
     "POST /rulesets",
+    "POST /rulesets",
     "PUT /actions/permissions",
     "PUT /actions/permissions/selected-actions",
     "PUT /actions/permissions/workflow",

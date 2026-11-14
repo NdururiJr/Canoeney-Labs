@@ -39,7 +39,7 @@ test("SR-E-05 [T-S3.1] a github key for every sandbox is refused", async (t) => 
   const d = new Dashboard(makeCommands(hq.hub, stub(), hq.planner, hq.inbox, fake.sbx, stub(), hq.company), { ownerAuth: hq.ownerAuth, audit: hq.company.audit, clock: hq.clock });
   const r = await d.dispatch(OWNER, { cmd: "setSecret", args: [null, "github", "ghp_notarealtokenvalue1234567890"], pin: OWNER_PIN });
   assert.equal(r.ok, false);
-  assert.match((r as { message?: string }).message ?? "", /every sandbox/);
+  assert.match((r as { message?: string }).message ?? "", /own GitHub identity/);
   const refused = hq.company.audit.query({ action: "settings.refused" });
   assert.equal(refused.length, 1);
   assert.deepEqual([refused[0].actorId, refused[0].data.service, refused[0].data.scope], ["owner", "github", "global"]);

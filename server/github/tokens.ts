@@ -11,6 +11,9 @@ import type { GitHubApi } from "./api";
 import { APP_PERMISSIONS } from "./appManifest";
 import type { GitHubApps } from "./apps";
 
+/** A token failure in HQ's own words (never sbx's or GitHub's text, which could repeat the token). */
+export class TokenError extends Error {}
+
 export type RevokeReason = "stopped" | "paused" | "retired" | "hq-stopped";
 
 const REFRESH_BEFORE_MS = 10 * 60_000;
@@ -33,8 +36,6 @@ const realSchedule: Schedule = (fn, ms) => {
 
 export class AgentTokens {
   private readonly held = new Map<string, Held>();
-  /** Bumped by each revoke, so a refresh already in flight issues nothing after it. */
-  private readonly generation = new Map<string, number>();
   private readonly schedule: Schedule;
 
   constructor(
@@ -50,61 +51,87 @@ export class AgentTokens {
     this.schedule = o.schedule ?? realSchedule;
   }
 
-  /** Issues the agent's token and gives it to its own sandbox as its `github` key. */
-  async deliver(agentId: string, companyId: string, repo: string | null): Promise<"issued" | "no-identity"> {
-    if (!repo || !this.o.apps.has(companyId)) return "no-identity";
-    const gen = this.generation.get(agentId) ?? 0;
-    const inst = await this.o.apps.installation(companyId, repo);
-    if (!inst) return "no-identity";
-    const name = repo.split("/")[1];
+  /** Each agent's deliveries, refreshes and revokes run one at a time, in order (final review, Critical 1). */
+  private readonly lanes = new Map<string, Promise<unknown>>();
+
+  private lane<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
+    const next = (this.lanes.get(agentId) ?? Promise.resolve()).then(fn, fn);
+    const settled = next.catch(() => {});
+    this.lanes.set(agentId, settled);
+    void settled.then(() => {
+      if (this.lanes.get(agentId) === settled) this.lanes.delete(agentId);
+    });
+    return next;
+  }
+
+  /**
+   * Issues the agent's token and gives it to its own sandbox as its `github` key. An agent
+   * with no identity has any `github` key in its sandbox removed: the only GitHub key an
+   * agent ever holds is the one HQ gave it (final review, Important 6).
+   */
+  deliver(agentId: string, companyId: string, repo: string | null): Promise<"issued" | "no-identity"> {
+    return this.lane(agentId, () => this.deliverNow(agentId, companyId, repo));
+  }
+
+  private async deliverNow(agentId: string, companyId: string, repo: string | null): Promise<"issued" | "no-identity"> {
+    const inst = repo && this.o.apps.has(companyId) ? await this.o.apps.installation(companyId, repo) : null;
+    if (!repo || !inst) {
+      await this.o.sbx.removeKey(agentId, "github").catch(() => {});
+      return "no-identity";
+    }
     const r = await this.o.api.request<{ token: string; expires_at: string }>("POST", `/app/installations/${inst.id}/access_tokens`, {
       jwt: this.o.apps.jwtFor(companyId),
-      body: { repositories: [name], permissions: { ...APP_PERMISSIONS } },
+      body: { repositories: [repo.split("/")[1]], permissions: { ...APP_PERMISSIONS } },
     });
-    if (r.status !== 201 || !r.json?.token) throw new Error(`GitHub did not issue a token (HTTP ${r.status}).`);
-    // A revoke that came while this was in flight wins: the new token is revoked at once.
-    if ((this.generation.get(agentId) ?? 0) !== gen) {
-      await this.revokeToken(r.json.token);
-      return "issued";
+    if (r.status !== 201 || !r.json?.token) throw new TokenError(`GitHub did not issue a token (HTTP ${r.status}).`);
+    const token = r.json.token;
+    try {
+      await this.o.sbx.setKey(agentId, "github", token);
+    } catch {
+      // Nobody holds it: revoke it now rather than leave it live for an hour.
+      await this.revokeToken(token);
+      throw new TokenError("sbx did not store the GitHub token for the sandbox.");
     }
-    await this.o.sbx.setKey(agentId, "github", r.json.token);
     const previous = this.held.get(agentId);
     previous?.cancel();
     const ms = Date.parse(r.json.expires_at) - this.o.clock.now().getTime() - REFRESH_BEFORE_MS;
     const cancel = this.schedule(() => void this.refresh(agentId), ms);
-    this.held.set(agentId, { token: r.json.token, companyId, repo, cancel });
-    if (previous && previous.token !== r.json.token) await this.revokeToken(previous.token);
+    this.held.set(agentId, { token, companyId, repo, cancel });
+    if (previous && previous.token !== token) await this.revokeToken(previous.token);
     return "issued";
   }
 
-  /** Revokes the agent's token on GitHub and removes it from its sandbox. Nothing to do when it holds none. */
-  async revoke(agentId: string, reason: RevokeReason, by: Actor = HQ): Promise<void> {
-    this.generation.set(agentId, (this.generation.get(agentId) ?? 0) + 1);
-    const h = this.held.get(agentId);
-    if (!h) return;
-    this.held.delete(agentId);
-    h.cancel();
-    await this.revokeToken(h.token);
-    try {
-      await this.o.sbx.removeKey(agentId, "github");
-    } catch {
-      /* the sandbox may be gone; the token is already revoked */
-    }
-    this.o.audit.append({ actorKind: by.kind, actorId: by.id, action: "github.token-revoked", target: h.companyId, data: { reason } });
+  /** Revokes the agent's token on GitHub and removes it from its sandbox, after any delivery in flight. */
+  revoke(agentId: string, reason: RevokeReason, by: Actor = HQ): Promise<void> {
+    return this.lane(agentId, async () => {
+      const h = this.held.get(agentId);
+      if (!h) return;
+      this.held.delete(agentId);
+      h.cancel();
+      await this.revokeToken(h.token);
+      await this.o.sbx.removeKey(agentId, "github").catch(() => {
+        /* the sandbox may be gone; the token is already revoked */
+      });
+      this.o.audit.append({ actorKind: by.kind, actorId: by.id, action: "github.token-revoked", target: h.companyId, data: { reason } });
+    });
   }
 
+  /** Every agent holding a token, or with a delivery in flight. */
   async revokeAll(reason: RevokeReason): Promise<void> {
-    await Promise.all([...this.held.keys()].map((id) => this.revoke(id, reason)));
+    const ids = new Set([...this.held.keys(), ...this.lanes.keys()]);
+    await Promise.all([...ids].map((id) => this.revoke(id, reason)));
   }
 
-  private async refresh(agentId: string): Promise<void> {
-    const h = this.held.get(agentId);
-    if (!h) return;
-    try {
-      await this.deliver(agentId, h.companyId, h.repo);
-    } catch {
-      /* the old token stays until it expires; the next start issues a new one */
-    }
+  private refresh(agentId: string): Promise<void> {
+    return this.lane(agentId, async () => {
+      const h = this.held.get(agentId);
+      if (!h) return; // revoked meanwhile
+      try {
+        await this.deliverNow(agentId, h.companyId, h.repo);
+      } catch {
+        /* the old token stays until it expires; the next start issues a new one */
+      }
+    });
   }
 
   private async revokeToken(token: string): Promise<void> {

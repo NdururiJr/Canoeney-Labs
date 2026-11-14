@@ -2,7 +2,7 @@
 // secret is never readable while it is written (M0-B final review).
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -33,7 +33,8 @@ test("no hook command holds the agent's secret", (t) => {
   const commands = Object.values(settings.hooks).flatMap((entries) => entries.flatMap((e) => e.hooks.map((h) => h.command)));
   assert.ok(commands.length >= 7);
   for (const c of commands) assert.equal(c.includes(SECRET), false, c);
-  assert.ok(commands.some((c) => c.includes(`-H @'${join(dir, HOOK_AUTH)}'`)));
+  // Resolved inside the sandbox, never a host path (final review).
+  assert.ok(commands.some((c) => c.includes('-H @"${CLAUDE_PROJECT_DIR:-.}/' + HOOK_AUTH + '"')));
   assert.equal(readFileSync(join(dir, HOOK_AUTH), "utf8"), `Authorization: Bearer ${SECRET}\n`);
   // Codex: its hook lines read the same file. (Its MCP header holds the secret, in a 0600 file.)
   const toml = codexConfig(agent, cfg, SECRET, dir, extras);
@@ -53,10 +54,12 @@ test("a hook reaches HQ with the secret read from its file", async (t) => {
   if (!has("sh") || !has("curl")) return t.skip("needs sh and curl");
   const hq = await makeHq(t);
   const dir = folder(t);
-  writeFileSync(join(dir, "auth"), `Authorization: Bearer ${hq.secretFor("ana")}\n`);
-  const cmd = hookCommand(hq.url, join(dir, "auth"), "ana", "SessionStart");
+  mkdirSync(join(dir, ".claude"), { recursive: true });
+  writeFileSync(join(dir, HOOK_AUTH), `Authorization: Bearer ${hq.secretFor("ana")}\n`);
+  const cmd = hookCommand(hq.url, "ana", "SessionStart");
   assert.equal(cmd.includes(hq.secretFor("ana")), false);
-  const r = spawnSync("sh", ["-c", cmd], { input: "{}", encoding: "utf8", timeout: 20_000 });
+  // Claude Code sets CLAUDE_PROJECT_DIR to the agent's folder when it runs a hook.
+  const r = spawnSync("sh", ["-c", cmd], { input: "{}", encoding: "utf8", timeout: 20_000, env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
   assert.equal(r.status, 0, r.stderr);
   for (let i = 0; i < 50 && hq.hub.status("ana")?.note !== "Ready"; i++) await new Promise((res) => setTimeout(res, 20));
   assert.equal(hq.hub.status("ana")?.note, "Ready", "HQ took the hook as ana's");

@@ -45,7 +45,7 @@ class EnvFilesOff extends Error {
 
 class GlobalKeyRefused extends Error {
   constructor() {
-    super("A GitHub key for every sandbox would let every agent merge and change repo settings. Give each agent its own GitHub identity in Settings → Team instead.");
+    super("A GitHub key would let an agent merge and change repo settings. Give each agent its own GitHub identity in Settings → Team instead.");
   }
 }
 
@@ -271,9 +271,10 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const svc = str(service, 40);
       if (!(SERVICE_KEYS as readonly string[]).includes(svc) || typeof value !== "string" || !value.trim()) return;
       if (agentId && !hub.cfg(agentId)) return;
-      // A GitHub key for every sandbox gives every agent the owner's GitHub powers (SR-E-05).
-      if (agentId === null && svc === "github") {
-        company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "settings.refused", target: null, data: { change: "key", service: "github", scope: "global", reason: "consequential", authority: authorityOf(ctx).via } });
+      // A GitHub key, for every sandbox or for one, would give an agent the owner's GitHub powers
+      // (SR-E-05); each agent works as its own App instead (final review, Important 6).
+      if (svc === "github") {
+        company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "settings.refused", target: agentId ? cid(agentId) : null, data: { change: "key", service: "github", scope: agentId ? "sandbox" : "global", reason: "consequential", authority: authorityOf(ctx).via } });
         throw new GlobalKeyRefused();
       }
       // The store records which key the owner set for which agent, never the value (SR-D-10).

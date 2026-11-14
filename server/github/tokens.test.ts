@@ -118,7 +118,8 @@ test("an agent with no GitHub identity gets no token", async () => {
   const h = harness({ identity: false });
   assert.equal(await h.tokens.deliver("ana", "site/ana", "acme/site"), "no-identity");
   assert.equal(h.issued(), 0);
-  assert.deepEqual(h.keys, []);
+  // Any github key in its sandbox is removed: HQ's is the only one an agent may hold (final review).
+  assert.deepEqual(h.keys, ["rm ana github"]);
 });
 
 // ---------------------------------------------------------------- through Sessions

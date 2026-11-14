@@ -24,6 +24,7 @@ import { projectHome, sessionName } from "./paths";
 import { POLICY_NOT_INITIALIZED, policyVerdict, runSetupChecks } from "./setup";
 import { ensureWorkspace, workspaceFor, WorkspaceRefusedError } from "./workspace";
 import { companyWorkspaceFor, ensureCompanyWorkspace, githubCredentialIn, workspaceKind } from "./companyWorkspace";
+import { TokenError } from "./github/tokens";
 
 const TERM_ENV = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<string, string>;
 /**
@@ -104,15 +105,19 @@ export class Sessions {
     return sessionName(this.hub.slug, agentId);
   }
 
-  /** Gives the agent its GitHub token. A failure is reported, never fatal: the agent starts without GitHub. */
-  private async deliverGithub(agentId: string, name: string): Promise<void> {
-    if (!this.github) return;
+  /**
+   * Gives the agent its GitHub token; true when one was issued. A failure is reported in
+   * HQ's own words only (sbx's or GitHub's text could repeat the token, SR-C-17), never fatal.
+   */
+  private async deliverGithub(agentId: string, name: string): Promise<boolean> {
+    if (!this.github) return false;
     try {
-      if ((await this.github.deliver(agentId)) === "no-identity")
-        this.hub.activity("session", agentId, `${name} has no GitHub identity: it can't push or open pull requests. Create one in Settings → Team, then install it on this project's repo.`);
+      if ((await this.github.deliver(agentId)) === "issued") return true;
+      this.hub.activity("session", agentId, `${name} has no GitHub identity: it can't push or open pull requests. Create one in Settings → Team, then install it on this project's repo.`);
     } catch (err) {
-      this.hub.activity("session", agentId, `${name} couldn't get a GitHub token: ${err instanceof Error ? err.message.slice(0, 120) : "unknown error"}`);
+      this.hub.activity("session", agentId, `${name} couldn't get a GitHub token${err instanceof TokenError ? `: ${err.message}` : "."}`);
     }
+    return false;
   }
 
   /** Revokes the agent's live secret: HQ ended its session, so no one should use it any more. */
@@ -201,6 +206,9 @@ export class Sessions {
     const name = this.name(id);
     this.onSessionDown(id);
     let issued = false;
+    /** This start delivered a GitHub token that no running session uses yet. */
+    let delivered = false;
+    let reattached = false;
     // CEO, CIO and Security & Audit work above projects: an empty folder, no repo, no GitHub credential (SR-D-06).
     const company = workspaceKind(reg.role) === "company";
     try {
@@ -232,12 +240,15 @@ export class Sessions {
       }
       // The agent's own GitHub token, before its sandbox exists or is reattached (M0-E). Company-level
       // agents never get one (SR-D-06); an agent without a sandbox has nowhere to put it.
-      if (!company && agent.mode === "sandbox") await this.deliverGithub(id, agent.name);
+      if (!company && agent.mode === "sandbox") delivered = await this.deliverGithub(id, agent.name);
       const adapter = adapters[agent.cli];
       // A session that is still running (tmux outlives HQ) keeps the secret and the
       // files it was started with. HQ keeps only a hash of the secret, so it could
       // not write the same one again (ADR 0005): reattach and write nothing.
-      if (await this.backend.exists(name)) this.noteOldKey(id);
+      if (await this.backend.exists(name)) {
+        reattached = true;
+        this.noteOldKey(id);
+      }
       else {
         // No env file reaches any agent in M0 and M1 (D2, SR-E-13): no secret value goes into a sandbox.
         const hasEnvFile = false;
@@ -286,6 +297,8 @@ export class Sessions {
       // A secret this call issued has no session to use it. A reattached
       // session's secret is left alone: that agent is still running.
       if (issued) this.revokeSecret(id);
+      // A token this start delivered has no session to use it (final review, Important 2).
+      if (delivered && !reattached) await this.github?.revoke(id, "stopped").catch(() => {});
       if (err instanceof WorkspaceRefusedError) this.auditRefusal(id, err, by);
       fail(err instanceof Error ? err.message : String(err));
     }
@@ -589,8 +602,9 @@ export class Sessions {
         this.hub.setStatus(agent.id, { note: "Reattached" });
         this.onSessionReattached(agent.id);
         // Its token may have expired while HQ was stopped: a fresh one (M0-E).
-        const role = this.company.agents.get(this.hub.slug, agent.id)?.role;
-        if (agent.mode === "sandbox" && role && workspaceKind(role) === "project") void this.deliverGithub(agent.id, agent.name);
+        // Only an active agent gets one: a paused agent's surviving session gets none (final review).
+        const reg = this.company.agents.get(this.hub.slug, agent.id);
+        if (agent.mode === "sandbox" && reg?.status === "active" && workspaceKind(reg.role) === "project") void this.deliverGithub(agent.id, agent.name);
         this.noteOldKey(agent.id);
       }
       if (agent.cli === "codex") await this.watchCodexScreen(agent.id, name);

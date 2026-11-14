@@ -2,7 +2,6 @@
 // the agent is launched. Everything else (hooks → state, Team MCP, delivery)
 // is shared — Codex and Claude Code send the same hook payloads.
 
-import { join } from "node:path";
 import { agentRemove, agentWrite } from "./lib/agentFs";
 import type { AgentCli, AgentConfig, HqConfig } from "../src/data/types";
 import { removeOldRoleFile, excludeFromGit, HOOK_AUTH, HOOK_SCRIPT, type RoleExtras, hookCommand, hqUrl, MCP_CONFIG, roleMd, writeClaudeFiles, writeHookAuth } from "./agentFiles";
@@ -41,9 +40,8 @@ const CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Permiss
 /** TOML basic string (JSON's escaping is valid TOML for these characters). */
 const t = (s: string) => JSON.stringify(s);
 
-export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, dir: string, extras: RoleExtras): string {
+export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, _dir: string, extras: RoleExtras): string {
   const url = hqUrl(agent, cfg.project.hqPort);
-  const auth = join(dir, HOOK_AUTH);
   const lines = [
     "# Written by JSM HQ for this agent (git-excluded). Codex loads it once you trust this folder.",
     `developer_instructions = ${t(roleMd(agent, cfg, extras))}`,
@@ -56,7 +54,7 @@ export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, di
     `http_headers = { Authorization = ${t(`Bearer ${token}`)} }`,
   ];
   for (const event of CODEX_EVENTS)
-    lines.push("", `[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"', `command = ${t(hookCommand(url, auth, agent.id, event))}`);
+    lines.push("", `[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"', `command = ${t(hookCommand(url, agent.id, event))}`);
   return lines.join("\n") + "\n";
 }
 
