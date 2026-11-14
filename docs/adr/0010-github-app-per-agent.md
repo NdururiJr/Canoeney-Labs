@@ -39,7 +39,7 @@ The manifest's permissions are exactly:
 | `pull_requests` | write |
 | `metadata` | read |
 
-It has no `workflows`, `administration`, `secrets`, `actions` or `members` permission, and no webhook (`hook_attributes.active: false`, no events). The App is private to the owner's account.
+It has no `workflows`, `administration`, `secrets`, `actions` or `members` permission, and no webhook: the manifest leaves `hook_attributes` out and subscribes to no events. The App is private to the owner's account.
 
 ### Tokens
 
@@ -65,6 +65,6 @@ HQ checks these daily (M0-E Task 4).
 
 ## To confirm on GitHub (M0-E Task 1, Step 6)
 
-- **Does GitHub accept a manifest with `hook_attributes.active: false` and no webhook URL?** *(result recorded here after the spike)*
+- **Does GitHub accept a manifest with `hook_attributes.active: false` and no webhook URL?** No. GitHub's documentation makes `hook_attributes.url` required whenever `hook_attributes` is present, and GitHub showed its blank form instead of the manifest page (2026-11-14). The manifest now leaves `hook_attributes` out.
 - **Can an App be a ruleset bypass actor on a repository owned by a personal account?** *(result recorded here after the spike)* If not, SR-E-03 needs another design, and the owner decides.
 - **Does GitHub return the browser to a loopback `redirect_url`?** *(result recorded here)* If not, the fallback is the owner pasting the one-time `code` from GitHub's address bar into HQ.

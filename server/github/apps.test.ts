@@ -60,7 +60,8 @@ test("SR-E-02 [T-S3.10] the manifest asks for contents, pull requests and metada
   assert.deepEqual(APP_PERMISSIONS, { contents: "write", pull_requests: "write", metadata: "read" });
   assert.deepEqual(m.default_events, []);
   assert.equal(m.public, false);
-  assert.deepEqual(m.hook_attributes, { active: false });
+  // No webhook: GitHub requires hook_attributes.url whenever hook_attributes is present, so it is left out.
+  assert.equal("hook_attributes" in m, false);
   assert.equal(m.redirect_url, "http://127.0.0.1:7420/github-app");
   assert.equal(m.url, "https://github.com/acme/site");
   assert.ok(String(m.name).length <= 34, String(m.name));
