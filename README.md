@@ -48,7 +48,8 @@ npx @therealjsmastery/jsm-hq@latest
 ### Options
 
 ```
-jsm-hq --repo <path>   the repo to manage (default: current folder)
+jsm-hq --repo <path>   a repo to manage (default: current folder); HQ also opens
+                       every project added before, and never its own source
        --port <n>      HQ port (default: 7420)
        --no-open       don't open the browser
        --version, --help

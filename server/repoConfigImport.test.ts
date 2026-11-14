@@ -85,6 +85,14 @@ test("SR-D-01 [T-S7.1 T-S7.2 T-S7.4] the repo's config and plan change nothing, 
   assert.deepEqual([...sbx.wantedRules("ana")], rules);
 });
 
+/** A string literal naming one of the repo's config files, bare or as a path (PR #8 deferred minor). */
+const CONFIG_LITERAL = /["'`](?:\.jsmhq(?:\/|\\{1,2}))?(config|plan)\.json["'`]/;
+
+test("the SR-D-02 scan catches the literal path", () => {
+  for (const src of ['"config.json"', "'plan.json'", '".jsmhq/config.json"', "`.jsmhq/plan.json`", '".jsmhq\\\\config.json"']) assert.ok(CONFIG_LITERAL.test(src), src);
+  for (const src of ['"There is no .jsmhq/config.json to import."', '"package.json"']) assert.equal(CONFIG_LITERAL.test(src), false, src);
+});
+
 test("SR-D-02 [T-S7.4] only the import reads the repo's config files", () => {
   const server = dirname(fileURLToPath(import.meta.url));
   const hits: string[] = [];
@@ -93,7 +101,7 @@ test("SR-D-02 [T-S7.4] only the import reads the repo's config files", () => {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) {
         if (name !== "testing" && name !== "node_modules") walk(p);
-      } else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name) && /["'`](config|plan)\.json["'`]/.test(readFileSync(p, "utf8"))) hits.push(relative(server, p));
+      } else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name) && CONFIG_LITERAL.test(readFileSync(p, "utf8"))) hits.push(relative(server, p));
     }
   };
   walk(server);

@@ -26,11 +26,24 @@ What HQ does behind the office: where agents work, how they talk, what reaches G
 
 New teams get names from The Office: Michael leads, then Dwight, Jim, Pam and so on. Rename them any time.
 
+## Several projects
+
+One HQ runs every project you give it, each with its own team, boards and agents. Nothing is shared between two projects except HQ itself, its login and its company store.
+
+- **The project switcher** in the top bar shows which project you're looking at. Pick another to switch: the office, boards, PRs and terminals are that project's.
+- **Adding a project:** the owner presses **Add project**, types the full path of a git repo on this machine, and confirms with the PIN. The repo HQ is started in (or `--repo`) is added too, without the PIN.
+- **What can't be a project:** HQ's own source code (its repo, a clone or fork of it, or the folder HQ runs from), and anything inside HQ's home folder (`~/.jsmhq`, where agents' copies live).
+- **A project whose folder is gone** stays listed as "folder missing". None of its agents start until the folder is back.
+- **Agents with the same name in two projects** are separate agents: each project's messages, tasks and tools reach only its own.
+- **Sandbox settings made for every sandbox** (an sbx key or policy set globally) reach every project's sandboxes. Set a key for one agent's sandbox when only that agent should have it.
+
 ## Workspaces and sessions
 
 - **Its own copy of the repo.** Each agent gets a full clone at `~/.jsmhq/<project>/<agent>/`. Your own working folder is never touched.
 - **Its instructions.** HQ writes `.jsmhq-role.md` into that folder: the agent's role (the ROLE.md text from Settings → Team), the team, the rules and its tools. HQ also adds its hooks and MCP config there, and keeps all of these out of git. The clone leaves out the repo's own agent settings (`CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/`, `.codex/`), so a pull request can't change what every agent is told or may run.
-- **Its session.** On macOS and Linux each agent runs in a tmux session called `hq-<project>-<agent>`, so agents keep working if you close HQ or the browser. You can watch one from any terminal with `tmux attach -t hq-<project>-<agent>`, or open its drawer in HQ.
+- **Its session.** On macOS and Linux each agent runs in a tmux session called `hq-<project>-<agent>`, so agents keep working if you close HQ or the browser. You can watch one from any terminal with `tmux attach -t hq-<project>-<agent>`, or open its drawer in HQ. Two agents can never share a session name, even in different projects: HQ refuses an agent id that would.
+- **A folder you chose yourself** (Settings → Team) is checked each time its agent starts: it must not be HQ's own source, and the repo (from its top folder, even if you chose a subfolder) must not have its own agent settings such as `CLAUDE.md`. A later `git pull` in that folder can bring such a file back; HQ notices at the agent's next start, not before.
+- **Company-level agents** (the CEO, CIO and Security & Audit, from M1) get an empty folder in `~/.jsmhq/_workspaces/` instead of a copy of the repo. They run only in a sandbox, and HQ won't start one while a GitHub key or token could reach it.
 
 ## Project notes (`CLAUDE.md`)
 
@@ -68,7 +81,7 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 - **Roles come from the company store.** The lead is the project's CTO and the others are builders. The welcome screen, or a one-time import of an older `.jsmhq/config.json`, sets who the CTO is. Nothing in the repository changes it afterwards.
 - **Each role has its own tools.** The CTO plans and assigns (boards, tasks, the team's status). Builders work on their own task: `get_my_task`, `set_my_status`, `send_message`, `ask_user` and `request_access`. A tool outside the role is refused before it runs.
 - **Every tool call is recorded** in the company store's audit trail, with the agent that made it. If HQ can't record a call, it doesn't carry it out. Free text (messages, notes, descriptions) is recorded as its length, not its content.
-- **The project id comes from the company store.** A new repo gets its folder name; a second repo with the same folder name gets `-2`, `-3` and so on. A repo you moved is recognised as the same project. `project.id` in an old `.jsmhq/config.json` is ignored.
+- **The project id comes from the company store.** A new repo gets its folder name; a second repo with the same folder name gets `-2`, `-3` and so on. A repo you moved is recognised as the same project only when its old folder is gone and its GitHub repo is the same; a different repo that reuses a deleted repo's folder name is a new project, with none of the old one's permissions. `project.id` in an old `.jsmhq/config.json` is ignored.
 
 ## GitHub and reviews
 

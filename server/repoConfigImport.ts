@@ -4,7 +4,7 @@
 // the PIN, and the confirmation is bound to the hash of the files the preview
 // showed (D3). Every other part of HQ reads the company store only.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentCli, AgentMode, Board, HqConfig, ImportLine, Task, WorkflowConfig } from "../src/data/types";
 import type { Company } from "./company";
@@ -12,6 +12,8 @@ import { companyAgentId } from "./company/agents";
 import { relaxes, type Authority, type ConfigChange } from "./company/authority";
 import { MODEL_NAME, SAFE_WORKFLOW } from "./company/projectSettings";
 import type { PermissionKind } from "./company/types";
+import { DOMAIN } from "./access";
+import { MCP_NAME } from "./sbxMcp";
 import { cleanStack, stackValues } from "./stackClean";
 import { newAgent } from "./store";
 
@@ -31,6 +33,8 @@ export interface ImportPlan {
   tasks: Task[];
   /** Agent ids in the file that are not plain ids, so not imported. */
   skipped: string[];
+  /** Domains and MCP names the dashboard would refuse, so not imported. */
+  dropped: number;
 }
 
 export interface ReadImport {
@@ -60,12 +64,26 @@ export function offerImport(hub: { snap: { welcome?: boolean; importable?: true 
  */
 export function readImport(root: string, company: Company, slug: string): ReadImport {
   const f = files(root);
-  const configBytes = readFileSync(f.config);
-  const planBytes = existsSync(f.plan) ? readFileSync(f.plan) : null;
+  const configBytes = readOwnFile(f.config, ".jsmhq/config.json");
+  const planBytes = existsSync(f.plan) ? readOwnFile(f.plan, ".jsmhq/plan.json") : null;
   const sha256 = hex(Buffer.from(JSON.stringify({ config: hex(configBytes), plan: planBytes ? hex(planBytes) : null })));
-  const config = JSON.parse(configBytes.toString("utf8")) as Partial<HqConfig>;
-  const planFile = planBytes ? (JSON.parse(planBytes.toString("utf8")) as { boards?: Board[]; tasks?: Task[] }) : {};
+  const config = parseJson(configBytes, ".jsmhq/config.json") as Partial<HqConfig>;
+  const planFile = planBytes ? (parseJson(planBytes, ".jsmhq/plan.json") as { boards?: Board[]; tasks?: Task[] }) : {};
   return { sha256, plan: buildPlan(config, planFile, company, slug) };
+}
+
+/** A file in the repo itself, never one a link points to (outside the repo, or HQ's own). */
+function readOwnFile(path: string, label: string): Buffer {
+  if (lstatSync(path).isSymbolicLink()) throw new Error(`\`${label}\` is a link. HQ imports only a file kept in the repo itself.`);
+  return readFileSync(path);
+}
+
+function parseJson(bytes: Buffer, label: string): unknown {
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error(`\`${label}\` is not valid JSON; fix or delete it.`);
+  }
 }
 
 /** The preview: every step that relaxes a control, in the order the import applies them. */
@@ -157,6 +175,18 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
   }
 
   const team = Array.isArray(config.team) ? config.team : [];
+  let dropped = 0;
+  /** Keeps the values `ok` accepts (after `clean`), counting the others as dropped: the dashboard's own rules. */
+  const keep = (values: string[], clean: (v: string) => string, ok: RegExp): string[] => {
+    const out: string[] = [];
+    for (const v of values) {
+      const c = clean(v);
+      if (ok.test(c)) {
+        if (!out.includes(c)) out.push(c);
+      } else dropped++;
+    }
+    return out;
+  };
   const skipped = team.map((a) => str(a?.id, 80)).filter((id) => !PLAIN_ID.test(id));
   const valid = team.filter((a) => PLAIN_ID.test(str(a?.id, 80)));
   const registered = new Map(company.agents.list(slug).map((a) => [a.agentId, a]));
@@ -219,10 +249,11 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
     if (resources.cpus !== null || resources.memoryGb !== null) {
       steps.push(agentStep(s, companyId, "resources", { cpus: null, memoryGb: null }, resources, "", []));
     }
+    const domain = (v: string) => v.toLowerCase();
     const grants: [PermissionKind, string[]][] = [
-      ["network-allow", list(raw.sandbox?.allow)],
-      ["network-deny", list(raw.sandbox?.deny)],
-      ["mcp-server", list(raw.mcp, 40)],
+      ["network-allow", keep(list(raw.sandbox?.allow), domain, DOMAIN)],
+      ["network-deny", keep(list(raw.sandbox?.deny), domain, DOMAIN)],
+      ["mcp-server", keep(list(raw.mcp, 40), (v) => v, MCP_NAME)],
       ["skill", list(raw.skills, 60)],
     ];
     for (const [kind, values] of grants) {
@@ -253,7 +284,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
         note: typeof t.note === "string" ? str(t.note, 300) : null,
       }),
     );
-  return { steps, boards, tasks, skipped };
+  return { steps, boards, tasks, skipped, dropped };
 }
 
 function agentStep(

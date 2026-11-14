@@ -1,7 +1,7 @@
 // The agent registry (spec M0.2, M0.14). One row per project agent in the
-// company store, holding its role and status. From M0-B the store, not
-// `.jsmhq/config.json`, decides who an agent is and what it may do: `isLead`
-// in the config seeds the role once, on a project's first import.
+// company store, holding its role and status. From M0-B the store decides who
+// an agent is and what it may do; the repo's old config file is read only by
+// the owner's import (M0-D1, repoConfigImport.ts).
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import type { AgentCli } from "../../src/data/types";

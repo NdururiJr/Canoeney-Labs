@@ -19,11 +19,11 @@ import type { PermissionKind } from "./types";
  * as a .cmd shim runs through cmd.exe, where a quote or & can start a second
  * command. Only plain characters are stored (PR #8 review).
  */
-export const MODEL_NAME = /^[A-Za-z0-9._:/\[\]-]*$/;
+export const MODEL_NAME = /^(?!-)[A-Za-z0-9._:/\[\]-]*$/;
 
 function checkModel(model: string | undefined): void {
   if (model !== undefined && (model.length > 100 || !MODEL_NAME.test(model))) {
-    throw new Error("A model name may use letters, digits and . _ : / [ ] - only.");
+    throw new Error("A model name may use letters, digits and . _ : / [ ] - only, and may not start with -.");
   }
 }
 
@@ -175,6 +175,11 @@ export class ProjectSettings {
     return this.authorized([{ kind: "project-added" }], by, repo.name, () =>
       this.agents.ensureProject({ name: repo.name, root: repo.root, github: repo.github }, { actor: this.actor(by), authority: by.via }),
     );
+  }
+
+  /** Records when the repo's old config file was imported. Called inside the import's transaction. */
+  markImported(projectId: string): void {
+    this.db.prepare("UPDATE project_settings SET imported_at = ? WHERE project_id = ?").run(this.now(), projectId);
   }
 
   /** The dashboard's config, built from the store alone. */

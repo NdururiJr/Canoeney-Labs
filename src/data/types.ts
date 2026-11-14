@@ -432,6 +432,8 @@ export interface ImportPreview {
   /** Each board's task titles, from the file (agent text). */
   boards: { title: string; tasks: string[] }[];
   tasks: number;
+  /** Domains and MCP server names in the file the dashboard would refuse: not imported. */
+  dropped?: number;
 }
 
 /** The owner approves exactly `pending.text` (its `sha256`); agents read only the approved version. */

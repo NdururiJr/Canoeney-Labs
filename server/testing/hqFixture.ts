@@ -26,9 +26,18 @@ import { ProjectRuntime } from "../projectRuntime";
 import { Projects } from "../projects";
 import { offerImport } from "../repoConfigImport";
 import { detectRepo, type RepoInfo } from "../repo";
-import { defaultWorkflow, newAgent } from "../store";
+import { newAgent } from "../store";
 
 export const FIXTURE_START = "2026-11-12T08:00:00.000Z";
+
+/** The workflow fixtures seed: review on (CodeRabbit when the repo has its config), deploy only with InstaCloud's. */
+function defaultWorkflow(repo: RepoInfo): HqConfig["workflow"] {
+  return {
+    review: { enabled: true, tool: repo.hasCodeRabbit ? "coderabbit" : "human", command: "" },
+    merge: { by: "human" },
+    deploy: { enabled: repo.hasInsta, tool: "instacloud", command: "", perAgentEnvironments: repo.hasInsta },
+  };
+}
 /** The dashboard origin the fixture allows. */
 export const ORIGIN = "http://hq.test";
 export const OWNER_PASSWORD = "owner password 1";

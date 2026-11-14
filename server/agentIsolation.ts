@@ -48,19 +48,26 @@ export async function isolateClone(dir: string): Promise<void> {
   }
 }
 
-/** Every path the repo tracks, from `git ls-files -z`. */
-async function tracked(dir: string): Promise<string[]> {
-  const r = await run("git", ["ls-files", "-z"], { cwd: dir, timeoutMs: 60_000 });
-  if (!r.ok) throw new Error(`git ls-files failed in ${dir}: ${r.stderr.trim().split("\n")[0]}`);
-  return r.stdout.split("\0").filter(Boolean);
+/**
+ * Every path the repo tracks, from `git ls-files -z` at the repo's top level,
+ * with that top level. A chosen folder can be a subfolder: the repo's root
+ * CLAUDE.md applies to it too (Claude Code reads it from a parent folder).
+ */
+async function tracked(dir: string): Promise<{ top: string; files: string[] }> {
+  const t = await run("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
+  const top = t.ok && t.stdout.trim() ? t.stdout.trim() : dir;
+  const r = await run("git", ["ls-files", "-z"], { cwd: top, timeoutMs: 60_000 });
+  if (!r.ok) throw new Error(`git ls-files failed in ${top}: ${r.stderr.trim().split("\n")[0]}`);
+  return { top, files: r.stdout.split("\0").filter(Boolean) };
 }
 
 /** Tracked agent-configuration paths that exist on disk in `dir` (a link counts). */
 export async function agentConfigOnDisk(dir: string): Promise<string[]> {
-  return (await tracked(dir)).filter((rel) => {
+  const { top, files } = await tracked(dir);
+  return files.filter((rel) => {
     if (!isAgentConfigPath(rel)) return false;
     try {
-      lstatSync(join(dir, rel));
+      lstatSync(join(top, rel));
       return true;
     } catch {
       return false;
@@ -71,5 +78,5 @@ export async function agentConfigOnDisk(dir: string): Promise<string[]> {
 /** The repo's tracked paths that are one of HQ's own file names, in any letter case. */
 export async function trackedHqFiles(dir: string): Promise<string[]> {
   const own = new Set(HQ_OWN_FILES.map((f) => f.toLowerCase()));
-  return (await tracked(dir)).filter((rel) => own.has(rel.toLowerCase()));
+  return (await tracked(dir)).files.filter((rel) => own.has(rel.toLowerCase()));
 }

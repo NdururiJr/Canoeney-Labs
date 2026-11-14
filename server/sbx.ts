@@ -390,7 +390,8 @@ export class Sbx {
     for (const a of list.filter((x) => !viaRule(x))) if (!(await this.respondApproval(a.id, "allow"))) failed.push(a.host);
 
     const hosts = [...new Set(list.filter(viaRule).map((a) => a.host))];
-    const added = hosts.filter((h) => this.settings().grant(this.cid(agentId), "network-allow", h, by));
+    // One transaction: a grant that fails leaves none of the others behind.
+    const added = this.settings().transaction(() => hosts.filter((h) => this.settings().grant(this.cid(agentId), "network-allow", h, by)));
     if (added.length) this.hub.configChanged();
     if (hosts.length) await this.syncRules(agentId);
     const st = this.state.agents[agentId];

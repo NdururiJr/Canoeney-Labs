@@ -22,18 +22,40 @@ interface Proc {
 
 const procs = new Map<string, Proc>();
 
+/** Characters cmd.exe acts on. Each is escaped with ^ (cross-spawn's rule, written here without the package). */
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+/** One argument for a .cmd/.bat shim: CRT quoting, then ^-escaped twice (cmd.exe, then the shim's %*, each undo one). */
+function shimArg(arg: string): string {
+  // A run of backslashes before a quote or at the end is doubled; the quote itself becomes \".
+  const quoted = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")}"`;
+  return quoted.replace(CMD_META, "^$1").replace(CMD_META, "^$1");
+}
+
+/**
+ * The cmd.exe command line that runs a .cmd/.bat shim with `args`, each arriving
+ * unchanged: no quote, & or % in an argument (a model name, a prompt) can start
+ * a second command (PR #8 review). node-pty passes a string to Windows as it is.
+ */
+export function shimCommandLine(script: string, args: string[]): string {
+  const command = [script.replace(CMD_META, "^$1"), ...args.map(shimArg)].join(" ");
+  return `/d /s /c "${command}"`;
+}
+
 /**
  * Windows doesn't search PATH the way a shell does for npm's `.cmd` shims, so
- * find the program with `where`; `.cmd`/`.bat` files run through cmd.exe.
+ * find the program with `where`; `.cmd`/`.bat` files run through cmd.exe with
+ * a command line HQ builds itself (shimCommandLine).
  */
-export async function resolveCommand(file: string, args: string[]): Promise<{ file: string; args: string[] }> {
-  if (process.platform !== "win32" || /[\\/]/.test(file)) return { file, args };
+export async function resolveCommand(file: string, args: string[]): Promise<{ file: string; args: string[] | string }> {
+  if (process.platform !== "win32") return { file, args };
+  if (/[\\/]/.test(file)) return /\.(cmd|bat)$/i.test(file) ? { file: "cmd.exe", args: shimCommandLine(file, args) } : { file, args };
   const r = await run("where", [file], { timeoutMs: 5000 });
   const found = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const exe = found.find((p) => /\.exe$/i.test(p));
   if (exe) return { file: exe, args };
   const script = found.find((p) => /\.(cmd|bat)$/i.test(p));
-  if (script) return { file: "cmd.exe", args: ["/d", "/s", "/c", script, ...args] };
+  if (script) return { file: "cmd.exe", args: shimCommandLine(script, args) };
   throw new Error(`${file} was not found on PATH.`);
 }
 

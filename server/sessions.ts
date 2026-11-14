@@ -702,7 +702,7 @@ export class Sessions {
     let banner: string;
     try {
       let file: string;
-      let args: string[];
+      let args: string[] | string;
       if (agent.mode === "sandbox") {
         const name = this.name(agentId);
         // bash when the image has it, else sh; start in the agent's folder (same path inside the sandbox).
