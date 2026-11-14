@@ -27,6 +27,7 @@ import type {
   WorkflowPatch,
   ProjectNotesState,
   ProjectSummary,
+  GithubGuardState,
 } from "./types";
 
 export type OfficeEvent =
@@ -50,6 +51,8 @@ export type OfficeEvent =
   | { type: "projectNotes.updated"; projectNotes: ProjectNotesState }
   | { type: "mcp.updated"; mcp: McpState }
   | { type: "action.updated"; item: ActionItem }
+  /** The project repo's GitHub protection was checked (M0-E, owner only). */
+  | { type: "github.guard"; guard: GithubGuardState }
   /** The projects HQ manages changed: one was added, or its state changed (M0-D2). */
   | { type: "projects.updated"; projects: ProjectSummary[] }
   /** The answer to one command, sent only to the socket that sent it (M0-C). */
@@ -78,6 +81,10 @@ export interface OfficeDataSource {
 
   /** Views another project: HQ answers with its snapshot (M0-D2). */
   selectProject(id: string): void;
+  /** Applies the project repo's GitHub protection (needs the PIN), confirms a private repo's spending limit, or checks again. */
+  applyRepoGuard(): void;
+  confirmSpendingLimit(): void;
+  recheckRepoGuard(): void;
   /** The owner creates the agent's own GitHub App (M0-E): HQ answers with a manifest the page posts to GitHub. */
   createGithubIdentity(agentId: string): void;
   /** The owner adds a repo on this machine as a project. Needs the PIN: HQ asks for it as for any relaxing change. */

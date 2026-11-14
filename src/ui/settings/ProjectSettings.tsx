@@ -31,6 +31,47 @@ function FontPicker() {
   );
 }
 
+/** The project repo's GitHub protection, as HQ last checked it (M0-E). */
+function GithubProtection() {
+  const guard = useOffice((s) => s.snap?.githubGuard);
+  if (!guard) return null;
+  const fixable = guard.findings.filter((f) => f.fixable).length;
+  return (
+    <section className="border-[3px] border-ink bg-white p-3">
+      <SectionTitle>GitHub protection</SectionTitle>
+      <p className="mb-2 text-[13px] text-muted">
+        GitHub itself keeps agents from merging, writing <code>main</code>, touching each other's branches or reading repo secrets. HQ checks {guard.repo} daily. Last checked {new Date(guard.checkedAt).toLocaleString()}.
+      </p>
+      {guard.findings.length === 0 ? (
+        <p className="text-[14px] font-semibold">✓ Everything is set as it should be.</p>
+      ) : (
+        <ul className="mb-2 flex flex-col gap-1 text-[13px]">
+          {guard.findings.map((f) => (
+            <li key={f.name}>
+              {f.fixable ? "✗" : "!"} {f.detail}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        {fixable > 0 && (
+          <button className="btn text-[13px]" onClick={() => officeActions.applyRepoGuard()} title="Sets the protection on GitHub with your own login (asks for your PIN)">
+            Apply protection ({fixable})
+          </button>
+        )}
+        {guard.findings.some((f) => f.name === "spending-limit-unconfirmed") && (
+          <button className="btn text-[13px]" onClick={() => officeActions.confirmSpendingLimit()} title="Set the limit on GitHub first (Settings → Billing); this records that you did (asks for your PIN)">
+            I set a spending limit
+          </button>
+        )}
+        <button className="btn text-[13px]" onClick={() => officeActions.recheckRepoGuard()}>
+          Check again
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function ProjectSettings() {
   const project = useOffice((s) => s.snap?.config.project);
   if (!project) return null;
@@ -77,6 +118,7 @@ export function ProjectSettings() {
           HQ keeps the plan in .jsmhq/plan.json. With this on, it also writes a readable copy to docs/plan.md every time the plan changes, so you can commit it or read it on GitHub. Edits to that file are overwritten.
         </p>
       </section>
+      <GithubProtection />
       <section className="text-[13px] text-muted">
         <SectionTitle>Security</SectionTitle>
         <ul className="list-disc pl-5">

@@ -68,6 +68,8 @@ function reduce(snap: OfficeSnapshot, e: OfficeEvent): OfficeSnapshot {
       return snap;
     case "projects.updated":
       return { ...snap, projects: e.projects };
+    case "github.guard":
+      return { ...snap, githubGuard: e.guard };
     case "sbx.updated":
       return { ...snap, sbx: e.sbx };
     case "setup.updated":
@@ -162,6 +164,9 @@ export const officeActions = {
   },
   addProject: (path: string) => source.addProject(path),
   createGithubIdentity: (agentId: string) => source.createGithubIdentity(agentId),
+  applyRepoGuard: () => source.applyRepoGuard(),
+  confirmSpendingLimit: () => source.confirmSpendingLimit(),
+  recheckRepoGuard: () => source.recheckRepoGuard(),
   previewRepoImport: () => source.previewRepoImport(),
   importRepoConfig: (sha256: string) => source.importRepoConfig(sha256),
   approveProjectNotes: (sha256: string) => source.approveProjectNotes(sha256),

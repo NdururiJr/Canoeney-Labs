@@ -92,6 +92,11 @@ export class GitHubApps {
     return !!this.row(companyAgentId);
   }
 
+  /** The App's numeric id (a ruleset's bypass actor). */
+  appId(companyAgentId: string): number | null {
+    return this.row(companyAgentId)?.app_id ?? null;
+  }
+
   /** The App's slug, for the dashboard. */
   slug(companyAgentId: string): string | null {
     return this.row(companyAgentId)?.slug ?? null;

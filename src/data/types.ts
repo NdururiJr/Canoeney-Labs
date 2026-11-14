@@ -349,7 +349,17 @@ export interface ProjectSummary {
   state: "open" | "missing" | "hq-source";
 }
 
+/** What HQ last found wrong with the project repo's GitHub protection (M0-E). Owner only. */
+export interface GithubGuardState {
+  repo: string;
+  checkedAt: string;
+  findings: { name: string; detail: string; fixable: boolean }[];
+  /** A private repo's Actions spending limit, as the owner confirmed it (SR-E-14). */
+  private: boolean;
+}
+
 export interface OfficeSnapshot {
+  githubGuard?: GithubGuardState;
   /** The project this snapshot is of, and every project HQ manages (real HQ only, M0-D2). */
   projectId?: string;
   projects?: ProjectSummary[];
