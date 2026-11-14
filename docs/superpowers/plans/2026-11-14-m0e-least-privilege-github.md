@@ -13,6 +13,7 @@
 - **HQ checks those settings** when a project opens and daily, alerts on drift, and can apply them with the owner's PIN.
 - **No global consequential key.** A `github` key set "for every sandbox" is refused, and while one exists no agent starts.
 - **No env files (D2).** Env files reach no agent in M0 and M1.
+- **No Local mode.** Every agent runs in a sandbox (owner decision, 2026-11-14).
 
 **Tech stack:** Node ≥ 22.13 (`node:crypto` for RS256 and AES-GCM, `fetch`), TypeScript, React 18. No new packages.
 
@@ -34,14 +35,14 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
   - Each App is free. The owner's work is two clicks per agent: Create, then Install.
 - **D2: env files reach no agent in M0 and M1** (2026-11-14). This covers every agent HQ runs, builders and the CTO included.
   - From M2 the owner approves named variables one at a time with the PIN, with test credentials only.
+- **Local mode is forbidden for every agent** (2026-11-14, answering the review of this plan). Every agent runs in a Docker Sandbox, never loose on the owner's computer with the owner's own GitHub login.
+  - The owner's Windows 11 desktop can run sandboxes once the Docker Sandboxes add-on (`sbx`) is installed. So this costs nothing but that one-time install.
+  - The spec forbids Local mode for company agents and allows it only "for plain coding experiments outside the company". Every project HQ manages is the company's, so the switch goes.
 - **Spend: GitHub Pro later.** The company website repo `NdururiJr/CanoeneyLabsWebste` was made public on 2026-11-14 at the owner's request; it was empty. Branch protection and rulesets are therefore free on it.
   - When the owner moves to Pro, this repo (Canoeney-Labs) becomes private. That is a new owner-track row.
 
 ## Where this plan reads the spec narrowly (for the reviewer)
 
-- **Local mode for project agents.** M0.10 forbids Local mode for company-level agents (done in M0-D2, SR-E-06). It keeps Local mode "for plain coding experiments", which builders may still use.
-  - A Local-mode agent works with the owner's own git and `gh` login. SR-E-01 and SR-E-02 therefore hold for sandboxed agents.
-  - Local mode is already a relaxing change that needs the PIN (M0-D1), and the dashboard labels it. The docs say what it means for GitHub.
 - **SR-E-14 (CI spending limit)** applies to private repos.
   - On a public repo, GitHub Actions minutes are free, so the check reports "not applicable (public)".
   - It becomes a live check when a managed repo is private.
@@ -77,21 +78,25 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 
 | What | Value |
 |---|---|
+| App ids kept per agent | `app_id`, `slug`, and the bot user's numeric id (`bot_user_id`, from `GET /users/<slug>[bot]`). PR attribution matches the author's type (`Bot`) and that numeric id, never login text |
 | App manifest (one per agent) | `name`: `hq-<project>-<agent>-<4 hex>`, at most 34 characters; the hex keeps it unique on GitHub. `url`: the project's GitHub URL. `public`: false. `hook_attributes.active`: false. `redirect_url`: `<dashboard origin>/github/app-created`. `default_permissions`: `{ contents: "write", pull_requests: "write", metadata: "read" }` and nothing else (no `workflows`, `administration`, `secrets`, `actions` or `members`). `default_events`: none |
 | Installation token request | `POST /app/installations/{id}/access_tokens` with `repositories: [<repo name>]` and the same three permissions. The response's `expires_at` is kept in memory only |
 | Token refresh and revoke | Refresh at `expires_at − 10 min` while the agent runs. On stop, pause, retire, or HQ stopping: `DELETE /installation/token` with that token, then `sbx secret rm github --sandbox <name>` |
 | App JWT | RS256, `iat = now − 60 s`, `exp = now + 9 min`, `iss = app id` |
 | Sealed App keys | AES-256-GCM with the key in `<company home>/owner.key`, the same key and format as the TOTP seed (M0-C) |
-| Agent branches | `<agent id>/**`, as `branchAgent` already reads them. Ruleset `hq-agent-<agent id>`: creation, update, deletion and non-fast-forward restricted on `refs/heads/<agent id>/**`; bypass only that agent's App (`Integration`, always) and the repository admin |
+| Agent branches | `<agent id>/**`, as `branchAgent` already reads them. Ruleset `hq-agent-<agent id>`: creation, update, deletion and non-fast-forward restricted on `refs/heads/<agent id>/**`; bypass only that agent's App (`Integration`, always) and the repository admin. The App bypasses non-fast-forward on purpose: an agent may rebase and force-push **its own** branches, never anyone else's |
+| `main` ruleset | Ruleset `hq-main`: update, deletion and non-fast-forward restricted on `main`; bypass only the repository admin. With it, no agent token can merge into `main` even after the owner approves (SR-E-01) |
 | Other branches | Ruleset `hq-unclaimed`: creation and update restricted on every branch except `main` and the agent patterns; bypass only the repository admin |
 | `main` protection | Pull request required; 1 approving review; `require_code_owner_reviews: true`; `dismiss_stale_reviews: true`; `enforce_admins: true`; no bypass allowances; `allow_force_pushes: false`; `allow_deletions: false` |
+| Repo merge settings | `allow_auto_merge: false`: an agent cannot set its PR to merge itself the moment the owner approves |
 | Actions settings | `default_workflow_permissions: "read"`; `can_approve_pull_request_reviews: false`; `enabled: false`, or `allowed_actions: "selected"` with only GitHub-owned actions; 0 repository secrets; 0 self-hosted runners |
 | Workflow file rules (SR-E-11) | No `pull_request_target`, `workflow_run` or `issue_comment` trigger. Every `uses:` is local (`./…`) or pinned to a 40-hex commit |
 | CODEOWNERS required lines | `* @<owner>`, plus the D1 paths: `CLAUDE.md AGENTS.md ROLE.md .claude/ .mcp.json .agents/ .codex/ .github/ @<owner>` |
 | Daily repo check | Every 24 h from each project's open, and at open |
+| SR-E-14 on a private repo | GitHub does not expose a personal account's Actions spending limit to the API. On a private repo the owner confirms the limit in HQ (Settings → Project → GitHub protection, with the PIN), and the check reports "unconfirmed" until then. On a public repo: "not applicable (public)" |
 | Global keys refused | `github` with global scope (SR-E-05). Other global service keys (model providers) stay allowed; each set or removal writes `sbx.key-changed` `{ service, scope: "global" }` |
 | Token-shaped text (D2, T-S3.6) | `hasCredentialShape` from `server/company/audit.ts` (the audit sink's `CREDENTIAL_SHAPES`), reused, not copied |
-| New audit actions | `github.app-created`, `github.app-installed`, `github.token-revoked` (`{ reason }`, never the token), `github.drift` (`{ repo, findings: [names] }`), `github.guard-applied`, `pr.misattributed`, `sbx.key-changed`, `message.refused` (`{ reason: "secret-shape" }`). `workspace.refused` gains `global-github-key` and `mcp-server` |
+| New audit actions | `github.app-created`, `github.app-refused` (`{ reason }`), `github.app-installed`, `github.token-revoked` (`{ reason }`, never the token), `github.drift` (`{ repo, findings: [names] }`), `github.guard-applied`, `pr.misattributed`, `sbx.key-changed`, `message.refused` (`{ reason: "secret-shape" }`). `workspace.refused` gains `global-github-key` and `mcp-server`; `local-mode` now applies to every agent |
 
 ## Review focus
 
@@ -123,7 +128,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - Create: `docs/adr/0010-github-app-per-agent.md`
 
 **Interfaces:**
-- Migration 007: table `agent_github_apps(agent_id TEXT PRIMARY KEY REFERENCES agents(id), app_id INTEGER NOT NULL, slug TEXT NOT NULL, bot_login TEXT NOT NULL, key_sealed TEXT NOT NULL, installation_id INTEGER NULL, created_at TEXT NOT NULL)`.
+- Migration 007: table `agent_github_apps(agent_id TEXT PRIMARY KEY REFERENCES agents(id), app_id INTEGER NOT NULL, slug TEXT NOT NULL, bot_user_id INTEGER NOT NULL, key_sealed TEXT NOT NULL, installation_id INTEGER NULL, created_at TEXT NOT NULL)`.
 - `sealed.ts`: `seal(home: string, plain: Buffer): string`, `open(home: string, sealed: string): Buffer`.
 - `api.ts`: `interface GitHubApi { request<T>(method: string, path: string, o?: { body?: unknown; token?: string; jwt?: string }): Promise<{ status: number; json: T | null }> }`, plus `fetchGitHubApi(base = "https://api.github.com"): GitHubApi`.
 - `appManifest.ts`: `manifestFor(o: { project: string; agentId: string; repo: string; origin: string; rand: string }): object`, matching the values table.
@@ -132,17 +137,18 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
   - `complete(state: string, code: string, sessionId: string): Promise<{ installUrl: string }>`. It converts with `POST /app-manifests/{code}/conversions`, seals the `pem`, and writes `github.app-created`.
   - `installation(companyAgentId: string, repo: string): Promise<number | null>`. It uses `GET /repos/{repo}/installation` with the App's JWT, and writes `github.app-installed` once.
   - `jwtFor(companyAgentId: string): string`;
-  - `botLogin(companyAgentId: string): string | null`.
+  - `agentForBot(botUserId: number): string | null`: the company agent id whose App's bot user this is.
 - `commands.ts`: `createGithubIdentity(agentId)`: role `owner`, `pin: true`, `localOnly: true`. It replies with `{ url, manifest, state }` for the page to post to GitHub.
 
 - [ ] **Step 1: Write the failing tests**
-  - `the manifest asks for contents, pull requests and metadata only`: the exact values-table permissions; the name is at most 34 characters.
+  - `SR-E-02 [T-S3.10] the manifest asks for contents, pull requests and metadata only`: the permission list equals the one in ADR 0010 exactly (no `workflows`, `administration`, `secrets`, `actions`); the name is at most 34 characters.
   - `the app-created callback is refused without a matching one-time state`:
     - an unknown state, a used state, a state older than 10 minutes, and another owner session's state each get 403;
     - no row is written;
     - `auth.failed` is not used (this is a dashboard route): a `github.app-refused` row names the reason.
   - `a created App's private key is stored sealed and never in clear`: the row's `key_sealed` does not contain `BEGIN`, and `open()` gives back the `pem`.
   - `creating a GitHub identity needs the owner's PIN and a local session`: a supervisor gets `forbidden`, remote gets `remote`, no PIN gets `pin-required`.
+  - `an App installed on all repositories is reported`: `installation()` with `repository_selection: "all"` records a finding for the repo guard (Task 4).
 - [ ] **Step 2: Run them and confirm they fail.** Run: `pnpm test`. Expected: the new tests fail.
 - [ ] **Step 3: Implement.**
   - The page posts the manifest from a form to `https://github.com/settings/apps/new?state=<state>`.
@@ -155,6 +161,11 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
     - the loopback-redirect fallback.
 - [ ] **Step 4: Run them and confirm they pass.** Run: `pnpm test && pnpm typecheck`. Expected: all pass.
 - [ ] **Step 5: Commit** `feat: one GitHub App per agent, created from an HQ manifest, key sealed with the owner key`.
+- [ ] **Step 6: Live spike on the website repo, before Task 2.** With one App created from this task's manifest, check the two GitHub behaviours the design rests on:
+  - GitHub accepts a manifest with `hook_attributes.active: false` and no webhook URL;
+  - an App can be a ruleset bypass actor on a repo owned by a personal account.
+
+  Record both results in ADR 0010. If the second fails, **stop and tell the owner**: SR-E-03 needs another design.
 
 ---
 
@@ -175,8 +186,8 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - Tokens live in a `Map` in memory only. Refresh timers use the clock.
 
 - [ ] **Step 1: Write the failing tests** (fake `GitHubApi` and fake `sbx`):
-  - `a sandboxed agent gets a one-repo token as its own github key`:
-    - the token request body is the values table's;
+  - `SR-E-04 [T-S3.10] a sandboxed agent gets a one-repo token as its own github key`:
+    - the token request body is the values table's: one repository, and the permission list equal to ADR 0010's (SR-E-02);
     - `setKey(agentId, "github", <token>)` is called, scoped to the agent;
     - no audit row and no log line holds the token.
   - `the token is refreshed ten minutes before it expires, while the agent runs`.
@@ -188,7 +199,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
   - `stopping, retiring and HQ stopping each revoke`.
   - `a reattached running agent gets a fresh token`.
   - `an agent with no GitHub identity starts, without a github key, and the activity says it cannot push`.
-  - `a Local-mode agent gets no token` (it runs on the host; the docs say so).
+  - `an agent that has no sandbox gets no token` (none exists after Task 6; this guards the code path).
 - [ ] **Step 2: Run them and confirm they fail.**
 - [ ] **Step 3: Implement.**
   - Sessions call `deliver` before the sandbox is created and on reattach, and call `revoke` in `stopNow`.
@@ -253,20 +264,18 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - `commands.ts`: `applyRepoGuard()`: role `owner`, `pin: true`. It writes `github.guard-applied` with the names it changed.
 
 - [ ] **Step 1: Write the failing tests** (fake client):
-  - `SR-E-09 [T-S9.6] each bad setting is reported by name`. Starting from a good repo, each bad setting in turn gives exactly one finding with its name:
+  - `SR-E-09 [T-S9.6] each bad setting is reported by name`. Starting from a good repo, each bad setting in turn gives exactly one finding with its name (the SR-E-03 settings have their own test):
     - workflow token `write`;
-    - Actions may approve PRs;
     - all actions allowed;
     - one repository secret;
     - a self-hosted runner;
     - `enforce_admins` off;
-    - a bypass allowance;
-    - no code-owner review;
-    - an agent ruleset missing;
-    - an agent ruleset bypassed by another App;
     - CODEOWNERS missing a D1 path.
+  - `SR-E-03 [T-S3.3] the settings check asserts code-owner review, no bypass actors, and that Actions cannot approve PRs`: each of those three wrong in turn is a named finding; so is a missing `hq-agent-<id>` ruleset, a ruleset bypassed by another App, and a missing `hq-main` ruleset.
+  - `SR-E-01 [T-S3.1] auto-merge on is a finding, and the guard turns it off`.
   - `SR-E-11 [T-S9.3 T-S9.4] a privileged trigger or a tag-pinned action is a finding`: `pull_request_target`, `workflow_run`, `issue_comment` and `uses: actions/checkout@v4` each give a finding; a 40-hex pin and `./local` give none.
-  - `SR-E-14 [T-S9.5] a public repo reports the spending limit as not applicable; a private one without a limit is a finding`.
+  - `SR-E-14 [T-S9.5] a public repo reports the spending limit as not applicable; a private one is a finding until the owner confirms its limit with the PIN`.
+  - `an App installed on all repositories is a finding` (`repository_selection` is not `selected`).
   - `drift found by the daily check is an owner action item and a github.drift row, once per finding`.
   - `applying the guard needs the PIN and sets only fixable settings`: the fake client records the exact calls; CODEOWNERS is not written.
 - [ ] **Step 2: Run them and confirm they fail.**
@@ -279,12 +288,12 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 ### Task 5: A pull request belongs to the identity that opened it (SR-E-12)
 
 **Files:**
-- Modify: `server/github.ts` (fetch `author.login`), `server/githubSync.ts`
+- Modify: `server/github.ts` (GraphQL `author { __typename login ... on Bot { databaseId } }`), `server/githubSync.ts`
 - Test: `server/githubSync.test.ts` (new)
 
 **Interfaces:**
-- Consumes `GitHubApps.botLogin` (Task 1).
-- `toPullRequest` takes `authorId` from the agent whose `bot_login` equals the PR's `author.login`. A PR by any other login has no agent author.
+- Consumes `GitHubApps.agentForBot` (Task 1).
+- `toPullRequest` takes `authorId` from `agentForBot(author.databaseId)` only when `author.__typename` is `Bot`. Any other author, a user whose login looks like an App's included, has no agent author.
 - `taskIdOf` and `branchAgent` are kept only as claims, which are checked against that author.
 
 - [ ] **Step 1: Write the failing tests**
@@ -294,6 +303,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
     - one `pr.misattributed` row (A, the claimed agent, the PR number);
     - an activity line labels the claim as agent text.
   - `a PR opened by the owner is nobody's task`.
+  - `a PR by a User whose login equals an agent App's slug is nobody's task` (the website repo is public: anyone can open a PR from a fork).
 - [ ] **Step 2: Run them and confirm they fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them and confirm they pass.**
@@ -301,23 +311,36 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 
 ---
 
-### Task 6: No secret values into sandboxes (SR-E-13, D2), and the other agent gates
+### Task 6: No secret values into sandboxes (SR-E-13, D2), no Local mode, and the other agent gates
 
 **Files:**
 - Modify:
   - `server/sessions.ts` (no `--env-file`, no env loading, for every agent);
   - `server/commands.ts` (`openEnvFile` refused; `sendMessage`, `resolveActionItem` and `resolveAccess` notes checked);
   - `src/ui/settings/SandboxSettings.tsx` (App variables explains D2);
-  - `server/planner.ts` (nothing new; the merge rule test only).
+  - `server/githubSync.ts` (`passedNotice` with `merge.by: "lead"`);
+  - `server/company/projectSettings.ts`, `server/company/authority.ts` (Local mode refused);
+  - `src/ui/settings/TeamSettings.tsx` (the Local option is removed);
+  - `server/testing/sessionFixture.ts` (sandbox agents with stubbed sbx calls: `policyOk`, `sandboxExists`, `whenSandboxExists`, `refreshSandboxSizes`, as `companyWorkspace.test.ts` does today);
+  - `server/agentFiles.ts` (the Windows Local-mode node hook script and `HQ_NODE_HOOKS` are deleted).
 - Test: `server/agentGates.m0e.test.ts`
 
 **Interfaces:**
 - Uses `hasCredentialShape(text: string): boolean`, already exported from `server/company/audit.ts`.
 - `workspace.ts` reason `mcp-server`.
+- **Local mode is gone for every agent:**
+  - `ProjectSettings.updateAgent` and `addAgent` refuse `mode: "local"` from any authority, PIN included, with an `AuthorityError` whose reason is new: `local-mode-forbidden`;
+  - the import maps a file's `mode: "local"` to `sandbox` and says so in the preview;
+  - `Sessions.start` refuses an agent whose stored mode is still `local` (reason `local-mode`, the starter as the actor), with the message "switch it to Sandbox in Settings → Team".
+- **`merge.by` in M0:**
+  - no agent can merge (SR-E-01, the `hq-main` ruleset);
+  - with `merge.by: "lead"`, HQ tells the lead that the PR passed and adds an owner action item "Merge PR #n" (the lead's note no longer says to run `gh pr merge`);
+  - with `"human"`, only the action item.
+
+  The setting stays gated (SR-E-08) and becomes meaningful with the M1 decision engine.
 
 - [ ] **Step 1: Write the failing tests**
   - `SR-E-13 [T-S3.5] an agent started while its env file exists gets no --env-file`:
-    - sandbox and Local mode;
     - the launch spec has no env file;
     - an activity line says the file was not passed (D2);
     - the file itself is untouched.
@@ -326,7 +349,10 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
     - each is refused with `message.refused` (`secret-shape`, never the text);
     - nothing is typed into the session.
   - `SR-E-08 [T-S3.4] merge.by changes only with the PIN`: from a supervisor, without the PIN and from HQ, refused and audited; the workflow is read back unchanged.
-  - `SR-E-06 [T-S3.2] …`: rename M0-D2's "a company-level agent is never started in Local mode" to carry the id. The test is unchanged.
+  - `SR-E-08 [T-S3.4] no agent tool can change merge.by`: `tools/list` for the CTO and a builder holds no tool that writes the workflow, and a `tools/call` of `update_workflow` is refused as an unknown tool, with its `tool.called` row.
+  - `SR-E-06 [T-S3.2] no agent is set to or started in Local mode`: `updateAgent` with `mode: "local"` and the PIN is refused (`local-mode-forbidden`), as is `addAgent`; an agent stored as `local` before this change is refused at start (`local-mode`, the owner as the actor); the agent row reads back unchanged.
+  - `the import turns a file's Local mode into Sandbox and says so`.
+  - `a passed PR under merge.by lead asks the owner to merge, and never tells the lead to run gh pr merge`.
   - `a company-level agent with an MCP server grant does not start` (`mcp-server`; PR #9 finding 5: an MCP server can hold a GitHub token).
   - `SR-E-15 [T-S3.7] a new agent's allow list is empty`.
 - [ ] **Step 2: Run them and confirm they fail.**
@@ -343,9 +369,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - Test: `server/agentFiles.test.ts` (new), `server/lib/agentFs.test.ts` (new)
 
 **What it does** (carry-forward rows from PR #2 and M0-B's final review):
-- The hook command no longer holds the secret.
-  - Sandbox: `curl … -H @<folder>/.claude/hq-hook-auth`.
-  - Windows Local: `node .jsmhq-hook.mjs <url> <auth file>`, and the script reads the file.
+- The hook command no longer holds the secret: `curl … -H @<folder>/.claude/hq-hook-auth`. (Every agent is sandboxed after Task 6, so the Windows node hook script is gone.)
 - The auth file (`Authorization: Bearer <secret>`) is written 0600 and git-excluded with HQ's other files.
 - `agentWrite` with a mode writes to a temporary file created with that mode, then renames it over the target. No moment exists where the secret sits in a 0644 file.
 
@@ -377,8 +401,8 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 9. **`githubOf` accepts `www.github.com` and `ssh.github.com:443`.**
 10. **Docs:**
     - `how-it-works.md` says a chosen monorepo subfolder is refused for any tracked agent-settings file in the repo, a sibling folder's included;
-    - GitHub identities, protection and the Local-mode caveat;
-    - getting-started: removing the global `github` key, and creating each agent's identity.
+    - GitHub identities and protection; every agent runs in a sandbox (Local mode removed);
+    - getting-started: removing the global `github` key, creating each agent's identity, and that Docker Sandboxes (`sbx`) is required on every platform. Docker itself is not enough.
 
 **Files:** `server/projects.ts`, `server/startHq.ts`, `server/main.ts`, `server/hqSource.ts`, `server/repoConfigImport.ts`, `server/sessions.ts`, `server/commands.ts`, `src/ui/setup/AddProjectDialog.tsx`, `src/data/types.ts`, docs. Test: `server/leftovers.m0d2b.test.ts`.
 
@@ -411,15 +435,18 @@ On `NdururiJr/CanoeneyLabsWebste`, with HQ on Windows and a throwaway HQ home.
 
 **The checks:**
 1. **Repo guard.** `applyRepoGuard` with the PIN, then `checkRepo` reports no finding.
-2. **SR-E-01 and SR-E-03.** With `ana`'s token, `ana` opens a PR from `ana/x`, and `lead`'s App approves it. `gh pr merge` with `ana`'s token is refused, and the PR stays unmergeable without the owner's review.
+2. **SR-E-01 and SR-E-03.** With `ana`'s token, `ana` opens a PR from `ana/x`, and `lead`'s App approves it.
+   - `gh pr merge` with `ana`'s token is refused, and the PR stays unmergeable without the owner's review.
+   - Enabling auto-merge with `ana`'s token is refused.
+   - After the owner approves, the merge with `ana`'s token is **still** refused, and the owner's own merge works.
 3. **SR-E-02.** With `ana`'s token, each of these is refused:
    - pushing to `main`;
-   - force-pushing `ana/x` over a protected history (the ruleset);
+   - force-pushing `main`;
    - deleting `main`;
    - `PATCH /repos/{repo}`;
    - `GET /repos/{repo}/actions/secrets`;
    - pushing `.github/workflows/x.yml`.
-4. **SR-E-03.** With `ana`'s token, pushing to `lead/y` is refused.
+4. **SR-E-03.** With `ana`'s token, pushing to `lead/y` and creating a branch `other/z` are refused. Force-pushing `ana`'s own `ana/x` works (agents may rebase their own branches).
 5. **SR-E-04.** With `ana`'s token, reading the named private repo is refused.
 6. **SR-E-07.** Pause `ana`; its token is refused by the next API call.
 7. **SR-E-10.** Covered by step 3's refused workflow push. The settings check confirms the read-only workflow token as the second layer.

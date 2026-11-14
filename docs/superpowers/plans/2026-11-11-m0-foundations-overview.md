@@ -39,6 +39,7 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | Before the M1 plan | Decide D4 (email approves nothing), D5 (width of a network grant), D7 (message delivery by tool) and D10 (the 17 extra §6 tests) | Threat model §4.7 |
 | Any time | Decide D11: keep X1–X4 as cross-cutting groups, or promote them to S13–S16 | Threat model §4.7 |
 | Done 2026-11-14 | GitHub identity: one GitHub App per agent (a shared App cannot meet SR-E-03 or SR-E-12). GitHub Pro later, once budgeted | M0.10 |
+| Done 2026-11-14 | Local mode is forbidden for every agent: every agent runs in a Docker Sandbox. The owner's desktop runs sandboxes once Docker Sandboxes (`sbx`) is installed | M0.10, SR-E-06 |
 | With the move to GitHub Pro | Make this repo (Canoeney-Labs) private: it develops a different product from jsm-hq. A fork of a public repo can't be made private in place (a new private repo with the full history, or GitHub Support detaches it). On GitHub Free a private repo loses `main`'s branch protection, so the move waits for Pro. Owner-controlled (`.github/`, `CLAUDE.md`, gh's default repo) | Owner, 2026-11-14 |
 | Before M0-F | Create the company-owned skills repository | M0.18 |
 | M0 exit | Run `/security-audit` in full mode on the fork; fix or accept each finding; approve the M0 review | M0.8, §6 |
