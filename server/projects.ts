@@ -28,6 +28,8 @@ export class Projects {
   private readonly hqSource = new Set<string>();
   /** Why each registered project that is not open was not opened. */
   private readonly notOpened = new Map<string, string>();
+  /** Opens in flight, so two adds of one path open one runtime. */
+  private readonly opening = new Map<string, Promise<void>>();
   private readonly listeners = new Set<(list: ProjectSummary[]) => void>();
   /** The project HQ was started in, if any: dashboards start on it. */
   private startId: string | null = null;
@@ -52,7 +54,11 @@ export class Projects {
     return this.company.db
       .prepare("SELECT id, name FROM projects ORDER BY created_at, rowid")
       .all<{ id: string; name: string }>()
-      .map((p) => ({ id: p.id, name: p.name, state: this.runtimes.has(p.id) ? "open" : this.hqSource.has(p.id) ? "hq-source" : "missing" }));
+      .map((p): ProjectSummary => {
+        const state = this.runtimes.has(p.id) ? "open" : this.hqSource.has(p.id) ? "hq-source" : "missing";
+        const note = state === "open" ? undefined : this.notOpened.get(p.id);
+        return { id: p.id, name: p.name, state, ...(note ? { note } : {}) };
+      });
   }
 
   /** The project a new dashboard connection views: the one HQ was started in, or else the first open one. */
@@ -113,11 +119,13 @@ export class Projects {
    * is not in a repo, or is HQ's own source or inside HQ's home (HQ says why).
    * Starting HQ on the host is the owner's act, so no PIN (as before M0-D2).
    */
-  async registerStart(start: string): Promise<string | null> {
+  async registerStart(start: string, o: { required?: boolean } = {}): Promise<string | null> {
     let repo: RepoInfo;
     try {
-      repo = await detectRepo(start);
+      repo = await this.detect(start);
     } catch {
+      // A folder the owner named with --repo must be a repo: a typo should not open other projects quietly.
+      if (o.required) throw new Error(`${start} is not a git repository. Check the --repo path.`);
       log.info(`${start} is not a git repository; opening the projects HQ already knows.`);
       return null;
     }
@@ -143,7 +151,7 @@ export class Projects {
     };
     let repo: RepoInfo;
     try {
-      repo = await detectRepo(path);
+      repo = await this.detect(path);
     } catch {
       return refuse("not-a-repo", path);
     }
@@ -152,14 +160,41 @@ export class Projects {
     const known = this.company.agents.projectForRoot(repo.root);
     if (known && !this.sameRepo(known, repo)) refuse("other-repo", repo.root);
     const id = this.company.settings.addProject(repo, by);
-    if (!this.runtimes.has(id)) {
-      await this.openRuntime(repo, id);
-      // HQ is already serving: the new project starts right away.
-      this.runtimes.get(id)?.start();
-    }
+    await this.openOnce(id, repo);
     this.notOpened.delete(id);
     this.changed();
     return id;
+  }
+
+  /**
+   * The owner confirms, with the PIN, that a project's folder still holds its repo after
+   * a rename or transfer on GitHub (PR #10 review): the stored GitHub repo becomes the
+   * folder's, and the project opens.
+   */
+  async confirmRepo(id: string, by: Authority): Promise<void> {
+    const row = this.company.db.prepare("SELECT repo FROM projects WHERE id = ?").get<{ repo: string }>(id);
+    if (!row) throw new Error(`No project ${id}.`);
+    const repo = await this.detect(row.repo);
+    const before = this.company.db.prepare("SELECT github FROM project_settings WHERE project_id = ?").get<{ github: string | null }>(id)?.github ?? null;
+    // A GitHub repo change relaxes a control: ProjectSettings refuses it without the PIN (SR-D-03).
+    this.company.settings.updateProject(id, { github: repo.github }, by);
+    this.company.settings.record(by, "project.repo-confirmed", id, { from: before, to: repo.github });
+    await this.openOnce(id, repo);
+    this.notOpened.delete(id);
+    this.changed();
+  }
+
+  /** Opens and starts a project once, even when two adds of it are in flight. */
+  private async openOnce(id: string, repo: RepoInfo): Promise<void> {
+    if (this.runtimes.has(id)) return;
+    let p = this.opening.get(id);
+    if (!p) {
+      p = this.openRuntime(repo, id)
+        .then(() => this.runtimes.get(id)?.start()) // HQ is already serving: it starts right away
+        .finally(() => this.opening.delete(id));
+      this.opening.set(id, p);
+    }
+    await p;
   }
 
   subscribe(fn: (list: ProjectSummary[]) => void): () => void {

@@ -522,6 +522,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
  */
 export function makeCompanyCommands(projects: Projects): Record<string, CommandSpec> {
   return {
+    /** A project's repo was renamed or moved on GitHub: the owner confirms the folder's new repo (PIN). */
+    confirmProjectRepo: {
+      role: "owner",
+      pin: true,
+      target: (a) => (typeof a[0] === "string" ? a[0] : null),
+      run: async (ctx, id) => void (await projects.confirmRepo(str(id, 80), authorityOf(ctx))),
+      explain: (err) => (err instanceof AuthorityError ? err.message : null),
+    },
     addProject: {
       role: "owner",
       pin: true,

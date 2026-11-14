@@ -230,6 +230,8 @@ export function startHttp(o: Options) {
       // Switching the viewed project: only to an open one; anything else keeps the current view.
       if (msg.type === "select") {
         if (typeof msg.projectId === "string" && o.projects.get(msg.projectId)) view(msg.projectId);
+        // Not open: the page hears the list (with why) instead of nothing.
+        else sendEvent({ type: "projects.updated", projects: o.projects.list() });
         return;
       }
       try {

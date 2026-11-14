@@ -1,8 +1,9 @@
 import type { ProjectSummary } from "../../data/types";
+import { officeActions } from "../../store/office";
 
-const LABEL: Record<ProjectSummary["state"], (name: string) => string> = {
+const LABEL: Record<ProjectSummary["state"], (name: string, note?: string) => string> = {
   open: (name) => name,
-  missing: (name) => `${name} (folder missing)`,
+  missing: (name, note) => `${name} (${note ?? "folder missing"})`,
   "hq-source": (name) => `${name} (HQ's own source, not opened)`,
 };
 
@@ -37,10 +38,18 @@ export function ProjectSwitcher({
       >
         {projects.map((p) => (
           <option key={p.id} value={p.id} disabled={p.state !== "open"}>
-            {LABEL[p.state](p.name)}
+            {LABEL[p.state](p.name, p.note)}
           </option>
         ))}
       </select>
+      {isOwner &&
+        projects
+          .filter((p) => p.note === "the folder holds a different GitHub repo")
+          .map((p) => (
+            <button key={p.id} className="btn whitespace-nowrap text-[13px]" onClick={() => officeActions.confirmProjectRepo(p.id)} title={`${p.name}'s folder now holds a different GitHub repo. If you renamed or moved the repo on GitHub, confirm it (asks for your PIN).`}>
+              Confirm {p.name}'s repo
+            </button>
+          ))}
       {isOwner && onAdd && (
         <button className="btn whitespace-nowrap text-[14px]" onClick={onAdd} title="Add a repo on this machine as a project (needs your PIN)">
           Add project

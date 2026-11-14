@@ -88,7 +88,7 @@ export class Sessions {
   /** Whether a `github` key is set for every sandbox, read fresh (SR-E-05). False until the project runtime wires it. */
   globalGithubKey: () => Promise<boolean | "unknown"> = async () => false;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
-  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => null;
+  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => "unknown"; // fails closed until wired
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
   onSessionReattached: (agentId: string) => void = () => {};
   /** When the agent's last hook arrived (from the inbox). */

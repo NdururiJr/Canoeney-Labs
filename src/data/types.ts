@@ -347,6 +347,8 @@ export interface ProjectSummary {
   id: string;
   name: string;
   state: "open" | "missing" | "hq-source";
+  /** Why it is not open, in HQ's words ("folder missing", "inside HQ's home", …). */
+  note?: string;
 }
 
 /** What HQ last found wrong with the project repo's GitHub protection (M0-E). Owner only. */

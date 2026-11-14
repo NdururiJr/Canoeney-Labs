@@ -52,6 +52,7 @@ async function main() {
 
   const hq = await startHq({
     start: resolve(arg("repo") ?? process.env.HQ_REPO ?? process.cwd()),
+    explicitRepo: arg("repo") !== undefined || !!process.env.HQ_REPO,
     port,
     dev,
     distDir: dev ? null : distDir,

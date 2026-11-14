@@ -4,7 +4,8 @@
 // the PIN, and the confirmation is bound to the hash of the files the preview
 // showed (D3). Every other part of HQ reads the company store only.
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isInside } from "./company/home";
 import { join } from "node:path";
 import type { AgentCli, AgentMode, Board, HqConfig, ImportLine, Task, WorkflowConfig } from "../src/data/types";
 import type { Company } from "./company";
@@ -66,8 +67,8 @@ export function offerImport(hub: { snap: { welcome?: boolean; importable?: true 
  */
 export function readImport(root: string, company: Company, slug: string): ReadImport {
   const f = files(root);
-  const configBytes = readOwnFile(f.config, ".jsmhq/config.json");
-  const planBytes = existsSync(f.plan) ? readOwnFile(f.plan, ".jsmhq/plan.json") : null;
+  const configBytes = readOwnFile(f.config, ".jsmhq/config.json", root);
+  const planBytes = existsSync(f.plan) ? readOwnFile(f.plan, ".jsmhq/plan.json", root) : null;
   const sha256 = hex(Buffer.from(JSON.stringify({ config: hex(configBytes), plan: planBytes ? hex(planBytes) : null })));
   const config = parseJson(configBytes, ".jsmhq/config.json") as Partial<HqConfig>;
   const planFile = planBytes ? (parseJson(planBytes, ".jsmhq/plan.json") as { boards?: Board[]; tasks?: Task[] }) : {};
@@ -75,8 +76,10 @@ export function readImport(root: string, company: Company, slug: string): ReadIm
 }
 
 /** A file in the repo itself, never one a link points to (outside the repo, or HQ's own). */
-function readOwnFile(path: string, label: string): Buffer {
+function readOwnFile(path: string, label: string, root: string): Buffer {
   if (lstatSync(path).isSymbolicLink()) throw new Error(`\`${label}\` is a link. HQ imports only a file kept in the repo itself.`);
+  // A linked .jsmhq folder: the file itself is plain, but it lives outside the repo (PR #10 review).
+  if (!isInside(realpathSync(path), realpathSync(root))) throw new Error(`\`${label}\` is outside the repo (a linked folder). HQ imports only a file kept in the repo itself.`);
   return readFileSync(path);
 }
 

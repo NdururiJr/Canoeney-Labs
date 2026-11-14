@@ -22,6 +22,8 @@ export const noneOpened = (why: string[]) => `No project could be opened (${why.
 export interface StartOptions {
   /** The folder HQ was started in (or --repo). */
   start: string;
+  /** The owner named it (--repo or HQ_REPO): it must be a git repo. */
+  explicitRepo?: boolean;
   port: number;
   dev: boolean;
   /** The built UI to serve, or null (dev: Vite serves it). */
@@ -54,7 +56,7 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     const open = o.openRuntime ?? ((c, repo, slug) => ProjectRuntime.open(c, repo, slug, { port: o.port }));
     const opened = new Projects(company, (repo, slug) => open(company, repo, slug));
     projects = opened;
-    await opened.registerStart(o.start);
+    await opened.registerStart(o.start, { required: o.explicitRepo });
     if (opened.list().length === 0) throw new Error(NO_PROJECT);
     log.info("opening projects…");
     await opened.openAll();

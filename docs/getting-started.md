@@ -32,7 +32,7 @@ gh auth login
 
 ## 2. Install Docker Sandboxes
 
-Every agent runs in its own Docker Sandbox: a small VM with its own copy of your repo. Agents can't touch the rest of your machine.
+Every agent runs in its own Docker Sandbox: a small VM with its own copy of your repo. Agents can't touch the rest of your machine. Docker Sandboxes (`sbx`) is an add-on: having Docker installed is not enough.
 
 | macOS | Linux (Ubuntu 24.04+, needs KVM) | Windows 11 |
 |---|---|---|

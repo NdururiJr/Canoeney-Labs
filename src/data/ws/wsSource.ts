@@ -61,9 +61,11 @@ export function createWsSource(): OfficeDataSource {
   };
   const send = (cmd: string, ...args: unknown[]) => transmit(cmd, args);
   /** HQ's answer to one command: ask for the PIN when it needs one. */
-  const onResult = (e: { id: string; ok: boolean; error?: string; data?: unknown }) => {
+  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string }) => void) | null = null;
+  const onResult = (e: { id: string; ok: boolean; error?: string; message?: string; data?: unknown }) => {
     const sent = pending.get(e.id);
     pending.delete(e.id);
+    if (sent) resultListener?.(sent.cmd, e);
     if (sent && !e.ok && e.error && PIN_ERRORS.has(e.error)) askPin({ ...sent, reason: e.error as "pin-required" });
     if (sent?.cmd === "createGithubIdentity" && e.ok) postManifest(e.data);
     if (sent?.cmd === "completeGithubIdentity" && e.ok) {
@@ -139,6 +141,8 @@ export function createWsSource(): OfficeDataSource {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "select", projectId: id }));
     },
     addProject: (path) => send("addProject", path),
+    confirmProjectRepo: (id) => send("confirmProjectRepo", id),
+    onCommandResult: (fn) => void (resultListener = fn),
     createGithubIdentity: (agentId) => send("createGithubIdentity", agentId),
     applyRepoGuard: () => send("applyRepoGuard"),
     confirmSpendingLimit: () => send("confirmSpendingLimit"),

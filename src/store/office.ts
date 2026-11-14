@@ -11,6 +11,9 @@ import type { AccessDecision, NewMcpServer, AgentConfig, AgentStatus, OfficeSnap
 import { appendTerminal, clearTerminals } from "./terminal";
 import { ui, useUi } from "./ui";
 
+/** The add-project dialog's state. */
+export type AddProjectStatus = { state: "idle" | "adding" | "done" } | { state: "failed"; message?: string };
+
 export interface LoggedEvent {
   n: number;
   at: number;
@@ -28,6 +31,8 @@ interface OfficeState {
   workspaceInfo: Record<string, WorkspaceInfo>; // answers to inspectWorkspace
   connection: ConnectionStatus;
   source: OfficeDataSource;
+  /** The add-project dialog's progress (M0-E): set when sent, settled by HQ's answer. */
+  addProject: AddProjectStatus;
 }
 
 /**
@@ -46,6 +51,7 @@ export const useOffice = create<OfficeState>(() => ({
   live: chosenSource() === "hq",
   workspaceInfo: {},
   connection: "connecting",
+  addProject: { state: "idle" },
   source,
 }));
 
@@ -141,6 +147,12 @@ let disconnect: (() => void) | null = null;
 
 export function connectOffice() {
   if (disconnect) return disconnect;
+  // The add-project dialog follows its own command's answer; a PIN prompt in between keeps it waiting.
+  source.onCommandResult?.((cmd, e) => {
+    if (cmd !== "addProject" || useOffice.getState().addProject.state !== "adding") return;
+    if (e.ok) useOffice.setState({ addProject: { state: "done" } });
+    else if (e.error !== "pin-required" && e.error !== "pin-wrong") useOffice.setState({ addProject: { state: "failed", message: e.message } });
+  });
   disconnect = source.connect(handle, (connection) => useOffice.setState({ connection }));
   return () => {
     disconnect?.();
@@ -162,7 +174,12 @@ export const officeActions = {
     useOffice.setState({ workspaceInfo: {} });
     source.selectProject(id);
   },
-  addProject: (path: string) => source.addProject(path),
+  addProject(path: string) {
+    useOffice.setState({ addProject: { state: "adding" } });
+    source.addProject(path);
+  },
+  resetAddProject: () => useOffice.setState({ addProject: { state: "idle" } }),
+  confirmProjectRepo: (id: string) => source.confirmProjectRepo(id),
   createGithubIdentity: (agentId: string) => source.createGithubIdentity(agentId),
   applyRepoGuard: () => source.applyRepoGuard(),
   confirmSpendingLimit: () => source.confirmSpendingLimit(),
