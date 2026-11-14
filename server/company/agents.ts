@@ -5,6 +5,7 @@
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import type { AgentCli } from "../../src/data/types";
+import { sessionName } from "../paths";
 import type { AgentSecrets, RevokeReason } from "./agentSecrets";
 import type { Clock } from "./clock";
 import type { CompanyDb } from "./db";
@@ -93,11 +94,14 @@ export class AgentRegistry {
   /**
    * The project id for the repo at `root` (M0-D1: the id comes from the store,
    * never from a file). A repo already registered keeps its id. Otherwise the id
-   * is `slug` (by default the folder name as a slug); a project with that id
-   * whose repo no longer exists was moved and takes the new path, and one whose
-   * repo still exists makes the new id `<slug>-2`, `<slug>-3` and so on.
+   * is `slug` (by default the folder name as a slug). A project with that id was
+   * moved, and takes the new path, only when its repo no longer exists and its
+   * stored GitHub repo is the new repo's (M0-D2, owner decision 2026-11-14): a
+   * different repo reusing a deleted repo's folder name must not inherit its
+   * grants and notes. Otherwise the new id is `<slug>-2`, `<slug>-3` and so on.
+   * `by` names who registered it (HQ by default).
    */
-  ensureProject(p: { name: string; root: string; slug?: string }): string {
+  ensureProject(p: { name: string; root: string; github: string | null; slug?: string }, by: { actor: Actor; authority?: string } = { actor: HQ_ACTOR }): string {
     return this.tx(() => {
       const known = this.projectForRoot(p.root);
       if (known) return known;
@@ -108,15 +112,22 @@ export class AgentRegistry {
         const row = this.db.prepare("SELECT repo FROM projects WHERE id = ?").get<{ repo: string }>(slug);
         if (!row) {
           this.db.prepare("INSERT INTO projects(id, name, repo, kind, created_at) VALUES (?, ?, ?, 'company', ?)").run(slug, p.name, p.root, at);
-          this.audit.append({ actorKind: "hq", actorId: "hq", action: "project.registered", target: slug, data: { name: p.name } });
+          const data = { name: p.name, ...(by.authority ? { authority: by.authority } : {}) };
+          this.audit.append({ actorKind: by.actor.kind, actorId: by.actor.id, action: "project.registered", target: slug, data });
           return slug;
         }
-        if (existsSync(row.repo)) continue;
+        if (existsSync(row.repo) || !this.sameGithub(slug, p.github)) continue;
         this.db.prepare("UPDATE projects SET repo = ? WHERE id = ?").run(p.root, slug);
-        this.audit.append({ actorKind: "hq", actorId: "hq", action: "project.moved", target: slug, data: { from: row.repo, to: p.root } });
+        this.audit.append({ actorKind: by.actor.kind, actorId: by.actor.id, action: "project.moved", target: slug, data: { from: row.repo, to: p.root } });
         return slug;
       }
     });
+  }
+
+  /** True when the project's stored GitHub repo is `github`; both must be set. */
+  private sameGithub(projectId: string, github: string | null): boolean {
+    const stored = this.db.prepare("SELECT github FROM project_settings WHERE project_id = ?").get<{ github: string | null }>(projectId)?.github;
+    return !!stored && !!github && stored.toLowerCase() === github.toLowerCase();
   }
 
   register(
@@ -132,6 +143,14 @@ export class AgentRegistry {
     const id = companyAgentId(projectSlug, a.id);
     return this.tx(() => {
       if (this.getById(id)) throw new Error(`Agent ${id} is already registered.`);
+      // Sessions and sandboxes are named hq-<project>-<agent>, so project "a" agent "b-c" and
+      // project "a-b" agent "c" would share one: session names are unique company-wide.
+      const name = sessionName(projectSlug, a.id);
+      const clash = this.db
+        .prepare("SELECT id, project_id FROM agents WHERE project_id IS NOT NULL")
+        .all<{ id: string; project_id: string }>()
+        .find((r) => sessionName(r.project_id, r.id.slice(r.project_id.length + 1)) === name);
+      if (clash) throw new Error(`Agent ${a.id} would have the session name ${name}, which ${clash.id} already has. Choose another id.`);
       const manager = role !== "builder" ? null : managerId !== undefined ? managerId : (this.cto(projectSlug)?.companyId ?? null);
       this.db
         .prepare(
@@ -142,47 +161,6 @@ export class AgentRegistry {
       this.audit.append({ actorKind: by.kind, actorId: by.id, action: "agent.registered", target: id, data: { role, source, ...extra } });
       return this.getById(id)!;
     });
-  }
-
-  /**
-   * Registers config agents that have no row. On a project's first import (no
-   * rows at all, retired ones included) the first agent marked `isLead` becomes
-   * the CTO, registered before any builder. Afterwards `isLead` grants nothing:
-   * such an agent is registered as a builder and reported in `ignoredLead`.
-   */
-  syncFromConfig(
-    projectSlug: string,
-    team: readonly (ConfigAgent & { isLead: boolean })[],
-  ): { registered: RegisteredAgent[]; ignoredLead: string[]; skipped: string[]; inactive: { id: string; status: AgentStatus }[] } {
-    const skipped = team.filter((a) => !PLAIN_ID.test(a.id)).map((a) => a.id);
-    const valid = team.filter((a) => PLAIN_ID.test(a.id));
-    const registered: RegisteredAgent[] = [];
-    const ignoredLead: string[] = [];
-    const inactive: { id: string; status: AgentStatus }[] = [];
-    this.tx(() => {
-      const firstImport = !this.db.prepare("SELECT 1 AS x FROM agents WHERE project_id = ? LIMIT 1").get(projectSlug);
-      if (firstImport) {
-        const lead = valid.find((a) => a.isLead);
-        if (lead) registered.push(this.register(projectSlug, lead, "cto", HQ_ACTOR, "import"));
-        for (const a of valid) {
-          if (a === lead) continue;
-          if (a.isLead) ignoredLead.push(a.id);
-          registered.push(this.register(projectSlug, a, "builder", HQ_ACTOR, "import", a.isLead ? { ignoredIsLead: true } : {}));
-        }
-        return;
-      }
-      for (const a of valid) {
-        const row = this.get(projectSlug, a.id);
-        if (row) {
-          // In the config but paused or retired in the store: it cannot start.
-          if (row.status !== "active") inactive.push({ id: a.id, status: row.status });
-          continue;
-        }
-        if (a.isLead) ignoredLead.push(a.id);
-        registered.push(this.register(projectSlug, a, "builder", HQ_ACTOR, "config", a.isLead ? { ignoredIsLead: true } : {}));
-      }
-    });
-    return { registered, ignoredLead, skipped, inactive };
   }
 
   get(projectSlug: string, agentId: string): RegisteredAgent | null {

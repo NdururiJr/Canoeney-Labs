@@ -50,7 +50,7 @@ function setup(t: TestContext, extra: Record<string, string> = {}) {
   }
   git(upstream, "add", "-A");
   git(upstream, "commit", "-qm", "init");
-  const repo: RepoInfo = { root: upstream, name: "demo", originUrl: null, github: null, hasCodeRabbit: false, hasInsta: false };
+  const repo: RepoInfo = { root: upstream, name: "demo", originUrl: null, github: null, remotes: [], hasCodeRabbit: false, hasInsta: false };
   return { root, upstream, repo };
 }
 

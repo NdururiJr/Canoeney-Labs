@@ -2,6 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
+import { githubOf, remoteUrls } from "./hqSource";
 import { run } from "./lib/exec";
 
 export interface RepoInfo {
@@ -9,6 +10,8 @@ export interface RepoInfo {
   name: string;
   originUrl: string | null;
   github: string | null; // "owner/name" when origin is GitHub
+  /** owner/name of every GitHub remote, origin or not (SR-D-05 checks them all). */
+  remotes: string[];
   hasCodeRabbit: boolean;
   hasInsta: boolean;
 }
@@ -19,12 +22,12 @@ export async function detectRepo(start: string): Promise<RepoInfo> {
   const root = top.stdout.trim();
   const origin = await run("git", ["remote", "get-url", "origin"], { cwd: root });
   const originUrl = origin.ok ? origin.stdout.trim() : null;
-  const m = originUrl?.match(/github\.com[:/]([^/]+\/[^/]+?)(\.git)?$/);
   return {
     root,
     name: basename(root),
     originUrl,
-    github: m ? m[1] : null,
+    github: originUrl ? githubOf(originUrl) : null,
+    remotes: (await remoteUrls(root)).map(githubOf).filter((g): g is string => g !== null),
     hasCodeRabbit: existsSync(join(root, ".coderabbit.yaml")) || existsSync(join(root, ".coderabbit.yml")),
     hasInsta: existsSync(join(root, ".insta")),
   };

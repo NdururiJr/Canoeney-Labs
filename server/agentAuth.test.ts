@@ -105,8 +105,8 @@ test("SR-B-03 [T-S1.1 T-S2.1] the old project token is refused and no agent-toke
 
 test("SR-B-04 [T-S1.4] every failure gets the same response", async (t) => {
   const hq = await makeHq(t);
-  hq.company.agents.ensureProject({ slug: "other", name: "other", root: join(tmpdir(), "no such other repo") });
-  hq.company.agents.syncFromConfig("other", [{ id: "ana", name: "Ana", cli: "claude", isLead: true }]);
+  hq.company.agents.ensureProject({ slug: "other", name: "other", root: join(tmpdir(), "no such other repo"), github: null });
+  hq.company.agents.register("other", { id: "ana", name: "Ana", cli: "claude" }, "cto", { kind: "hq", id: "hq" }, "import");
   const otherProject = hq.company.secrets.issue("other/ana");
   const revoked = hq.secretFor("ana");
   hq.rotate("ana");

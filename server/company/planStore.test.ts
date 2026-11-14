@@ -41,7 +41,7 @@ test("PlanStore keeps a task's place and its fields across a reopen of the file"
   const clock = new FakeClock("2026-11-13T08:00:00.000Z");
   const audit = new SqliteAuditSink(db, clock);
   const agents = new AgentRegistry(db, clock, audit, new AgentSecrets(db, clock, audit));
-  agents.ensureProject({ slug: "p", name: "p", root: join(dir, "repo") });
+  agents.ensureProject({ slug: "p", name: "p", root: join(dir, "repo"), github: null });
   agents.register("p", { id: "ana", name: "Ana", cli: "claude" }, "builder", { kind: "hq", id: "hq" }, "config");
   const store = new PlanStore(db);
   store.putBoard("p", { id: "B1", title: "Backlog", status: "active", order: 0 });

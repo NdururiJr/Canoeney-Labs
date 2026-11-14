@@ -60,7 +60,7 @@ async function main() {
   // A store written by a newer HQ stops startup here, with its own message.
   const company = openCompany({ home: companyHome(), repoRoot: repo.root });
   // The project id comes from the store, never from a file in the repo (M0-D1).
-  const slug = company.agents.ensureProject({ name: repo.name, root: repo.root });
+  const slug = company.agents.ensureProject({ name: repo.name, root: repo.root, github: repo.github });
   // The configuration is a view of the store; the repo's .jsmhq/ files have no effect (SR-D-01).
   const configSource = () => company.settings.view(slug, { path: repo.root, hqPort: port });
   // The shared agent token from before M0-B is not used any more.

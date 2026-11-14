@@ -166,6 +166,17 @@ export class ProjectSettings {
     });
   }
 
+  /**
+   * Registers a repo as a project (M0-D2). The owner adds projects with the PIN
+   * (SR-D-03). No settings row is written, so the new project gets the welcome
+   * as a fresh repo does. The caller has already refused HQ's own source.
+   */
+  addProject(repo: { name: string; root: string; github: string | null }, by: Authority): string {
+    return this.authorized([{ kind: "project-added" }], by, repo.name, () =>
+      this.agents.ensureProject({ name: repo.name, root: repo.root, github: repo.github }, { actor: this.actor(by), authority: by.via }),
+    );
+  }
+
   /** The dashboard's config, built from the store alone. */
   view(projectId: string, runtime: { path: string; hqPort: number }): HqConfig {
     const project = this.db.prepare("SELECT name FROM projects WHERE id = ?").get<{ name: string }>(projectId);

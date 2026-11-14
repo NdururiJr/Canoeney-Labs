@@ -3,6 +3,7 @@
 import { existsSync, rmSync } from "node:fs";
 import type { AgentConfig } from "../src/data/types";
 import { companyHome, hqHome, isInside } from "./company/home";
+import { hqSourceReason } from "./hqSource";
 import { run } from "./lib/exec";
 import { agentConfigOnDisk, isolateClone, trackedHqFiles } from "./agentIsolation";
 import { managedWorkspace } from "./paths";
@@ -11,7 +12,7 @@ import type { RepoInfo } from "./repo";
 /** A folder HQ will not start an agent in. `reason` goes into the audit row (SR-D-04, SR-D-07). */
 export class WorkspaceRefusedError extends Error {
   constructor(
-    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file",
+    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source",
     message: string,
   ) {
     super(message);
@@ -45,6 +46,8 @@ export async function ensureWorkspace(agent: AgentConfig, projectSlug: string, r
   if (agent.workspacePath) {
     if (!existsSync(dir)) throw new Error(`Folder not found: ${dir}`);
     if (!(await run("git", ["rev-parse", "--git-dir"], { cwd: dir })).ok) throw new Error(`${dir} is not a git repository.`);
+    // An agent must never work in HQ's own source (SR-D-05).
+    if (await hqSourceReason(dir)) throw new WorkspaceRefusedError("hq-source", `${dir} is HQ's own source. Agents never work in it; choose another folder for ${agent.name}.`);
     // A chosen folder is checked, never changed: HQ does not hide files in the owner's own checkout.
     await checkFolder(dir, true);
     return dir;

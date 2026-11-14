@@ -123,7 +123,7 @@ export async function makeHq(
   const dir = mkdtempSync(join(tmpdir(), "hq fixture "));
   const repoRoot = join(dir, "repo dir");
   mkdirSync(repoRoot);
-  const repo: RepoInfo = { root: repoRoot, name: "fixture repo", originUrl: null, github: null, hasCodeRabbit: false, hasInsta: false };
+  const repo: RepoInfo = { root: repoRoot, name: "fixture repo", originUrl: null, github: null, remotes: [], hasCodeRabbit: false, hasInsta: false };
   const team = opts.team ?? [
     newAgent("lead", "Lead", "Lead", "#ff77a8", true),
     newAgent("ana", "Ana", "Developer", "#29adff", false),
@@ -140,7 +140,7 @@ export async function makeHq(
   const company = openCompany({ home: companyHomeDir, repoRoot, clock });
   // The owner's row exists from the start (enrollment adds the credentials later), so commands run directly act as a real owner.
   company.db.prepare("INSERT INTO humans(id, display_name, role, created_at) VALUES ('owner', 'Owner', 'owner', ?)").run(FIXTURE_START);
-  const slug = company.agents.ensureProject({ name: repo.name, root: repoRoot });
+  const slug = company.agents.ensureProject({ name: repo.name, root: repoRoot, github: repo.github });
   if (!opts.unseeded) seedProject(company, slug, team, defaultWorkflow(repo));
 
   const configSource = () => company.settings.view(slug, { path: repoRoot, hqPort: 0 });

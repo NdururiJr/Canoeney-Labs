@@ -25,7 +25,7 @@ export type ConfigChange =
   | { kind: "workflow"; before: WorkflowConfig; after: WorkflowConfig }
   | { kind: "project"; field: ProjectField; before: unknown; after: unknown }
   | { kind: "agent"; field: AgentField; before: unknown; after: unknown }
-  | { kind: "agent-added" | "agent-retired" | "import" | "notes-approved" };
+  | { kind: "agent-added" | "agent-retired" | "import" | "notes-approved" | "project-added" };
 
 export type AuthorityRefusal = "pin-or-decision-required" | "not-owner" | "decision-not-approved" | "hq-cannot-grant";
 
@@ -81,6 +81,7 @@ export function relaxes(c: ConfigChange): boolean {
       if (c.field === "workspacePath") return typeof c.after === "string" && c.after !== "";
       return false;
     case "agent-added":
+    case "project-added":
     case "import":
     case "notes-approved":
       return true;
