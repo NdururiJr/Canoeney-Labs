@@ -66,7 +66,6 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
         <Field label="Runs in">
           <select className="field" value={agent.mode} onChange={(e) => set({ mode: e.target.value as AgentMode })}>
             <option value="sandbox">Sandbox</option>
-            <option value="local">Local</option>
           </select>
         </Field>
         <div className="flex gap-1.5">
@@ -187,7 +186,6 @@ function AddAgent() {
         <Field label="Runs in">
           <select className="field" value={mode} onChange={(e) => setMode(e.target.value as AgentMode)}>
             <option value="sandbox">Sandbox</option>
-            <option value="local">Local</option>
           </select>
         </Field>
         <button className="btn" type="submit">

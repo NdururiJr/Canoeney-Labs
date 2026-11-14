@@ -187,10 +187,8 @@ export class Sessions {
       hub.activity("session", id, `${agent.name} could not start: ${detail.split("\n")[0]}`);
     };
     if (!setup.checks.find((c) => c.id === "tmux" && c.status === "ok")) return fail("tmux is not installed. See the setup checklist.");
-    if (agent.mode === "sandbox" && !setup.sandboxReady) return fail("Docker Sandboxes isn't ready on this machine. Finish the setup checklist, or switch this agent to Local mode.");
+    if (agent.mode === "sandbox" && !setup.sandboxReady) return fail("Docker Sandboxes isn't ready on this machine. Finish the setup checklist.");
     const check = (cid: string) => setup.checks.find((c) => c.id === cid)?.status;
-    if (agent.mode === "local" && agent.cli === "claude" && check("claude") !== "ok") return fail("Claude Code isn't installed. See the setup checklist.");
-    if (agent.mode === "local" && agent.cli === "codex" && check("codex") !== "ok") return fail("Codex isn't installed on this machine. See the setup checklist, or run this agent in a sandbox.");
     if (agent.mode === "sandbox" && agent.cli === "codex" && check("openai-secret") !== "ok")
       return fail("Codex needs an OpenAI key in sbx. Run `sbx secret set openai --oauth` (Setup checklist → Run in terminal).");
 
@@ -206,8 +204,12 @@ export class Sessions {
     // CEO, CIO and Security & Audit work above projects: an empty folder, no repo, no GitHub credential (SR-D-06).
     const company = workspaceKind(reg.role) === "company";
     try {
-      if (company && agent.mode === "local")
-        throw new WorkspaceRefusedError("local-mode", `${agent.name} is a company-level agent: it runs only in a sandbox. Local mode would put your own GitHub login within its reach.`);
+      // Every agent runs in a sandbox (SR-E-06, owner decision 2026-11-14). A row stored as local before is refused.
+      if (agent.mode === "local")
+        throw new WorkspaceRefusedError("local-mode", `${agent.name} is set to Local mode, which HQ no longer runs: it would put your own GitHub login within reach. Switch it to Sandbox in Settings → Team.`);
+      // An MCP server can hold a GitHub token (PR #9 finding 5): a company-level agent gets none.
+      if (company && (agent.mcp ?? []).length)
+        throw new WorkspaceRefusedError("mcp-server", `${agent.name} is a company-level agent and must not reach GitHub, but it has an MCP server (${(agent.mcp ?? []).length}). Remove it in Settings → MCP, then start again.`, { count: (agent.mcp ?? []).length });
       hub.setSession(id, { state: "starting", detail: "Preparing folder…", workspace: company ? companyWorkspaceFor(hub.slug, id) : workspaceFor(agent, hub.slug) });
       const dir = company ? await ensureCompanyWorkspace(hub.slug, id) : await ensureWorkspace(agent, hub.slug, hub.repo);
       if (company) {
@@ -237,8 +239,9 @@ export class Sessions {
       // not write the same one again (ADR 0005): reattach and write nothing.
       if (await this.backend.exists(name)) this.noteOldKey(id);
       else {
-        // App variables reach the agent in sandbox mode and in Local mode with tmux (not Local on Windows).
-        const hasEnvFile = !!this.envFileFor(id) && (agent.mode === "sandbox" || this.backend.persistent);
+        // No env file reaches any agent in M0 and M1 (D2, SR-E-13): no secret value goes into a sandbox.
+        const hasEnvFile = false;
+        if (this.envFileFor(id)) hub.activity("session", id, `${agent.name}'s app variables file was not passed: no secret values go into sandboxes until you approve each variable (M2).`);
         const secret = this.company.secrets.issue(reg.companyId);
         issued = true;
         const ctoId = this.company.agents.cto(hub.slug, (cid) => !!hub.cfg(cid))?.agentId ?? null;
@@ -256,11 +259,8 @@ export class Sessions {
           for (const rel of skills.skipped) hub.activity("session", id, skillSkippedText(agent.name, rel));
         }
         const launch = adapter.launch(agent, dir);
-        const envFile = this.envFileFor(id);
-        // Local mode: the agent gets the env file's variables (tmux only: there's no shell to load them into otherwise).
+        const envFile = null; // D2: never passed
         let spec: LaunchSpec = { file: localBinary[agent.cli], args: launch.args, envFile };
-        if (agent.mode === "local" && envFile && !this.backend.persistent)
-          hub.activity("session", id, `${agent.name}'s env file isn't loaded in Local mode on Windows. Use Sandbox mode for app variables.`);
         if (agent.mode === "sandbox") {
           hub.setSession(id, { detail: "Allowing the sandbox to reach HQ…" });
           await this.ensurePolicy();
@@ -742,12 +742,12 @@ export class Sessions {
         const name = this.name(agentId);
         // bash when the image has it, else sh; start in the agent's folder (same path inside the sandbox).
         // The agent's app variables too, so what you check here matches what the agent sees.
-        const env = this.envFileFor(agentId);
-        ({ file, args } = await resolveCommand("sbx", ["exec", "-it", ...(env ? ["--env-file", env] : []), ...(win ? [] : ["-w", dir]), name, "sh", "-c", SANDBOX_SHELL]));
+        // D2: the agent's app variables are not passed here either.
+        ({ file, args } = await resolveCommand("sbx", ["exec", "-it", ...(win ? [] : ["-w", dir]), name, "sh", "-c", SANDBOX_SHELL]));
         banner = `sbx exec -it ${name} bash`;
       } else {
         const sh = process.env.SHELL || "/bin/sh";
-        const env = win ? null : this.envFileFor(agentId);
+        const env: string | null = null; // D2: never loaded
         file = win ? "powershell.exe" : env ? "/bin/sh" : sh;
         // Load the env file into the shell (HQ itself never reads it), then hand over to your shell.
         args = win ? ["-NoLogo"] : env ? ["-c", `${loadEnvFile('"$1"')}; exec "$2" -l`, "sh", env, sh] : ["-l"];

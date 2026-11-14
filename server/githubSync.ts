@@ -8,21 +8,21 @@ import type { Hub } from "./hub";
 import { log } from "./lib/log";
 import type { Planner } from "./planner";
 
-const MERGE_CMD = (n: number | string) => `gh pr merge ${n} --squash --delete-branch`;
 
 /** What the lead is told when a PR passes review: merge it, or leave it to the user (Settings → Workflow → Merge). */
 export function passedNotice(pr: Pick<PullRequest, "number" | "title">, author: string, by: "human" | "lead"): string {
   const head = `PR #${pr.number} (${pr.title}) by ${author} passed review.`;
+  // In M0 GitHub lets only the owner merge into main (SR-E-01): with merge.by "lead" the lead is told, and the owner merges.
   return by === "lead"
-    ? `${head} You merge PRs on this project: run \`${MERGE_CMD(pr.number)}\` now. If GitHub refuses (conflicts or failing checks), ask the author to fix it instead. Then assign the next task if anything is waiting.`
+    ? `${head} GitHub lets only the owner merge into main, so the owner has been asked to merge it. If it has conflicts or failing checks, ask the author to fix them. Then assign the next task if anything is waiting.`
     : `${head} It's ready for the user to merge. Don't merge it yourself.`;
 }
 
 /** What the lead is told when the user changes who merges, with the PRs already waiting. */
 export function mergeByNotice(by: "human" | "lead", waiting: number[]): string {
   if (by === "human") return "The user changed the workflow: the user merges PRs now. Don't merge PRs yourself.";
-  const list = waiting.length ? ` These passed review and are waiting: ${waiting.map((n) => `#${n}`).join(", ")}. Merge each with \`${MERGE_CMD("<number>")}\`.` : "";
-  return `The user changed the workflow: you now merge PRs once they pass review.${list}`;
+  const list = waiting.length ? ` These passed review and are waiting for the owner: ${waiting.map((n) => `#${n}`).join(", ")}.` : "";
+  return `The user changed the workflow: you now track merges once PRs pass review. GitHub lets only the owner merge into main, so ask the owner to merge each one.${list}`;
 }
 
 const MIN_POLL_MS = 20_000; // never more often than this (nudges included)
@@ -238,7 +238,7 @@ export class GitHubSync {
     }
 
     if (pr.review === "passed" && old?.review !== "passed") {
-      hub.activity("review.passed", who, `${tool} approved #${pr.number}`);
+      hub.activity("review.passed", who, `${tool} approved #${pr.number}. Merge it on GitHub: only you can merge into main.`);
       if (leadId) this.planner.notify(leadId, passedNotice(pr, hub.name(who), hub.snap.config.workflow.merge.by));
     }
 

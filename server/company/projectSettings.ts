@@ -279,7 +279,7 @@ export class ProjectSettings {
   /** Registers the agent with a settings row and no grants (SR-D-11). Adding an agent relaxes a control. */
   addAgent(projectId: string, a: NewAgent, role: "cto" | "builder", by: Authority, managerId?: string | null): RegisteredAgent {
     checkModel(a.model);
-    return this.authorized([{ kind: "agent-added" }], by, projectId, () => {
+    return this.authorized([{ kind: "agent-added" }, { kind: "agent", field: "mode", before: "sandbox", after: a.mode }], by, projectId, () => {
       const registered = this.agents.register(projectId, { id: a.id, name: a.name, cli: a.cli }, role, this.actor(by), "dashboard", { authority: by.via }, managerId);
       const base = newAgent(a.id, a.name, a.displayRole, a.color, role === "cto");
       this.writeSettings(registered.companyId, {
@@ -362,6 +362,8 @@ export class ProjectSettings {
   }
 
   private refusal(c: ConfigChange, by: Authority): AuthorityRefusal | null {
+    // No authority sets Local mode, the PIN included (SR-E-06, owner decision 2026-11-14).
+    if (c.kind === "agent" && c.field === "mode" && c.after === "local") return "local-mode-forbidden";
     if (by.via === "pin" || by.via === "session") {
       const h = this.db.prepare("SELECT role, disabled_at FROM humans WHERE id = ?").get<{ role: string; disabled_at: string | null }>(by.humanId);
       if (!h || h.role !== "owner" || h.disabled_at !== null) return "not-owner";

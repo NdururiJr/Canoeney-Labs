@@ -9,11 +9,11 @@ import { stackSkills } from "../src/data/stack";
 import { cleanStack } from "./stackClean";
 import { resolveAccess } from "./access";
 import { ensureSkillCache } from "./skills";
-import { run } from "./lib/exec";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { hasCredentialShape } from "./company/audit";
 import { ProjectRefusedError } from "./hqSource";
 import { GitHubAppRefusedError } from "./github/apps";
 import type { AgentSettingsPatch } from "./company/projectSettings";
@@ -30,7 +30,19 @@ import type { Sessions } from "./sessions";
 import { mergeByNotice } from "./githubSync";
 
 
-/** HQ's own refusal text: no value from the command reaches it. */
+/** HQ's own refusal texts: no value from the command reaches them. */
+class SecretShaped extends Error {
+  constructor() {
+    super("That text looks like a key or a token. HQ doesn't send secret values into a sandbox; give the agent a test credential through an approved variable instead (from M2).");
+  }
+}
+const secretShapeMessage = (err: unknown) => (err instanceof SecretShaped ? err.message : null);
+class EnvFilesOff extends Error {
+  constructor() {
+    super("App variables files are off: no secret values go into sandboxes until you approve each variable (M2).");
+  }
+}
+
 class GlobalKeyRefused extends Error {
   constructor() {
     super("A GitHub key for every sandbox would let every agent merge and change repo settings. Give each agent its own GitHub identity in Settings → Team instead.");
@@ -56,6 +68,12 @@ const proxyHost = (u: string) => {
 };
 
 export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inbox: Inbox, sbx: Sbx, mcp: SbxMcp, company: Company) {
+  /** Text the owner sends into an agent's session must not carry a key (D2, SR-E-13, T-S3.6). */
+  const refuseSecretShape = (ctx: CommandCtx, text: string) => {
+    if (!hasCredentialShape(text)) return;
+    company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "message.refused", target: null, data: { reason: "secret-shape" } });
+    throw new SecretShaped();
+  };
   /**
    * Runs an sbx change and reports it in the activity feed. For a command that
    * takes a secret, a failure is reported without sbx's text, which can repeat
@@ -151,7 +169,10 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
 
     // You → agent: same delivery path as the lead's assign_task / send_message.
     assignTask: { role: "owner", target: first, run: (_ctx, taskId, agentId) => planner.assign(str(taskId, 40), str(agentId, 80), "you") },
-    sendMessage: { role: "owner", target: first, run: (_ctx, toId, text) => planner.message("you", str(toId, 80), str(text, 2000)) },
+    sendMessage: { role: "owner", target: first, run: (ctx, toId, text) => {
+      refuseSecretShape(ctx, str(text, 2000));
+      planner.message("you", str(toId, 80), str(text, 2000));
+    }, explain: secretShapeMessage },
 
     addAgent: { role: "owner", pin: true, run: (ctx, raw) => {
       const input = (raw ?? {}) as Partial<NewAgentInput>;
@@ -278,17 +299,13 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       if (u && !/^https?:\/\/[^\s]+$/i.test(u)) return hub.activity("config", null, "Proxy must be an http(s):// URL");
       return attempt(null, u ? `Set the sandbox proxy to ${proxyHost(u)}` : "Removed the sandbox proxy", () => sbx.setProxy(u), true);
     } },
-    openEnvFile: { role: "owner", localOnly: true, target: first, run: async (_ctx, id) => {
-      const agent = hub.cfg(str(id, 80));
-      if (!agent) return;
-      const file = sbx.ensureEnvFile(agent.id);
-      const [cmd, args] = process.platform === "darwin" ? ["open", ["-t", file]] : process.platform === "win32" ? ["notepad", [file]] : ["xdg-open", [file]];
-      await run(cmd, args, { timeoutMs: 5000 });
-      await sbx.refresh();
+    openEnvFile: { role: "owner", localOnly: true, target: first, explain: (err) => (err instanceof EnvFilesOff ? err.message : null), run: async (_ctx, _id) => {
+      throw new EnvFilesOff();
     } },
     refreshSbx: { role: "owner", run: () => sbx.refresh() },
 
-    resolveActionItem: { role: "owner", target: first, run: (_ctx, id, decision, note) => {
+    resolveActionItem: { role: "owner", target: first, explain: secretShapeMessage, run: (_ctx, id, decision, note) => {
+      refuseSecretShape(_ctx, typeof note === "string" ? note : "");
       const d = decision === "done" || decision === "dismissed" ? decision : null;
       if (d) planner.actions?.resolve(str(id, 40), d, typeof note === "string" ? str(note, 1000) : undefined);
     } },

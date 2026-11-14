@@ -180,11 +180,11 @@ test("a new agent never reuses a retired agent's id", async (t) => {
   const { sessions } = withSessions(t, hq);
   const stub = { forget() {}, refresh: async () => {} } as never;
   const commands = makeCommands(hq.hub, sessions, hq.planner, hq.inbox, stub, stub, hq.company);
-  commands.addAgent.run(OWNER_PIN_CTX, { name: "Cara", mode: "local" });
+  commands.addAgent.run(OWNER_PIN_CTX, { name: "Cara", mode: "sandbox" });
   assert.equal(hq.company.agents.get(hq.slug, "cara")?.role, "builder");
   await commands.removeAgent.run(OWNER_PIN_CTX, "cara", { deleteSandbox: false, deleteFolder: false });
   assert.equal(hq.company.agents.get(hq.slug, "cara")?.status, "retired");
-  commands.addAgent.run(OWNER_PIN_CTX, { name: "Cara", mode: "local" });
+  commands.addAgent.run(OWNER_PIN_CTX, { name: "Cara", mode: "sandbox" });
   assert.ok(hq.hub.cfg("cara-2"));
   assert.equal(hq.company.agents.get(hq.slug, "cara-2")?.status, "active");
 });

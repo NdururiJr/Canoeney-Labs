@@ -27,7 +27,7 @@ export type ConfigChange =
   | { kind: "agent"; field: AgentField; before: unknown; after: unknown }
   | { kind: "agent-added" | "agent-retired" | "import" | "notes-approved" | "project-added" };
 
-export type AuthorityRefusal = "pin-or-decision-required" | "not-owner" | "decision-not-approved" | "hq-cannot-grant";
+export type AuthorityRefusal = "pin-or-decision-required" | "not-owner" | "decision-not-approved" | "hq-cannot-grant" | "local-mode-forbidden";
 
 export class AuthorityError extends Error {
   constructor(
@@ -44,6 +44,7 @@ const MESSAGES: Record<AuthorityRefusal, string> = {
   "not-owner": "Only the owner can change the project's settings.",
   "decision-not-approved": "That decision is not approved.",
   "hq-cannot-grant": "HQ can take a permission away, never give one.",
+  "local-mode-forbidden": "Every agent runs in a sandbox. Local mode would put your own GitHub login and HQ's records within its reach (owner decision, 2026-11-14).",
 };
 
 /** Grants that widen what an agent can reach or run. A network deny tightens. */
