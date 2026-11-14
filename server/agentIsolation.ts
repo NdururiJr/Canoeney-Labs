@@ -30,7 +30,7 @@ const CONFIG_FILES = new Set(CONFIG_FILE_NAMES.map((n) => n.toLowerCase()));
 const CONFIG_DIRS = new Set(CONFIG_DIR_NAMES);
 
 /** HQ's own files in an agent's folder. A repo that tracks one could commit the agent's secret. */
-export const HQ_OWN_FILES: readonly string[] = [".jsmhq-role.md", ".jsmhq-hook.mjs", ".claude/settings.local.json", ".claude/hq-mcp.json", ".codex/config.toml"];
+export const HQ_OWN_FILES: readonly string[] = [".jsmhq-role.md", ".jsmhq-hook.mjs", ".claude/settings.local.json", ".claude/hq-mcp.json", ".claude/hq-hook-auth", ".codex/config.toml"];
 
 /** True for a repo path the sparse patterns leave out of an agent's folder. */
 export function isAgentConfigPath(rel: string): boolean {
