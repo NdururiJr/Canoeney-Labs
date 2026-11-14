@@ -176,7 +176,14 @@ export class ProjectRuntime {
       start: () => {
         sessions.startPolling();
         sbx.startApprovalPolling();
-        github = new GitHubSync(hub, planner, repo.github);
+        github = new GitHubSync(hub, planner, repo.github, {
+          // A PR is an agent's only when its author is that agent's App bot (SR-E-12).
+          agentForBot: (botUserId) => {
+            const cid = company.githubApps.agentForBot(botUserId);
+            return cid && cid.startsWith(`${slug}/`) ? cid.slice(slug.length + 1) : null;
+          },
+          audit: company.audit,
+        });
         github.start();
         if (watch) {
           const check = () => void watch.check().catch((err) => log.warn(`GitHub protection check for ${repo.github} failed: ${err instanceof Error ? err.message : err}`));
