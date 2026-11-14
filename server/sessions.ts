@@ -23,6 +23,7 @@ import { log } from "./lib/log";
 import { projectHome, sessionName } from "./paths";
 import { POLICY_NOT_INITIALIZED, policyVerdict, runSetupChecks } from "./setup";
 import { ensureWorkspace, workspaceFor, WorkspaceRefusedError } from "./workspace";
+import { companyWorkspaceFor, ensureCompanyWorkspace, githubCredentialIn, workspaceKind } from "./companyWorkspace";
 
 const TERM_ENV = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<string, string>;
 /**
@@ -79,6 +80,8 @@ export class Sessions {
   onSandboxRemoved: (agentId: string) => void = () => {};
   /** The agent's env file, if it has one (passed with --env-file / sourced). */
   envFileFor: (agentId: string) => string | null = () => null;
+  /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
+  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | null> = async () => null;
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
   onSessionReattached: (agentId: string) => void = () => {};
   /** When the agent's last hook arrived (from the inbox). */
@@ -124,7 +127,7 @@ export class Sessions {
   /** A refused folder leaves an audit row: who asked, which agent, and why; never the folder's content. */
   private auditRefusal(id: string, err: WorkspaceRefusedError, by: Actor) {
     try {
-      this.company.audit.append({ actorKind: by.kind, actorId: by.id, action: "workspace.refused", target: companyAgentId(this.hub.slug, id), data: { reason: err.reason } });
+      this.company.audit.append({ actorKind: by.kind, actorId: by.id, action: "workspace.refused", target: companyAgentId(this.hub.slug, id), data: { ...err.data, reason: err.reason } });
     } catch {
       /* the refusal stands even if it cannot be recorded */
     }
@@ -182,9 +185,21 @@ export class Sessions {
     const name = this.name(id);
     this.onSessionDown(id);
     let issued = false;
+    // CEO, CIO and Security & Audit work above projects: an empty folder, no repo, no GitHub credential (SR-D-06).
+    const company = workspaceKind(reg.role) === "company";
     try {
-      hub.setSession(id, { state: "starting", detail: "Preparing folder…", workspace: workspaceFor(agent, hub.slug) });
-      const dir = await ensureWorkspace(agent, hub.slug, hub.repo);
+      if (company && agent.mode === "local")
+        throw new WorkspaceRefusedError("local-mode", `${agent.name} is a company-level agent: it runs only in a sandbox. Local mode would put your own GitHub login within its reach.`);
+      hub.setSession(id, { state: "starting", detail: "Preparing folder…", workspace: company ? companyWorkspaceFor(hub.slug, id) : workspaceFor(agent, hub.slug) });
+      const dir = company ? await ensureCompanyWorkspace(hub.slug, id) : await ensureWorkspace(agent, hub.slug, hub.repo);
+      if (company) {
+        const key = await this.githubKeyFor(id);
+        const names = [...(key ? ["github"] : []), ...githubCredentialIn(this.envFileFor(id))];
+        if (names.length) {
+          const where = key === "global" ? "an sbx GitHub key set for every sandbox" : key ? "an sbx GitHub key for its sandbox" : `${names.join(", ")} in its env file`;
+          throw new WorkspaceRefusedError("github-credential", `${agent.name} is a company-level agent and must not reach GitHub, but ${where} would reach it. Remove it, then start again.`, { names });
+        }
+      }
       const adapter = adapters[agent.cli];
       // A session that is still running (tmux outlives HQ) keeps the secret and the
       // files it was started with. HQ keeps only a hash of the secret, so it could
@@ -198,11 +213,12 @@ export class Sessions {
         const ctoId = this.company.agents.cto(hub.slug, (cid) => !!hub.cfg(cid))?.agentId ?? null;
         // The owner sees a changed CLAUDE.md as pending; the agent gets only the approved copy (SR-D-07).
         refreshProjectNotes(hub, this.company);
-        const approved = this.company.notes.current(hub.slug);
+        const approved = company ? null : this.company.notes.current(hub.slug);
         const notes = approved ? { version: approved.version, content: approved.content } : null;
         await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId, notes });
-        const specs = stackSkills(hub.snap.config.stack);
-        if (specs.length || hasHqSkills(hub.slug, dir)) {
+        // A company-level agent gets no project notes and no stack skills.
+        const specs = company ? [] : stackSkills(hub.snap.config.stack);
+        if (!company && (specs.length || hasHqSkills(hub.slug, dir))) {
           hub.setSession(id, { detail: "Installing agent skills…" });
           const skills = await prepareSkills(hub.slug, dir, specs);
           if (skills.error) hub.activity("session", id, `${agent.name}: some agent skills didn't install (${skills.error.slice(0, 120)}). Starting anyway.`);

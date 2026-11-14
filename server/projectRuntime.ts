@@ -88,6 +88,11 @@ export class ProjectRuntime {
     sessions.lastHookAt = (id) => inbox.lastHookAt(id);
     const sbx = new Sbx(hub, company);
     sessions.envFileFor = (id) => (existsSync(sbx.envFile(id)) ? sbx.envFile(id) : null);
+    // Read fresh before a company-level agent starts: a key set a moment ago must count (SR-D-06).
+    sessions.githubKeyFor = async (id) => {
+      await sbx.refresh();
+      return sbx.githubKeyFor(id);
+    };
     const mcp = new SbxMcp(hub, (id, file, args, onExit) => sessions.runTerminal(id, file, args, onExit), undefined, company);
     sessions.onSandboxReady = (id) => {
       void sbx.syncRules(id);

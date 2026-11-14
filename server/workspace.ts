@@ -9,11 +9,15 @@ import { agentConfigOnDisk, isolateClone, trackedHqFiles } from "./agentIsolatio
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
 
-/** A folder HQ will not start an agent in. `reason` goes into the audit row (SR-D-04, SR-D-07). */
+/**
+ * A folder HQ will not start an agent in. `reason` goes into the audit row
+ * (SR-D-04, SR-D-05, SR-D-06, SR-D-07), with `data` when set: names, never values.
+ */
 export class WorkspaceRefusedError extends Error {
   constructor(
-    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source",
+    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source" | "company-git" | "github-credential" | "local-mode",
     message: string,
+    readonly data: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "WorkspaceRefusedError";

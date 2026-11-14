@@ -106,6 +106,16 @@ export class Sbx {
   }
 
   /** Re-reads everything from sbx and publishes it. */
+  /**
+   * Whether sbx's GitHub service key reaches this agent's sandbox, as of the
+   * last refresh(): set for every sandbox ("global"), for this one, or not at all.
+   */
+  githubKeyFor(agentId: string): "global" | "sandbox" | null {
+    if (this.state.globalKeys.includes("github")) return "global";
+    if (this.state.agents[agentId]?.keys.includes("github")) return "sandbox";
+    return null;
+  }
+
   async refresh() {
     if (!this.hub.snap.setup.sandboxReady) {
       this.state.agents = Object.fromEntries(this.hub.snap.config.team.map((a) => [a.id, this.emptyAgent(a.id)]));
