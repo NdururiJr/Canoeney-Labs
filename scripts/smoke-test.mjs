@@ -205,7 +205,10 @@ const snap = await within(15_000, "no snapshot in 15s", (done) => {
   ws.on("error", (err) => fail(`websocket: ${err.message}`));
 });
 if (snap.welcome !== true) fail("expected the welcome screen on a fresh repo");
-step(`snapshot ok (welcome, ${snap.setup.checks.length} setup checks)`);
+// One HQ runs many projects (M0-D2): the snapshot names its project and lists them all.
+const listed = Array.isArray(snap.projects) ? snap.projects : [];
+if (listed.length !== 1 || listed[0].state !== "open" || listed[0].id !== snap.projectId) fail(`expected the one repo as the open project, got ${JSON.stringify(listed)}`);
+step(`snapshot ok (welcome, ${snap.setup.checks.length} setup checks, project ${snap.projectId} open)`);
 for (const c of snap.setup.checks) console.log(`    ${c.status === "ok" ? "✓" : c.status === "warning" ? "!" : "✗"} ${c.label}: ${c.detail}`);
 
 // Completing the welcome needs the PIN, and writes the team to the company store, not to the repo (M0-D1).

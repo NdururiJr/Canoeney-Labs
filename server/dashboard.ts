@@ -21,6 +21,8 @@ export interface CommandCtx {
   sessionId: string;
   /** True only when dispatch checked the owner's PIN for this call. Store writes then carry the PIN authority (M0-D1). */
   pin?: boolean;
+  /** The project this connection views (M0-D2); project commands act on it only. */
+  projectId?: string | null;
 }
 
 export interface CommandSpec {
@@ -65,8 +67,16 @@ export class Dashboard {
   private collapsed = new Map<string, { start: number; count: number; actor: string; cmd: string; target: string | null }>();
 
   constructor(
+    /** Commands that act on the company (adding a project), or the only table when there are no project tables. */
     readonly commands: Record<string, CommandSpec>,
-    private readonly o: { ownerAuth: OwnerAuth; audit: AuditSink; clock: Clock; limits?: Partial<DashboardLimits> },
+    private readonly o: {
+      ownerAuth: OwnerAuth;
+      audit: AuditSink;
+      clock: Clock;
+      limits?: Partial<DashboardLimits>;
+      /** The selected project's command table; null when that project is not open (M0-D2). */
+      projectCommands?: (projectId: string) => Record<string, CommandSpec> | null;
+    },
   ) {
     this.limits = { burst: 100, perSecond: 50, ...o.limits };
   }
@@ -97,8 +107,14 @@ export class Dashboard {
   async dispatch(ctx: CommandCtx, msg: Message): Promise<CommandResult> {
     const cmd = typeof msg.cmd === "string" ? msg.cmd : "";
     const args = Array.isArray(msg.args) ? msg.args : [];
-    const spec = NAME.test(cmd) && Object.hasOwn(this.commands, cmd) ? this.commands[cmd] : undefined;
     const label = NAME.test(cmd) ? cmd : `(${cmd.length} characters)`;
+    let table: Record<string, CommandSpec> | null = this.commands;
+    if (NAME.test(cmd) && !Object.hasOwn(this.commands, cmd) && this.o.projectCommands) {
+      // A project command acts on the project this connection views, and only while it is open.
+      table = typeof ctx.projectId === "string" ? safe(() => this.o.projectCommands!(ctx.projectId as string)) : null;
+      if (!table) return this.refuse(ctx, cmd, null, "failed");
+    }
+    const spec = NAME.test(cmd) && Object.hasOwn(table, cmd) ? table[cmd] : undefined;
     if (!spec || (spec.role !== "owner" && spec.role !== "supervisor")) return this.refuse(ctx, label, null, "unknown");
     const target = this.targetOf(spec, args);
     if (rank(ctx.role) < rank(spec.role)) return this.refuse(ctx, cmd, target, "forbidden");
@@ -164,7 +180,8 @@ export class Dashboard {
   }
 
   private append(ctx: CommandCtx, action: string, target: string | null, data: Record<string, unknown>): void {
-    this.o.audit.append({ actorKind: "human", actorId: ctx.actor.id, action, target, data });
+    const project = typeof ctx.projectId === "string" ? { project: ctx.projectId } : {};
+    this.o.audit.append({ actorKind: "human", actorId: ctx.actor.id, action, target, data: { ...data, ...project } });
   }
 
   private tryAppend(ctx: CommandCtx, action: string, target: string | null, data: Record<string, unknown>): boolean {
@@ -220,6 +237,8 @@ export function viewFor(role: HumanRole, e: OfficeEvent): OfficeEvent | null {
     case "snapshot": {
       const s = e.snapshot;
       const kept = {
+        projectId: s.projectId,
+        projects: s.projects,
         welcome: s.welcome,
         config: configForSupervisor(s.config),
         agents: s.agents.map(statusForSupervisor),

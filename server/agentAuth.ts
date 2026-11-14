@@ -7,6 +7,11 @@ import type { Company } from "./company";
 import type { RegisteredAgent } from "./company/agents";
 import type { Hub } from "./hub";
 
+/** The open projects, by slug (M0-D2). */
+export interface RuntimeLookup {
+  get(slug: string): { hub: Hub } | null;
+}
+
 export interface AuthLimits {
   /** Requests a secret may send at once. */
   perSecretBurst: number;
@@ -27,9 +32,8 @@ const MINUTE = 60_000;
 const BEARER = /^Bearer ([^\s]+)$/i;
 
 export class AgentAuth {
-  private readonly slug: string;
   private readonly company: Company;
-  private readonly hub: Hub;
+  private readonly projects: RuntimeLookup;
   private readonly limits: AuthLimits;
   private buckets = new Map<string, { tokens: number; at: number }>();
   private failuresBySource = new Map<string, { start: number; count: number }>();
@@ -38,10 +42,9 @@ export class AgentAuth {
   /** Last minute an auth.rate-limited row was written, per key. */
   private limitedRows = new Map<string, number>();
 
-  constructor(o: { projectSlug: string; company: Company; hub: Hub; limits?: Partial<AuthLimits> }) {
-    this.slug = o.projectSlug;
+  constructor(o: { company: Company; projects: RuntimeLookup; limits?: Partial<AuthLimits> }) {
     this.company = o.company;
-    this.hub = o.hub;
+    this.projects = o.projects;
     this.limits = { ...DEFAULT_AUTH_LIMITS, ...o.limits };
   }
 
@@ -63,8 +66,10 @@ export class AgentAuth {
     const auth = this.company.secrets.authenticate(m[1]);
     if (!auth.ok) return this.fail(source, endpoint, auth.reason, "companyAgentId" in auth ? auth.companyAgentId : null);
     const agent = this.company.agents.getById(auth.companyAgentId);
-    if (!agent || agent.projectSlug !== this.slug) return this.fail(source, endpoint, "other-project", auth.companyAgentId);
-    if (!this.hub.cfg(agent.agentId)) return this.fail(source, endpoint, "not-in-config", agent.companyId);
+    // "other-project": the agent's project has no open runtime in this HQ.
+    const runtime = agent ? this.projects.get(agent.projectSlug) : null;
+    if (!agent || !runtime) return this.fail(source, endpoint, "other-project", auth.companyAgentId);
+    if (!runtime.hub.cfg(agent.agentId)) return this.fail(source, endpoint, "not-in-config", agent.companyId);
 
     if (!this.take(agent.companyId)) {
       this.limitedRow(agent.companyId, { target: agent.companyId, data: { endpoint } });
@@ -73,7 +78,7 @@ export class AgentAuth {
 
     if (claimed !== null && claimed !== agent.agentId) {
       // The claim is agent text: recorded as it is only when it names an agent of this project.
-      const recorded = this.company.agents.get(this.slug, claimed) ? claimed : { chars: claimed.length };
+      const recorded = this.company.agents.get(agent.projectSlug, claimed) ? claimed : { chars: claimed.length };
       this.company.audit.append({
         actorKind: "agent",
         actorId: agent.companyId,

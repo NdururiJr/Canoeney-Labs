@@ -65,6 +65,8 @@ function reduce(snap: OfficeSnapshot, e: OfficeEvent): OfficeSnapshot {
     case "workspace.info":
     case "command.result":
       return snap;
+    case "projects.updated":
+      return { ...snap, projects: e.projects };
     case "sbx.updated":
       return { ...snap, sbx: e.sbx };
     case "setup.updated":

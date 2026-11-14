@@ -337,7 +337,20 @@ export interface SetupState {
   checkedAt: string;
 }
 
+/**
+ * A project HQ manages (M0-D2). "missing": its folder is gone or not a repo.
+ * "hq-source": it was registered from HQ's own source by an older HQ and is never opened.
+ */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  state: "open" | "missing" | "hq-source";
+}
+
 export interface OfficeSnapshot {
+  /** The project this snapshot is of, and every project HQ manages (real HQ only, M0-D2). */
+  projectId?: string;
+  projects?: ProjectSummary[];
   /** True until the first-run welcome is finished for this repo (real HQ only). */
   welcome?: boolean;
   /** The repo has a .jsmhq/config.json from before M0-D1 that the owner can import (it is not read until then). */

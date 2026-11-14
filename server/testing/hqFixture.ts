@@ -21,8 +21,11 @@ import { startHttp } from "../http";
 import { Hub } from "../hub";
 import { Inbox } from "../inbox";
 import { Planner } from "../planner";
+import { makeCompanyCommands } from "../commands";
+import { ProjectRuntime } from "../projectRuntime";
+import { Projects } from "../projects";
 import { offerImport } from "../repoConfigImport";
-import type { RepoInfo } from "../repo";
+import { detectRepo, type RepoInfo } from "../repo";
 import { defaultWorkflow, newAgent } from "../store";
 
 export const FIXTURE_START = "2026-11-12T08:00:00.000Z";
@@ -64,6 +67,37 @@ export function writeRepoFiles(repoRoot: string, files: { config?: unknown; plan
   if (files.plan !== undefined) writeFileSync(join(repoRoot, ".jsmhq", "plan.json"), JSON.stringify(files.plan, null, 2));
 }
 
+/** Builds a project's command table from its parts (tests choose; the default is none). */
+export type CommandsFor = (p: { hub: Hub; planner: Planner; inbox: Inbox; company: Company }) => Record<string, CommandSpec>;
+
+/**
+ * A project's runtime for tests: the hub, inbox and planner as HQ builds them,
+ * with no sessions, sandboxes or polling. Its command table is `commands`.
+ */
+export async function openTestRuntime(company: Company, repo: RepoInfo, slug: string, commands?: CommandsFor): Promise<ProjectRuntime> {
+  const configSource = () => company.settings.view(slug, { path: repo.root, hqPort: 0 });
+  const hub = new Hub(repo, slug, configSource, company.plans.load(slug), { checks: [], checkedAt: FIXTURE_START } as never);
+  offerImport(hub, company);
+  const inbox = new Inbox(hub, { type: async () => false, enter: async () => false });
+  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null, {
+    plans: company.plans,
+    projectId: slug,
+    roleOf: (id) => company.agents.get(slug, id)?.role ?? null,
+  });
+  return new ProjectRuntime({
+    slug,
+    repo,
+    hub,
+    inbox,
+    planner,
+    sessions: {} as never,
+    sbx: {} as never,
+    mcp: {} as never,
+    commands: commands?.({ hub, planner, inbox, company }) ?? {},
+    stop: () => inbox.stop(),
+  });
+}
+
 export interface LoginResult {
   status: number;
   /** The `name=value` pair to send back in a Cookie header, when one was set. */
@@ -75,9 +109,14 @@ export interface LoginResult {
 export interface Hq {
   company: Company;
   clock: FakeClock;
+  /** The first project's hub, inbox and planner. */
   hub: Hub;
   inbox: Inbox;
   planner: Planner;
+  /** Every project of this HQ (M0-D2). */
+  projects: Projects;
+  /** An open project's runtime; throws when it is not open. */
+  runtime(slug: string): ProjectRuntime;
   auth: AgentAuth;
   readonly ownerAuth: OwnerAuth;
   readonly dashboard: Dashboard;
@@ -116,8 +155,10 @@ export async function makeHq(
     unseeded?: boolean;
     /** A built UI folder to serve (default: none). */
     distDir?: string;
-    /** Builds the dashboard command table (default: none). */
-    commands?: (p: { hub: Hub; planner: Planner; inbox: Inbox; company: Company }) => Record<string, CommandSpec>;
+    /** Builds each project's dashboard command table (default: none). */
+    commands?: CommandsFor;
+    /** More projects, each with its own repo folder and team (M0-D2). */
+    extraProjects?: { slug: string; team: AgentConfig[] }[];
   } = {},
 ): Promise<Hq> {
   const dir = mkdtempSync(join(tmpdir(), "hq fixture "));
@@ -142,30 +183,42 @@ export async function makeHq(
   company.db.prepare("INSERT INTO humans(id, display_name, role, created_at) VALUES ('owner', 'Owner', 'owner', ?)").run(FIXTURE_START);
   const slug = company.agents.ensureProject({ name: repo.name, root: repoRoot, github: repo.github });
   if (!opts.unseeded) seedProject(company, slug, team, defaultWorkflow(repo));
-
-  const configSource = () => company.settings.view(slug, { path: repoRoot, hqPort: 0 });
-  const hub = new Hub(repo, slug, configSource, company.plans.load(slug), { checks: [], checkedAt: FIXTURE_START } as never);
-  offerImport(hub, company);
-  const inbox = new Inbox(hub, { type: async () => false, enter: async () => false });
-  const planner = new Planner(hub, inbox, () => company.agents.cto(slug, (id) => !!hub.cfg(id))?.agentId ?? null, {
-    plans: company.plans,
-    projectId: slug,
-    roleOf: (id) => company.agents.get(slug, id)?.role ?? null,
+  // The fixture's repo folders are plain folders: Projects is told what they are instead of asking git.
+  const repos = new Map<string, RepoInfo>([[repoRoot, repo]]);
+  for (const extra of opts.extraProjects ?? []) {
+    const root = join(dir, `repo ${extra.slug}`);
+    mkdirSync(root);
+    const info: RepoInfo = { ...repo, root, name: extra.slug };
+    repos.set(root, info);
+    company.agents.ensureProject({ slug: extra.slug, name: extra.slug, root, github: null });
+    seedProject(company, extra.slug, extra.team, defaultWorkflow(info));
+  }
+  const projects = new Projects(company, (r, s) => openTestRuntime(company, r, s, opts.commands), {
+    detect: async (root) => repos.get(root) ?? detectRepo(root),
   });
-  const auth = new AgentAuth({ projectSlug: slug, company, hub, limits: opts.limits });
+  await projects.openAll();
+  const runtime = (s: string) => {
+    const rt = projects.get(s);
+    if (!rt) throw new Error(`project ${s} is not open`);
+    return rt;
+  };
+  const { hub, inbox, planner } = runtime(slug);
+  const auth = new AgentAuth({ company, projects, limits: opts.limits });
   const setupFile = join(companyHomeDir, "owner-setup.txt");
   const newOwnerAuth = () =>
     new OwnerAuth({ accounts: company.humans, clock, audit: company.audit, allowedOrigins: [ORIGIN], setupFile, limits: opts.ownerLimits });
   let ownerAuth = newOwnerAuth();
   ownerAuth.prepareSetup();
-  const commands = opts.commands?.({ hub, planner, inbox, company }) ?? {};
   let dashboard: Dashboard;
   const start = (oa: OwnerAuth) =>
     startHttp({
-      dashboard: (dashboard = new Dashboard(commands, { ownerAuth: oa, audit: company.audit, clock })),
-      hub,
-      inbox,
-      planner,
+      dashboard: (dashboard = new Dashboard(makeCompanyCommands(projects), {
+        ownerAuth: oa,
+        audit: company.audit,
+        clock,
+        projectCommands: (id) => projects.get(id)?.commands ?? null,
+      })),
+      projects,
       company,
       agentAuth: auth,
       ownerAuth: oa,
@@ -179,7 +232,7 @@ export async function makeHq(
     await new Promise<void>((r) => server.close(() => r()));
   };
   t.after(async () => {
-    inbox.stop();
+    projects.stopAll();
     await stop();
     company.close();
     if (previousHome === undefined) delete process.env.HQ_COMPANY_HOME;
@@ -244,6 +297,8 @@ export async function makeHq(
     hub,
     inbox,
     planner,
+    projects,
+    runtime,
     auth,
     get ownerAuth() {
       return ownerAuth;

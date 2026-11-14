@@ -14,13 +14,11 @@ import type { OfficeEvent } from "../src/data/source";
 import type { AgentAuth, CheckResult } from "./agentAuth";
 import type { Company } from "./company";
 import { handleHook } from "./hooks";
-import type { Hub } from "./hub";
-import type { Inbox } from "./inbox";
 import type { DashboardSession, OwnerAuth } from "./ownerAuth";
 import { viewFor, type CommandCtx, type CommandResult, type Dashboard } from "./dashboard";
 import { handleMcp } from "./mcp";
 import { securityHeaders } from "./securityHeaders";
-import type { Planner } from "./planner";
+import type { Projects } from "./projects";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
@@ -42,9 +40,8 @@ function readBody(req: IncomingMessage, limit = 256 * 1024): Promise<string> {
 }
 
 interface Options {
-  hub: Hub;
-  inbox: Inbox;
-  planner: Planner;
+  /** Every open project's runtime; /hook and /mcp use the caller's own project (M0-D2). */
+  projects: Projects;
   port: number;
   /** Who is logged in to the dashboard (M0-C). */
   ownerAuth: OwnerAuth;
@@ -96,7 +93,9 @@ export function startHttp(o: Options) {
       if (!who.ok) return refuse(res, who);
       try {
         const body = await readBody(req);
-        const r = handleHook(o.hub, o.inbox, o.company, who.agent.agentId, event ?? "", body ? JSON.parse(body) : {});
+        const rt = o.projects.get(who.agent.projectSlug);
+        if (!rt) return refuse(res, { ok: false, status: 401 });
+        const r = handleHook(rt.hub, rt.inbox, o.company, who.agent.agentId, event ?? "", body ? JSON.parse(body) : {});
         if (!r.ok) return send(res, 404, "");
         if (r.response) return send(res, 200, JSON.stringify(r.response), "application/json");
         res.writeHead(204);
@@ -119,7 +118,9 @@ export function startHttp(o: Options) {
         // The rate limit counts tool calls: a batch pays for each one (SR-B-21).
         const calls = (Array.isArray(body) ? body : [body]).filter((m) => (m as { method?: unknown } | null)?.method === "tools/call").length;
         if (!o.agentAuth.charge(who.agent, calls - 1)) return refuse(res, { ok: false, status: 429 });
-        return await handleMcp(o.hub, o.planner, o.company, who.agent, req, res, body);
+        const rt = o.projects.get(who.agent.projectSlug);
+        if (!rt) return refuse(res, { ok: false, status: 401 });
+        return await handleMcp(rt.hub, rt.planner, o.company, who.agent, req, res, body);
       } catch {
         return res.headersSent ? void res.end() : send(res, 400, "bad request");
       }
@@ -185,16 +186,28 @@ export function startHttp(o: Options) {
       const v = viewFor(session.role, e);
       if (v && ws.readyState === ws.OPEN) ws.send(JSON.stringify(v));
     };
-    sendEvent({ type: "snapshot", snapshot: o.hub.snap });
-    const unsub = o.hub.subscribe(sendEvent);
-    const ctx: CommandCtx = { actor: { kind: "human", id: session.humanId }, role: session.role, remote, sessionId: session.id };
+    // Each connection views one project at a time; events come from that project only (M0-D2).
+    let projectId: string | null = null;
+    let unsub = () => {};
+    const view = (id: string | null) => {
+      const rt = id ? o.projects.get(id) : null;
+      if (id && !rt) return;
+      unsub();
+      projectId = id;
+      unsub = rt ? rt.hub.subscribe(sendEvent) : () => {};
+      if (rt) sendEvent({ type: "snapshot", snapshot: { ...rt.hub.snap, projectId: rt.slug, projects: o.projects.list() } });
+      else sendEvent({ type: "projects.updated", projects: o.projects.list() });
+    };
+    view(o.projects.defaultId());
+    const unsubProjects = o.projects.subscribe((projects) => sendEvent({ type: "projects.updated", projects }));
+    const ctxNow = (): CommandCtx => ({ actor: { kind: "human", id: session.humanId }, role: session.role, remote, sessionId: session.id, projectId });
     const allowed = o.dashboard.limiter();
     let limitedRowAt: number | null = null;
     const reply = (id: unknown, r: CommandResult) => {
       if (typeof id === "string" && id.length <= 40) sendEvent({ type: "command.result", id, ...r });
     };
     ws.on("message", async (raw) => {
-      let msg: { cmd?: unknown; args?: unknown; pin?: unknown; id?: unknown } = {};
+      let msg: { type?: unknown; projectId?: unknown; cmd?: unknown; args?: unknown; pin?: unknown; id?: unknown } = {};
       try {
         const parsed: unknown = JSON.parse(String(raw));
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) msg = parsed as typeof msg;
@@ -204,7 +217,7 @@ export function startHttp(o: Options) {
       // Over the rate (SR-C-18): dropped, and one row per minute for this connection.
       if (!allowed()) {
         try {
-          limitedRowAt = o.dashboard.rateLimited(ctx, limitedRowAt);
+          limitedRowAt = o.dashboard.rateLimited(ctxNow(), limitedRowAt);
         } catch {
           /* the drop stands without its row */
         }
@@ -212,8 +225,13 @@ export function startHttp(o: Options) {
       }
       // A message from the client is activity; frames HQ pushes are not.
       if (!o.ownerAuth.touch(session.id)) return ws.close(4401, "session ended");
+      // Switching the viewed project: only to an open one; anything else keeps the current view.
+      if (msg.type === "select") {
+        if (typeof msg.projectId === "string" && o.projects.get(msg.projectId)) view(msg.projectId);
+        return;
+      }
       try {
-        reply(msg.id, await o.dashboard.dispatch(ctx, msg));
+        reply(msg.id, await o.dashboard.dispatch(ctxNow(), msg));
       } catch {
         // dispatch does not throw; if it ever did, an unhandled rejection would end HQ.
         reply(msg.id, { ok: false, error: "failed" });
@@ -221,6 +239,7 @@ export function startHttp(o: Options) {
     });
     ws.on("close", () => {
       unsub();
+      unsubProjects();
       mine.delete(ws);
       if (!mine.size) o.dashboard.flush();
     });

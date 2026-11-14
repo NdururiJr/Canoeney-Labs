@@ -21,6 +21,7 @@ import { refreshProjectNotes } from "./projectNotesSync";
 import { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { Planner } from "./planner";
+import type { Projects } from "./projects";
 import type { Sbx } from "./sbx";
 import type { SbxMcp } from "./sbxMcp";
 import type { Sessions } from "./sessions";
@@ -455,4 +456,15 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
   };
 
   return commands;
+}
+
+/**
+ * Commands that act on the company rather than the project a connection views
+ * (M0-D2). Adding a project relaxes a control, so it needs the owner's PIN
+ * every time (SR-D-03); Projects.add refuses HQ's own source (SR-D-05).
+ */
+export function makeCompanyCommands(projects: Projects): Record<string, CommandSpec> {
+  return {
+    addProject: { role: "owner", pin: true, target: () => null, run: async (ctx, path) => void (await projects.add(str(path, 1000).trim(), authorityOf(ctx))) },
+  };
 }
