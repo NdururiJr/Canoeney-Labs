@@ -8,7 +8,8 @@ const LABEL: Record<ProjectSummary["state"], (name: string) => string> = {
 
 /**
  * The project this dashboard views (M0-D2). Only an open project can be chosen.
- * The owner also gets "Add project". Props only, so the top bar owns the wiring.
+ * The owner also gets "Add project" when `onAdd` is given. Props only, so the
+ * top bar and the welcome own the wiring.
  */
 export function ProjectSwitcher({
   projects,
@@ -21,7 +22,7 @@ export function ProjectSwitcher({
   current: string | null;
   isOwner: boolean;
   onSelect: (id: string) => void;
-  onAdd: () => void;
+  onAdd: (() => void) | null;
 }) {
   const open = new Set(projects.filter((p) => p.state === "open").map((p) => p.id));
   return (
@@ -40,7 +41,7 @@ export function ProjectSwitcher({
           </option>
         ))}
       </select>
-      {isOwner && (
+      {isOwner && onAdd && (
         <button className="btn whitespace-nowrap text-[14px]" onClick={onAdd} title="Add a repo on this machine as a project (needs your PIN)">
           Add project
         </button>

@@ -6,6 +6,7 @@ import { officeActions, reviewToolLabel, useOffice } from "../../store/office";
 import { agentPalette } from "../../theme/tokens";
 import { Field, Portrait } from "../kit";
 import { CliSelect, ROLE_SUGGESTIONS } from "../settings/TeamSettings";
+import { ProjectSwitcher } from "../hud/ProjectSwitcher";
 import { ImportPreview } from "./ImportPreview";
 
 interface WorkerDraft {
@@ -45,7 +46,13 @@ export function WelcomeModal() {
     <div className="fixed inset-0 z-50 grid place-items-center bg-[rgba(36,26,46,0.55)] p-4" role="dialog" aria-modal="true" aria-label="Welcome to JSM HQ">
       <div className="panel flex max-h-[calc(100dvh-2rem)] w-[min(720px,100%)] flex-col">
         <div className="border-b-[3px] border-ink px-4 py-2">
-          <h2 className="m-0 text-[22px] font-bold">Welcome to JSM HQ</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="m-0 flex-1 text-[22px] font-bold">Welcome to JSM HQ</h2>
+            {/* The welcome covers the top bar: with several projects, the choice of project is here too (PR #10 review). */}
+            {(snap.projects?.length ?? 0) > 1 && (
+              <ProjectSwitcher projects={snap.projects!} current={snap.projectId ?? null} isOwner={false} onSelect={officeActions.selectProject} onAdd={null} />
+            )}
+          </div>
           <p className="m-0 text-[14px] text-muted">
             Set up the team for <b className="text-ink">{snap.config.project.repo || snap.config.project.name}</b>. You can change all of this later in Settings.
           </p>

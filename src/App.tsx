@@ -67,6 +67,7 @@ export function App() {
   const ready = useOffice((s) => s.snap !== null);
   const setupOpen = useUi((s) => s.setupOpen);
   const welcome = useOffice((s) => s.live && !!s.snap?.welcome);
+  const projectId = useOffice((s) => s.snap?.projectId);
 
   return (
     <>
@@ -80,7 +81,8 @@ export function App() {
           <DrawerHost />
           <DebugPanel />
           <SettingsModal />
-          {welcome ? <WelcomeModal /> : setupOpen && <SetupChecklist />}
+          {/* Keyed by project: the welcome's draft team belongs to one project. */}
+          {welcome ? <WelcomeModal key={projectId ?? ""} /> : setupOpen && <SetupChecklist />}
           <Tooltip />
         </>
       )}
