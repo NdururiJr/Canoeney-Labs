@@ -258,7 +258,7 @@ export interface RemoveAgentOptions {
 
 // ---------------------------------------------------------------- Setup
 
-export type SetupCheckId = "os" | "sbx" | "sbx-login" | "sbx-policy" | "tmux" | "gh" | "gh-remote" | "github-secret" | "claude" | "codex" | "openai-secret";
+export type SetupCheckId = "os" | "sbx" | "sbx-login" | "sbx-policy" | "tmux" | "gh" | "gh-remote" | "github-secret" | "openai-secret";
 export type SetupStatus = "ok" | "missing" | "unsupported" | "warning";
 
 export interface SetupFix {
@@ -272,7 +272,7 @@ export interface SetupCheck {
   label: string;
   status: SetupStatus;
   detail: string; // version found, or what is wrong
-  neededFor: "sandbox" | "local" | "all" | "github";
+  neededFor: "sandbox" | "all" | "github";
   fix: SetupFix | null;
 }
 
@@ -335,7 +335,6 @@ export interface SetupState {
   machine: MachineInfo;
   checks: SetupCheck[];
   sandboxReady: boolean; // every sandbox check passes
-  localReady: boolean; // Local mode can run
   checkedAt: string;
 }
 

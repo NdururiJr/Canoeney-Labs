@@ -44,11 +44,9 @@ export function mockSetup(): SetupState {
       ok("sbx-login", "Signed in to Docker", "signed in (mock)", "sandbox"),
       ok("sbx-policy", "Sandbox network policy", "Balanced (mock)", "sandbox"),
       ok("tmux", "tmux", "3.5a (mock)", "all"),
-      ok("claude", "Claude Code", "installed (mock)", "local"),
       ok("gh", "GitHub CLI", "signed in (mock)", "github"),
     ],
     sandboxReady: true,
-    localReady: true,
     checkedAt: now(),
   };
 }

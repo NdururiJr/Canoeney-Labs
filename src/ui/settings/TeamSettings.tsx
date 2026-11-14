@@ -98,7 +98,7 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
       </div>
       {agent.mode === "local" && (
         <div className="border-t-2 border-dashed border-cream-3 px-3 py-1 text-[12px] text-muted">
-          Local mode runs plain <code>{agent.cli}</code> in the agent's own folder. Permission prompts stay on.
+          This agent is set to Local mode, which HQ no longer runs: switch it to Sandbox to start it.
         </div>
       )}
       {expanded && (
