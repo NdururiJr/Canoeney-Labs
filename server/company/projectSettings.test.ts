@@ -40,7 +40,7 @@ function fresh(t: { after(fn: () => void): void }) {
   const audit = new SqliteAuditSink(db, clock);
   const secrets = new AgentSecrets(db, clock, audit);
   const agents = new AgentRegistry(db, clock, audit, secrets);
-  for (const slug of ["alpha", "beta"]) agents.ensureProject({ slug, name: slug, root: join(tmpdir(), `repo-${slug}`) });
+  for (const slug of ["alpha", "beta"]) agents.ensureProject({ slug, name: slug, root: join(tmpdir(), `repo-${slug}`), github: null });
   for (const [id, role] of [
     ["owner", "owner"],
     ["sup", "supervisor"],
@@ -286,4 +286,29 @@ test("a model name holds plain characters only: anything that could run on a com
   }
   assert.equal(dump(c.db), before);
   for (const model of ["", "opus", "claude-opus-5-5", "gpt-5.2-codex", "us.anthropic.claude[1m]", "openrouter/model:free"]) c.settings.updateAgent("alpha/ana", { model }, SESSION);
+});
+
+test("addProject is refused without the PIN, and a supervisor adds nothing", (t) => {
+  const { db, audit, settings } = fresh(t);
+  const repo = { name: "site", root: join(tmpdir(), "repo-site"), github: "acme/site" };
+  const projects = () => JSON.stringify(db.prepare("SELECT * FROM projects ORDER BY rowid").all());
+  const before = projects();
+  for (const [by, reason] of [
+    [SESSION, "pin-or-decision-required"],
+    [HQ, "hq-cannot-grant"],
+    [{ via: "pin", humanId: "sup" }, "not-owner"],
+  ] as const) {
+    assert.throws(() => settings.addProject(repo, by), (err: unknown) => err instanceof AuthorityError && err.reason === reason, reason);
+  }
+  assert.equal(projects(), before);
+  const refused = audit.query({ action: "settings.refused" }).filter((r) => r.data.change === "project-added");
+  assert.equal(refused.length, 3);
+
+  assert.equal(settings.addProject(repo, PIN), "repo-site"); // the id is the folder name
+  const row = audit.query({ action: "project.registered" }).find((r) => r.target === "repo-site");
+  assert.equal(row?.actorKind, "human");
+  assert.equal(row?.actorId, "owner");
+  assert.equal(row?.data.authority, "pin");
+  assert.equal(settings.has("repo-site"), false); // no settings row: the new project gets the welcome
+  assert.equal(relaxes({ kind: "project-added" }), true);
 });

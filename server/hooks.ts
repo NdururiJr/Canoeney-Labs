@@ -47,7 +47,8 @@ export function cleanAgentText(s: unknown, max = 200): string {
 /**
  * Whether the agent is inside a turn (prompt submitted, no Stop yet). Hooks can
  * arrive late or out of order (e.g. a PreToolUse after Stop), so only a new prompt
- * may turn an idle agent back to "working".
+ * may turn an idle agent back to "working". Keyed by project and agent: two
+ * projects can each have an agent with the same id (SR-D-09).
  */
 const turnOpen = new Map<string, boolean>();
 
@@ -70,6 +71,7 @@ export function handleHook(hub: Hub, inbox: Inbox, company: Company, agentId: st
   const st = hub.status(agentId);
   const name = hub.name(agentId);
   if (!st) return { ok: false };
+  const turnKey = `${hub.slug}/${agentId}`;
   inbox.noteHook(agentId, event);
   const body = {
     prompt: cleanAgentText(payload?.prompt),
@@ -80,25 +82,25 @@ export function handleHook(hub: Hub, inbox: Inbox, company: Company, agentId: st
 
   switch (event) {
     case "SessionStart":
-      turnOpen.set(agentId, false);
+      turnOpen.set(turnKey, false);
       hub.setStatus(agentId, { state: "idle", note: "Ready" });
       record(company, hub, agentId, event);
       break;
     case "UserPromptSubmit":
-      turnOpen.set(agentId, true);
+      turnOpen.set(turnKey, true);
       hub.setStatus(agentId, body.prompt ? { state: "working", note: clip(body.prompt), noteIsAgentText: true } : { state: "working", note: null });
       if (st.state !== "working") hub.activity("task.started", agentId, `${name} is working`);
       break;
     case "PreToolUse":
       // Stale: the turn already ended. (Unknown, e.g. after an HQ restart, is allowed.)
-      if (turnOpen.get(agentId) === false) break;
+      if (turnOpen.get(turnKey) === false) break;
       // Also clears "needs input" once a permission prompt is answered.
       if (st.state !== "working" || st.note?.startsWith("Asking"))
         hub.setStatus(agentId, body.toolName ? { state: "working", note: `Using ${body.toolName}`, noteIsAgentText: true } : { state: "working", note: null });
       break;
     case "PostToolUse":
       // A tool finished: if it was waiting on the user (a question or a permission), they answered.
-      if (turnOpen.get(agentId) === false) break;
+      if (turnOpen.get(turnKey) === false) break;
       if (st.state === "needs-input") hub.setStatus(agentId, { state: "working", note: "Continuing after your answer" });
       break;
     case "PermissionRequest": {
@@ -133,18 +135,18 @@ export function handleHook(hub: Hub, inbox: Inbox, company: Company, agentId: st
       const waiting = inbox.pending(agentId);
       const queued = inbox.takeForStop(agentId);
       if (queued) {
-        turnOpen.set(agentId, true); // Claude continues: same turn
+        turnOpen.set(turnKey, true); // Claude continues: same turn
         hub.setStatus(agentId, { state: "working", note: "Reading new messages" });
         record(company, hub, agentId, event, { delivered: waiting });
         return { ok: true, response: { decision: "block", reason: queued } };
       }
-      turnOpen.set(agentId, false);
+      turnOpen.set(turnKey, false);
       hub.setStatus(agentId, { state: "idle", note: "Finished — ready for the next instruction" });
       hub.activity("agent.answered", agentId, `${name} finished a turn`);
       break;
     }
     case "SessionEnd":
-      turnOpen.set(agentId, false);
+      turnOpen.set(turnKey, false);
       hub.setStatus(agentId, { state: "idle", note: "Session ended" });
       record(company, hub, agentId, event);
       break;

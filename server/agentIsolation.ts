@@ -48,19 +48,30 @@ export async function isolateClone(dir: string): Promise<void> {
   }
 }
 
-/** Every path the repo tracks, from `git ls-files -z`. */
-async function tracked(dir: string): Promise<string[]> {
-  const r = await run("git", ["ls-files", "-z"], { cwd: dir, timeoutMs: 60_000 });
-  if (!r.ok) throw new Error(`git ls-files failed in ${dir}: ${r.stderr.trim().split("\n")[0]}`);
-  return r.stdout.split("\0").filter(Boolean);
+/**
+ * Every path the repo tracks, from `git ls-files -z` at the repo's top level,
+ * with that top level. A chosen folder can be a subfolder: the repo's root
+ * CLAUDE.md applies to it too (Claude Code reads it from a parent folder).
+ */
+async function tracked(dir: string): Promise<{ top: string; prefix: string; files: string[] }> {
+  const t = await run("git", ["rev-parse", "--show-toplevel", "--show-prefix"], { cwd: dir });
+  const [topLine = "", prefixLine = ""] = t.ok ? t.stdout.split(/\r?\n/) : [];
+  const top = topLine.trim() || dir;
+  // Where `dir` sits inside the repo, as git says it ("sub/" or ""). Computing it from the two
+  // paths breaks on Windows when one is a short 8.3 path (C:\Users\RUNNER~1\…) and the other is not.
+  const prefix = prefixLine.trim();
+  const r = await run("git", ["ls-files", "-z"], { cwd: top, timeoutMs: 60_000 });
+  if (!r.ok) throw new Error(`git ls-files failed in ${top}: ${r.stderr.trim().split("\n")[0]}`);
+  return { top, prefix, files: r.stdout.split("\0").filter(Boolean) };
 }
 
 /** Tracked agent-configuration paths that exist on disk in `dir` (a link counts). */
 export async function agentConfigOnDisk(dir: string): Promise<string[]> {
-  return (await tracked(dir)).filter((rel) => {
+  const { top, files } = await tracked(dir);
+  return files.filter((rel) => {
     if (!isAgentConfigPath(rel)) return false;
     try {
-      lstatSync(join(dir, rel));
+      lstatSync(join(top, rel));
       return true;
     } catch {
       return false;
@@ -71,5 +82,10 @@ export async function agentConfigOnDisk(dir: string): Promise<string[]> {
 /** The repo's tracked paths that are one of HQ's own file names, in any letter case. */
 export async function trackedHqFiles(dir: string): Promise<string[]> {
   const own = new Set(HQ_OWN_FILES.map((f) => f.toLowerCase()));
-  return (await tracked(dir)).filter((rel) => own.has(rel.toLowerCase()));
+  // HQ writes its files into `dir`, which can be a subfolder: compare paths relative to it.
+  const { prefix, files } = await tracked(dir);
+  return files
+    .filter((rel) => rel.toLowerCase().startsWith(prefix.toLowerCase()))
+    .map((rel) => rel.slice(prefix.length))
+    .filter((rel) => own.has(rel.toLowerCase()));
 }

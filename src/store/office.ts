@@ -9,6 +9,7 @@ import { createWsSource } from "../data/ws/wsSource";
 import type { StackConfig } from "../data/stack";
 import type { AccessDecision, NewMcpServer, AgentConfig, AgentStatus, OfficeSnapshot, RemoveAgentOptions, SetupCheckId, WelcomeInput, WorkspaceInfo } from "../data/types";
 import { appendTerminal, clearTerminals } from "./terminal";
+import { ui, useUi } from "./ui";
 
 export interface LoggedEvent {
   n: number;
@@ -65,6 +66,8 @@ function reduce(snap: OfficeSnapshot, e: OfficeEvent): OfficeSnapshot {
     case "workspace.info":
     case "command.result":
       return snap;
+    case "projects.updated":
+      return { ...snap, projects: e.projects };
     case "sbx.updated":
       return { ...snap, sbx: e.sbx };
     case "setup.updated":
@@ -114,6 +117,11 @@ function handle(e: OfficeEvent) {
     useOffice.setState((s) => ({ workspaceInfo: { ...s.workspaceInfo, [e.info.agentId]: e.info } }));
     return;
   }
+  // A refused command that says why (adding a project): shown in the activity feed, in this browser only.
+  if (e.type === "command.result" && !e.ok && e.message) {
+    const note = { id: `local-${Date.now()}`, at: new Date().toISOString(), type: "config" as const, agentId: null, text: e.message };
+    useOffice.setState((s) => (s.snap ? { snap: { ...s.snap, activity: [note, ...s.snap.activity].slice(0, 50) } } : {}));
+  }
   if (e.type === "snapshot") clearTerminals();
   useOffice.setState((s) => {
     const base = s.snap ?? (e.type === "snapshot" ? e.snapshot : null);
@@ -143,6 +151,16 @@ export function connectOffice() {
 export const officeActions = {
   /** Sends a command again with the approval PIN (the PIN dialog). */
   sendWithPin: (cmd: string, args: unknown[], pin: string) => source.sendWithPin?.(cmd, args, pin),
+  /** Views another project. What belonged to the last one (drawers, the selected agent, terminal tabs) is closed. */
+  selectProject(id: string) {
+    if (useOffice.getState().snap?.projectId === id) return;
+    ui.closeDrawer();
+    ui.closeSettings();
+    useUi.setState({ hover: null, planBoardId: null, setupOpen: false });
+    useOffice.setState({ workspaceInfo: {} });
+    source.selectProject(id);
+  },
+  addProject: (path: string) => source.addProject(path),
   previewRepoImport: () => source.previewRepoImport(),
   importRepoConfig: (sha256: string) => source.importRepoConfig(sha256),
   approveProjectNotes: (sha256: string) => source.approveProjectNotes(sha256),

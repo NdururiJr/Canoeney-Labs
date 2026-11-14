@@ -20,6 +20,8 @@ export function createWsSource(): OfficeDataSource {
   const queue: string[] = [];
   const pending = new Map<string, { cmd: string; args: unknown[] }>();
   let seq = 0;
+  /** The project this tab views; sent again after a reconnect, which starts on HQ's default. */
+  let viewing: string | null = null;
 
   const transmit = (cmd: string, args: unknown[], pin?: string) => {
     const id = `c${++seq}`;
@@ -59,6 +61,7 @@ export function createWsSource(): OfficeDataSource {
           retry = 0;
           ws = sock;
           onStatus?.("open");
+          if (viewing) sock.send(JSON.stringify({ type: "select", projectId: viewing }));
           while (queue.length) sock.send(queue.shift() as string);
         };
         sock.onmessage = (m) => {
@@ -98,6 +101,11 @@ export function createWsSource(): OfficeDataSource {
       };
     },
     sendWithPin: (cmd, args, pin) => transmit(cmd, args, pin),
+    selectProject: (id) => {
+      viewing = id;
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "select", projectId: id }));
+    },
+    addProject: (path) => send("addProject", path),
     sendTerminalInput: (id, data) => send("sendTerminalInput", id, data),
     resizeTerminal: (id, cols, rows) => send("resizeTerminal", id, cols, rows),
     assignTask: (taskId, agentId) => send("assignTask", taskId, agentId),

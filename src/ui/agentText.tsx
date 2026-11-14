@@ -30,6 +30,15 @@ const hostOf = (href: string) => {
   }
 };
 
+/**
+ * A native `title` tooltip that holds an agent's words names its author first
+ * (PR #5 carry-forward): "Written by <author>", a blank line, then the text.
+ * Undefined when there is no text, so no empty tooltip is shown.
+ */
+export function authoredTitle(author: string, text: string): string | undefined {
+  return text ? `Written by ${author}\n\n${text}` : undefined;
+}
+
 /** An agent's words. Inline: a marked span with the author in its tooltip. Block: a labelled box. */
 export function AgentText({ author, text, inline = false, className = "" }: { author: string; text: string; inline?: boolean; className?: string }) {
   if (inline) {

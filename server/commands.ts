@@ -13,7 +13,8 @@ import { run } from "./lib/exec";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
-import { relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { ProjectRefusedError } from "./hqSource";
 import type { AgentSettingsPatch } from "./company/projectSettings";
 import type { CommandCtx, CommandSpec } from "./dashboard";
 import { applyImport, boardTitles, hasRepoConfig, previewImport, readImport } from "./repoConfigImport";
@@ -21,6 +22,7 @@ import { refreshProjectNotes } from "./projectNotesSync";
 import { Hub } from "./hub";
 import type { Inbox } from "./inbox";
 import type { Planner } from "./planner";
+import type { Projects } from "./projects";
 import type { Sbx } from "./sbx";
 import type { SbxMcp } from "./sbxMcp";
 import type { Sessions } from "./sessions";
@@ -379,7 +381,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     previewRepoImport: { role: "owner", run: () => {
       if (company.settings.has(hub.slug) || !hasRepoConfig(hub.repo.root)) return hub.activity("config", null, "There is nothing to import: this project's settings are already in HQ.");
       const { sha256, plan } = readImport(hub.repo.root, company, hub.slug);
-      hub.snap.importPreview = { sha256, lines: previewImport(plan), boards: boardTitles(plan), tasks: plan.tasks.length };
+      hub.snap.importPreview = { sha256, lines: previewImport(plan), boards: boardTitles(plan), tasks: plan.tasks.length, ...(plan.dropped ? { dropped: plan.dropped } : {}) };
       hub.emit({ type: "snapshot", snapshot: structuredClone(hub.snap) });
     } },
 
@@ -398,6 +400,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const counts = company.settings.transaction(() => {
         const c = applyImport(read.plan, company, hub.slug, by);
         company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "settings.imported", target: hub.slug, data: { sha256: read.sha256, ...c, authority: by.via } });
+        company.settings.markImported(hub.slug);
         return c;
       });
       hub.snap.welcome = false;
@@ -407,7 +410,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const plan = company.plans.load(hub.slug);
       hub.snap.boards = plan.boards;
       hub.snap.tasks = plan.tasks;
-      hub.snap.agents = hub.snap.config.team.map((a) => Hub.freshStatus(a.id));
+      // An agent still running (tmux outlives HQ) keeps its status; the others start fresh.
+      hub.snap.agents = hub.snap.config.team.map((a) => hub.status(a.id) ?? Hub.freshStatus(a.id));
       if (read.plan.skipped.length) hub.activity("config", null, `${read.plan.skipped.length} agent id(s) in the file were not plain ids (lower-case letters, digits and "-"), so they were not imported.`);
       await sessions.recheckSetup();
       hub.emit({ type: "snapshot", snapshot: structuredClone(hub.snap) });
@@ -455,4 +459,22 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
   };
 
   return commands;
+}
+
+/**
+ * Commands that act on the company rather than the project a connection views
+ * (M0-D2). Adding a project relaxes a control, so it needs the owner's PIN
+ * every time (SR-D-03); Projects.add refuses HQ's own source (SR-D-05).
+ */
+export function makeCompanyCommands(projects: Projects): Record<string, CommandSpec> {
+  return {
+    addProject: {
+      role: "owner",
+      pin: true,
+      target: () => null,
+      run: async (ctx, path) => void (await projects.add(str(path, 1000).trim(), authorityOf(ctx))),
+      // HQ's own refusal texts only; any other failure stays a bare "failed".
+      explain: (err) => (err instanceof ProjectRefusedError || err instanceof AuthorityError ? err.message : null),
+    },
+  };
 }

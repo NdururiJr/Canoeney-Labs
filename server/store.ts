@@ -3,8 +3,7 @@
 // writes .jsmhq/config.json or .jsmhq/plan.json, except the one-time import
 // (server/repoConfigImport.ts).
 
-import type { AgentConfig, Board, SandboxSettings, Task, WorkflowConfig } from "../src/data/types";
-import type { RepoInfo } from "./repo";
+import type { AgentConfig, Board, SandboxSettings, Task } from "../src/data/types";
 
 export interface PlanFile {
   boards: Board[];
@@ -37,11 +36,3 @@ export function newAgent(id: string, name: string, role: string, color: string, 
   };
 }
 
-/** The workflow a new project starts with, from what the repo already uses. */
-export function defaultWorkflow(repo: RepoInfo): WorkflowConfig {
-  return {
-    review: { enabled: true, tool: repo.hasCodeRabbit ? "coderabbit" : "human", command: "" },
-    merge: { by: "human" },
-    deploy: { enabled: repo.hasInsta, tool: "instacloud", command: "", perAgentEnvironments: repo.hasInsta },
-  };
-}

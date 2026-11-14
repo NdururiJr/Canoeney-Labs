@@ -102,8 +102,8 @@ test("SR-B-19 [T-S2.4] every read of hook-reported state is a display or deliver
   const ALLOWED = [
     "inbox.ts: lastHookAt(", // the inbox records when hooks arrive
     "inbox.ts: status(agentId)?.state", // delivery: type a message only into an idle agent
-    "main.ts: lastHookAt", // wiring
-    "main.ts: lastHookAt(",
+    "projectRuntime.ts: lastHookAt", // wiring (moved from main.ts in M0-D2)
+    "projectRuntime.ts: lastHookAt(",
     "sessions.ts: lastHookAt", // declaration
     "sessions.ts: lastHookAt(", // the quiet time before reading the agent's screen
   ];

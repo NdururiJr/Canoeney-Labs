@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { test } from "node:test";
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
 import { newAgent } from "./store";
-import { ensureWorkspace, workspaceFor } from "./workspace";
+import { ensureWorkspace, workspaceFor, WorkspaceRefusedError } from "./workspace";
 
 // Point the home folder and the company home at a temporary folder (with a
 // space), so these tests never touch the real ~/.jsmhq.
@@ -64,7 +65,7 @@ test("a managed folder that would land in the company store is refused", (t) => 
   assert.throws(() => workspaceFor(agent("builder"), "demo"), /company store/);
 });
 
-const REPO: RepoInfo = { root: "unused", name: "demo", originUrl: null, github: null, hasCodeRabbit: false, hasInsta: false };
+const REPO: RepoInfo = { root: "unused", name: "demo", originUrl: null, github: null, remotes: [], hasCodeRabbit: false, hasInsta: false };
 
 test("SR-D-04 [T-S7.6] a chosen folder that is, holds, or sits inside the store or HQ's home is refused", async (t) => {
   const { root, company } = sandboxHome(t);
@@ -91,4 +92,13 @@ test("SR-D-04 [T-S7.6] a chosen folder that is, holds, or sits inside the store 
 test("HQ's own clone inside HQ's home is allowed", (t) => {
   const { root } = sandboxHome(t);
   assert.equal(workspaceFor(agent("builder"), "demo"), join(root, "home", ".jsmhq", "demo", "builder"));
+});
+
+test("SR-D-05 [T-S7.5] a chosen agent folder that is a clone of HQ's source is refused", async (t) => {
+  const { root } = sandboxHome(t);
+  const dir = join(root, "my hq clone");
+  mkdirSync(dir);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/NdururiJr/Canoeney-Labs.git"], { cwd: dir });
+  await assert.rejects(ensureWorkspace(agent("builder", dir), "demo", REPO), (err: unknown) => err instanceof WorkspaceRefusedError && err.reason === "hq-source");
 });

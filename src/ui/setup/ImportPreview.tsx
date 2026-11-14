@@ -25,6 +25,11 @@ export function ImportPreview({ preview, onImport, sending = false }: { preview:
           </li>
         ))}
       </ul>
+      {!!preview.dropped && (
+        <p className="m-0 text-[13px] text-muted">
+          {preview.dropped === 1 ? "1 site or MCP server name" : `${preview.dropped} site or MCP server names`} in the file {preview.dropped === 1 ? "is" : "are"} not valid, so {preview.dropped === 1 ? "it is" : "they are"} not imported.
+        </p>
+      )}
       {preview.boards.length > 0 && (
         <div className="flex flex-col gap-1">
           <span className="text-[14px] font-bold">Tasks from .jsmhq/plan.json ({preview.tasks})</span>

@@ -11,7 +11,8 @@ import { log } from "./lib/log";
 import type { Planner } from "./planner";
 import type { Sbx } from "./sbx";
 
-const DOMAIN = /^(\*\.)?([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?$/;
+/** A domain the dashboard accepts for an agent's network rules (lower case, optional *. and :port). */
+export const DOMAIN = /^(\*\.)?([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?$/;
 
 /** Turns what an agent passed (a URL, a host, a host:port) into a domain, or null. */
 export function cleanDomain(raw: string): string | null {

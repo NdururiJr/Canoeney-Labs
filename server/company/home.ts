@@ -8,6 +8,9 @@ export const HQ_DIRNAME = ".jsmhq";
 /** slugify only emits [a-z0-9-], so no project slug can collide with this. */
 export const COMPANY_DIRNAME = "_company";
 
+/** Company-level agents' folders (M0-D2, SR-D-06), under HQ's home. Like _company, no slug can collide with it. */
+export const COMPANY_WORKSPACES_DIRNAME = "_workspaces";
+
 /**
  * HQ's per-user folder: ~/.jsmhq, or HQ_HOME when set (tests set it to a
  * temporary folder). Agents' managed clones and HQ's per-project records live

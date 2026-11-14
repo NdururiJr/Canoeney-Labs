@@ -110,7 +110,11 @@ From your project's folder:
 npx @therealjsmastery/jsm-hq@latest
 ```
 
-`@latest` makes sure npx doesn't reuse an old version it cached. HQ opens your browser. If it doesn't, open the `http://127.0.0.1:7420/?token=…` link printed in the terminal.
+Or from anywhere, naming the project: `npx @therealjsmastery/jsm-hq@latest --repo <path to your project>`.
+
+`@latest` makes sure npx doesn't reuse an old version it cached. HQ opens your browser. If it doesn't, open the `http://127.0.0.1:7420/` link printed in the terminal.
+
+**Your first project:** if you're setting up the company, start with the company website repo. Add more projects later with **Add project** in the top bar (it asks for your PIN). HQ refuses its own source code as a project, so when you work on HQ itself (`pnpm dev:hq` in its repo), pass `--repo <project folder>` or set `HQ_REPO`.
 
 - **Welcome:** name the project, pick a lead and workers (Claude Code or Codex for each) and a review tool. Optionally pick your stack (frameworks, auth, payments, database, analytics, security): agents then get those tools' agent skills and know what the project uses. Confirm it with your PIN. HQ saves it in its company store, outside your repo, so a pull request can't change it.
 - **Setup checklist:** anything still missing shows here with a **Copy** button and, for safe commands, **Run in terminal**. Press **Check again** after fixing something.

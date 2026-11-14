@@ -21,6 +21,8 @@ export interface CommandCtx {
   sessionId: string;
   /** True only when dispatch checked the owner's PIN for this call. Store writes then carry the PIN authority (M0-D1). */
   pin?: boolean;
+  /** The project this connection views (M0-D2); project commands act on it only. */
+  projectId?: string | null;
 }
 
 export interface CommandSpec {
@@ -36,11 +38,13 @@ export interface CommandSpec {
   audit?: "per-call" | "collapsed";
   /** Takes a secret value: no error text from it reaches a reply, the feed or the log. */
   secret?: true;
+  /** For a failure whose text is HQ's own (never a value or another program's output): the message for the reply. */
+  explain?: (err: unknown) => string | null;
   run: (ctx: CommandCtx, ...args: unknown[]) => unknown;
 }
 
 export type CommandError = "unknown" | "forbidden" | "remote" | "pin-required" | "pin-wrong" | "pin-locked" | "rate-limited" | "failed";
-export type CommandResult = { ok: true } | { ok: false; error: CommandError };
+export type CommandResult = { ok: true } | { ok: false; error: CommandError; message?: string };
 
 interface Message {
   cmd?: unknown;
@@ -62,11 +66,19 @@ const rank = (r: HumanRole) => (r === "owner" ? 2 : 1);
 
 export class Dashboard {
   private readonly limits: DashboardLimits;
-  private collapsed = new Map<string, { start: number; count: number; actor: string; cmd: string; target: string | null }>();
+  private collapsed = new Map<string, { start: number; count: number; actor: string; cmd: string; target: string | null; project: string | null }>();
 
   constructor(
+    /** Commands that act on the company (adding a project), or the only table when there are no project tables. */
     readonly commands: Record<string, CommandSpec>,
-    private readonly o: { ownerAuth: OwnerAuth; audit: AuditSink; clock: Clock; limits?: Partial<DashboardLimits> },
+    private readonly o: {
+      ownerAuth: OwnerAuth;
+      audit: AuditSink;
+      clock: Clock;
+      limits?: Partial<DashboardLimits>;
+      /** The selected project's command table; null when that project is not open (M0-D2). */
+      projectCommands?: (projectId: string) => Record<string, CommandSpec> | null;
+    },
   ) {
     this.limits = { burst: 100, perSecond: 50, ...o.limits };
   }
@@ -97,8 +109,14 @@ export class Dashboard {
   async dispatch(ctx: CommandCtx, msg: Message): Promise<CommandResult> {
     const cmd = typeof msg.cmd === "string" ? msg.cmd : "";
     const args = Array.isArray(msg.args) ? msg.args : [];
-    const spec = NAME.test(cmd) && Object.hasOwn(this.commands, cmd) ? this.commands[cmd] : undefined;
     const label = NAME.test(cmd) ? cmd : `(${cmd.length} characters)`;
+    let table: Record<string, CommandSpec> | null = this.commands;
+    if (NAME.test(cmd) && !Object.hasOwn(this.commands, cmd) && this.o.projectCommands) {
+      // A project command acts on the project this connection views, and only while it is open.
+      table = typeof ctx.projectId === "string" ? safe(() => this.o.projectCommands!(ctx.projectId as string)) : null;
+      if (!table) return this.refuse(ctx, cmd, null, "failed");
+    }
+    const spec = NAME.test(cmd) && Object.hasOwn(table, cmd) ? table[cmd] : undefined;
     if (!spec || (spec.role !== "owner" && spec.role !== "supervisor")) return this.refuse(ctx, label, null, "unknown");
     const target = this.targetOf(spec, args);
     if (rank(ctx.role) < rank(spec.role)) return this.refuse(ctx, cmd, target, "forbidden");
@@ -127,7 +145,8 @@ export class Dashboard {
       if (spec.secret) log.warn(`command ${cmd} failed`);
       else log.warn(`command ${cmd} failed:`, String(err instanceof Error ? err.message : err).slice(0, 200));
       this.tryAppend(ctx, "dashboard.command-failed", target, { cmd });
-      return { ok: false, error: "failed" };
+      const message = !spec.secret && spec.explain ? safe(() => spec.explain!(err)) : null;
+      return message ? { ok: false, error: "failed", message: message.slice(0, 300) } : { ok: false, error: "failed" };
     }
   }
 
@@ -138,7 +157,7 @@ export class Dashboard {
       if (!all && now < w.start + MINUTE) continue;
       this.collapsed.delete(key);
       try {
-        this.o.audit.append({ actorKind: "human", actorId: w.actor, action: "dashboard.terminal", target: w.target, data: { cmd: w.cmd, count: w.count } });
+        this.o.audit.append({ actorKind: "human", actorId: w.actor, action: "dashboard.terminal", target: w.target, data: { cmd: w.cmd, count: w.count, ...(w.project ? { project: w.project } : {}) } });
       } catch {
         /* best effort: the keystrokes were already delivered */
       }
@@ -147,10 +166,12 @@ export class Dashboard {
 
   private countCollapsed(ctx: CommandCtx, cmd: string, target: string | null): void {
     this.flush();
-    const key = `${ctx.sessionId}\n${cmd}\n${target ?? ""}`;
+    // Keyed by project too: two projects can each have an agent with this id (SR-D-09).
+    const project = typeof ctx.projectId === "string" ? ctx.projectId : null;
+    const key = `${ctx.sessionId}\n${project ?? ""}\n${cmd}\n${target ?? ""}`;
     const w = this.collapsed.get(key);
     if (w) w.count++;
-    else this.collapsed.set(key, { start: this.now(), count: 1, actor: ctx.actor.id, cmd, target });
+    else this.collapsed.set(key, { start: this.now(), count: 1, actor: ctx.actor.id, cmd, target, project });
   }
 
   private refuse(ctx: CommandCtx, cmd: string, target: string | null, reason: CommandError): CommandResult {
@@ -164,7 +185,8 @@ export class Dashboard {
   }
 
   private append(ctx: CommandCtx, action: string, target: string | null, data: Record<string, unknown>): void {
-    this.o.audit.append({ actorKind: "human", actorId: ctx.actor.id, action, target, data });
+    const project = typeof ctx.projectId === "string" ? { project: ctx.projectId } : {};
+    this.o.audit.append({ actorKind: "human", actorId: ctx.actor.id, action, target, data: { ...data, ...project } });
   }
 
   private tryAppend(ctx: CommandCtx, action: string, target: string | null, data: Record<string, unknown>): boolean {
@@ -220,6 +242,8 @@ export function viewFor(role: HumanRole, e: OfficeEvent): OfficeEvent | null {
     case "snapshot": {
       const s = e.snapshot;
       const kept = {
+        projectId: s.projectId,
+        projects: s.projects,
         welcome: s.welcome,
         config: configForSupervisor(s.config),
         agents: s.agents.map(statusForSupervisor),

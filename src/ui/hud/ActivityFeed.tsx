@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { ActivityEvent, ActivityType } from "../../data/types";
 import { useOffice } from "../../store/office";
+import { authoredTitle } from "../agentText";
 import { ago, useNow } from "../kit";
 import { ActivityLine } from "../systemItems";
 
@@ -22,6 +23,16 @@ const ICON: Record<ActivityType, [string, string]> = {
 };
 
 const EMPTY: ActivityEvent[] = [];
+
+/** One activity line. When it quotes an agent, the tooltip names that agent first. */
+export function ActivityRowText({ event }: { event: ActivityEvent }) {
+  const title = event.quote ? authoredTitle(event.quote.author, `${event.text} ${event.quote.text}`) : event.text;
+  return (
+    <span className="min-w-0 flex-1 truncate" title={title}>
+      <ActivityLine event={event} />
+    </span>
+  );
+}
 
 export function ActivityFeed() {
   const activity = useOffice((s) => s.snap?.activity ?? EMPTY);
@@ -51,9 +62,7 @@ export function ActivityFeed() {
                 <span className="w-3 shrink-0 text-center" style={{ color }}>
                   {icon}
                 </span>
-                <span className="min-w-0 flex-1 truncate" title={e.text}>
-                  <ActivityLine event={e} />
-                </span>
+                <ActivityRowText event={e} />
                 <time className="shrink-0 text-[#7f8bb5]">{ago(e.at, now)}</time>
               </motion.li>
             );

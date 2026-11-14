@@ -31,6 +31,7 @@ function summary(e: OfficeEvent): string {
     case "snapshot": return "full snapshot";
     case "projectNotes.updated": return e.projectNotes.pending ? "CLAUDE.md waiting for approval" : "CLAUDE.md up to date";
     case "command.result": return `${e.id} ${e.ok ? "ok" : e.error}`;
+    case "projects.updated": return `${e.projects.length} projects`;
     case "workspace.info": return `${e.info.agentId} ${e.info.path}`;
     case "sbx.updated": return `base ${e.sbx.basePolicy}, ${Object.keys(e.sbx.agents).length} sandboxes`;
     case "setup.updated": return `sandbox ${e.setup.sandboxReady ? "ready" : "not ready"}`;
