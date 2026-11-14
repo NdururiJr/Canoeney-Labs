@@ -15,6 +15,32 @@ export function statusAfterClose(o: { code: number; opened: boolean; retry: numb
 
 const PIN_ERRORS = new Set(["pin-required", "pin-wrong", "pin-locked"]);
 
+/** GitHub creates the App: the browser posts the manifest there (CSP form-action allows github.com). */
+function postManifest(data: unknown): void {
+  const d = data as { url?: unknown; manifest?: unknown } | null;
+  if (!d || typeof d.url !== "string" || !d.url.startsWith("https://github.com/") || typeof d.manifest !== "object") return;
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = d.url;
+  const input = document.createElement("input");
+  input.type = "hidden";
+  input.name = "manifest";
+  input.value = JSON.stringify(d.manifest);
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+}
+
+/** GitHub sent the browser back with ?code&state: finish the App over the session, once the socket is open. */
+function takeGithubReturn(): { code: string; state: string } | null {
+  if (typeof location === "undefined" || location.pathname !== "/github-app") return null;
+  const q = new URLSearchParams(location.search);
+  const code = q.get("code");
+  const state = q.get("state");
+  history.replaceState(null, "", "/");
+  return code && state ? { code, state } : null;
+}
+
 export function createWsSource(): OfficeDataSource {
   let ws: WebSocket | null = null;
   const queue: string[] = [];
@@ -22,6 +48,7 @@ export function createWsSource(): OfficeDataSource {
   let seq = 0;
   /** The project this tab views; sent again after a reconnect, which starts on HQ's default. */
   let viewing: string | null = null;
+  const githubReturn = takeGithubReturn();
 
   const transmit = (cmd: string, args: unknown[], pin?: string) => {
     const id = `c${++seq}`;
@@ -34,10 +61,15 @@ export function createWsSource(): OfficeDataSource {
   };
   const send = (cmd: string, ...args: unknown[]) => transmit(cmd, args);
   /** HQ's answer to one command: ask for the PIN when it needs one. */
-  const onResult = (e: { id: string; ok: boolean; error?: string }) => {
+  const onResult = (e: { id: string; ok: boolean; error?: string; data?: unknown }) => {
     const sent = pending.get(e.id);
     pending.delete(e.id);
     if (sent && !e.ok && e.error && PIN_ERRORS.has(e.error)) askPin({ ...sent, reason: e.error as "pin-required" });
+    if (sent?.cmd === "createGithubIdentity" && e.ok) postManifest(e.data);
+    if (sent?.cmd === "completeGithubIdentity" && e.ok) {
+      const url = (e.data as { installUrl?: unknown } | null)?.installUrl;
+      if (typeof url === "string" && url.startsWith("https://github.com/apps/")) location.assign(url);
+    }
   };
 
   const source: OfficeDataSource = {
@@ -62,6 +94,7 @@ export function createWsSource(): OfficeDataSource {
           ws = sock;
           onStatus?.("open");
           if (viewing) sock.send(JSON.stringify({ type: "select", projectId: viewing }));
+          if (githubReturn) transmit("completeGithubIdentity", [githubReturn.state, githubReturn.code]);
           while (queue.length) sock.send(queue.shift() as string);
         };
         sock.onmessage = (m) => {
@@ -106,6 +139,7 @@ export function createWsSource(): OfficeDataSource {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "select", projectId: id }));
     },
     addProject: (path) => send("addProject", path),
+    createGithubIdentity: (agentId) => send("createGithubIdentity", agentId),
     sendTerminalInput: (id, data) => send("sendTerminalInput", id, data),
     resizeTerminal: (id, cols, rows) => send("resizeTerminal", id, cols, rows),
     assignTask: (taskId, agentId) => send("assignTask", taskId, agentId),

@@ -23,6 +23,8 @@ export interface CommandCtx {
   pin?: boolean;
   /** The project this connection views (M0-D2); project commands act on it only. */
   projectId?: string | null;
+  /** The page's own origin, as the WebSocket upgrade checked it (M0-E: the GitHub App's return address). */
+  origin?: string;
 }
 
 export interface CommandSpec {
@@ -38,13 +40,15 @@ export interface CommandSpec {
   audit?: "per-call" | "collapsed";
   /** Takes a secret value: no error text from it reaches a reply, the feed or the log. */
   secret?: true;
+  /** The reply carries what `run` returns (only for commands whose result the page needs, never a secret). */
+  returns?: true;
   /** For a failure whose text is HQ's own (never a value or another program's output): the message for the reply. */
   explain?: (err: unknown) => string | null;
   run: (ctx: CommandCtx, ...args: unknown[]) => unknown;
 }
 
 export type CommandError = "unknown" | "forbidden" | "remote" | "pin-required" | "pin-wrong" | "pin-locked" | "rate-limited" | "failed";
-export type CommandResult = { ok: true } | { ok: false; error: CommandError; message?: string };
+export type CommandResult = { ok: true; data?: unknown } | { ok: false; error: CommandError; message?: string };
 
 interface Message {
   cmd?: unknown;
@@ -138,8 +142,8 @@ export class Dashboard {
     else if (!this.tryAppend(ctx, "dashboard.command", target, { cmd, outcome: "run" })) return { ok: false, error: "failed" };
     try {
       // The PIN authority is set here and only here; a caller's own `pin` is never trusted.
-      await spec.run({ ...ctx, pin: needsPin }, ...args);
-      return { ok: true };
+      const value = await spec.run({ ...ctx, pin: needsPin }, ...args);
+      return spec.returns && value !== undefined ? { ok: true, data: value } : { ok: true };
     } catch (err) {
       // A failure's text never reaches the reply or the audit row, and for a command that takes a secret not even the log.
       if (spec.secret) log.warn(`command ${cmd} failed`);

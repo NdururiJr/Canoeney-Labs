@@ -83,6 +83,20 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
           )}
         </div>
       </div>
+      <div className="flex items-center gap-2 border-t-2 border-dashed border-cream-3 px-3 py-1 text-[12px] text-muted">
+        {agent.github ? (
+          <span>
+            GitHub: works as <code>{agent.github.app}</code>. Install it on this project's repo only.
+          </span>
+        ) : (
+          <>
+            <span className="flex-1">No GitHub identity yet: this agent can't push or open pull requests.</span>
+            <button className="btn px-2 text-[12px]" onClick={() => officeActions.createGithubIdentity(agent.id)} title="Creates this agent's own GitHub App on GitHub (asks for your PIN)">
+              Create GitHub identity
+            </button>
+          </>
+        )}
+      </div>
       {agent.mode === "local" && (
         <div className="border-t-2 border-dashed border-cream-3 px-3 py-1 text-[12px] text-muted">
           Local mode runs plain <code>{agent.cli}</code> in the agent's own folder. Permission prompts stay on.

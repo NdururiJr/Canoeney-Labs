@@ -161,6 +161,7 @@ export const officeActions = {
     source.selectProject(id);
   },
   addProject: (path: string) => source.addProject(path),
+  createGithubIdentity: (agentId: string) => source.createGithubIdentity(agentId),
   previewRepoImport: () => source.previewRepoImport(),
   importRepoConfig: (sha256: string) => source.importRepoConfig(sha256),
   approveProjectNotes: (sha256: string) => source.approveProjectNotes(sha256),

@@ -514,6 +514,9 @@ export function createMockSource(): OfficeDataSource {
       reset();
       boot();
     },
+    createGithubIdentity() {
+      world.activity("config", null, "Demo data: GitHub identities need the real HQ.");
+    },
     addProject() {
       world.activity("config", null, "Demo data: adding a project needs the real HQ.");
     },

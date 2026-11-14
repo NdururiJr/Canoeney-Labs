@@ -428,7 +428,14 @@ export class ProjectSettings {
       sandbox: { resources: s.resources, allow: of("network-allow"), deny: of("network-deny") },
       workspacePath: s.workspacePath,
       mcp: of("mcp-server"),
+      github: this.githubApp(a.companyId),
     };
+  }
+
+  /** The agent's own GitHub App, if created (M0-E). Never its key. */
+  private githubApp(companyId: string): { app: string } | null {
+    const r = this.db.prepare("SELECT slug FROM agent_github_apps WHERE agent_id = ?").get<{ slug: string }>(companyId);
+    return r ? { app: r.slug } : null;
   }
 
   /** The agent's settings row, or the defaults for an agent that has none. */

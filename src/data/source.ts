@@ -53,7 +53,7 @@ export type OfficeEvent =
   /** The projects HQ manages changed: one was added, or its state changed (M0-D2). */
   | { type: "projects.updated"; projects: ProjectSummary[] }
   /** The answer to one command, sent only to the socket that sent it (M0-C). */
-  | { type: "command.result"; id: string; ok: boolean; error?: string; message?: string };
+  | { type: "command.result"; id: string; ok: boolean; error?: string; message?: string; data?: unknown };
 
 export type SimSpeed = 1 | 2 | 4;
 
@@ -78,6 +78,8 @@ export interface OfficeDataSource {
 
   /** Views another project: HQ answers with its snapshot (M0-D2). */
   selectProject(id: string): void;
+  /** The owner creates the agent's own GitHub App (M0-E): HQ answers with a manifest the page posts to GitHub. */
+  createGithubIdentity(agentId: string): void;
   /** The owner adds a repo on this machine as a project. Needs the PIN: HQ asks for it as for any relaxing change. */
   addProject(path: string): void;
 

@@ -6,6 +6,8 @@ import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
 import { HumanAccounts } from "./humanAccounts";
+import { fetchGitHubApi, type GitHubApi } from "../github/api";
+import { GitHubApps } from "../github/apps";
 import { PlanStore } from "./planStore";
 import { ProjectNotes } from "./projectNotes";
 import { ProjectSettings } from "./projectSettings";
@@ -38,13 +40,15 @@ export interface Company {
   plans: PlanStore;
   /** The owner-approved project notes (CLAUDE.md) agents read (M0-D1, SR-D-07). */
   notes: ProjectNotes;
+  /** Each agent's own GitHub App, its private key sealed with the owner key (M0-E). */
+  githubApps: GitHubApps;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
 }
 
 /** Open the company store at `home` and build every slot on it. */
-export function openCompany(opts: { home: string; repoRoot: string | null; clock?: Clock }): Company {
+export function openCompany(opts: { home: string; repoRoot: string | null; clock?: Clock; githubApi?: GitHubApi }): Company {
   const { home, repoRoot } = opts;
   if (repoRoot !== null && isInside(home, repoRoot)) {
     throw new Error(`The company home ${home} is inside the repository ${repoRoot}. Set HQ_COMPANY_HOME to a folder outside it.`);
@@ -63,6 +67,7 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
     plans: new PlanStore(db),
     notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
+    githubApps: new GitHubApps({ db, audit, clock, keyFile: join(home, "owner.key"), api: opts.githubApi ?? fetchGitHubApi() }),
     home,
     db,
     clock,

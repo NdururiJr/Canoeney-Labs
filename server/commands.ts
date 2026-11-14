@@ -15,6 +15,7 @@ import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
 import { ProjectRefusedError } from "./hqSource";
+import { GitHubAppRefusedError } from "./github/apps";
 import type { AgentSettingsPatch } from "./company/projectSettings";
 import type { CommandCtx, CommandSpec } from "./dashboard";
 import { applyImport, boardTitles, hasRepoConfig, previewImport, readImport } from "./repoConfigImport";
@@ -450,6 +451,27 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     } },
 
     createBoard: { role: "owner", run: (_ctx, title) => planner.createBoard(str(title, 80)) },
+
+    /**
+     * An agent's own GitHub App (M0-E). The reply is the manifest the page posts
+     * to GitHub, bound to this session by a one-time state. Local only: GitHub
+     * sends the browser back to this machine.
+     */
+    createGithubIdentity: { role: "owner", pin: true, localOnly: true, returns: true, target: first, run: (ctx, id) => {
+      const agentId = str(id, 80);
+      if (!hub.cfg(agentId)) throw new Error("unknown agent");
+      const repo = hub.repo.github;
+      if (!repo) throw new Error("This project has no GitHub repo.");
+      if (!ctx.origin) throw new Error("no origin");
+      return company.githubApps.start(cid(agentId), repo, ctx.actor.id, ctx.sessionId, ctx.origin);
+    }, explain: (err) => (err instanceof Error && /no GitHub repo/.test(err.message) ? err.message : null) },
+
+    /** GitHub sent the browser back with a code: finish the App, then the page opens its install page. */
+    completeGithubIdentity: { role: "owner", localOnly: true, returns: true, run: async (ctx, state, code) => {
+      const done = await company.githubApps.complete(str(state, 200), str(code, 200), ctx.actor.id, ctx.sessionId);
+      hub.configChanged();
+      return done;
+    }, explain: (err) => (err instanceof GitHubAppRefusedError ? err.message : null) },
 
     updateBoard: { role: "owner", target: first, run: (_ctx, id, patch) => {
       const p = (patch ?? {}) as Partial<Board>;

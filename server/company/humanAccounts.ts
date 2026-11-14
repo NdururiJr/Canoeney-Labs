@@ -5,8 +5,8 @@
 // - The TOTP seed is encrypted with AES-256-GCM. Its key is a file next to the
 //   store, never in it, so a copy of company.db alone opens no seed.
 // - A TOTP step is used once: the last one is stored and only moves forward.
-import { createCipheriv, createDecipheriv, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { open, seal } from "./sealed";
 import type { Clock } from "./clock";
 import type { CompanyDb } from "./db";
 import type { AuditSink } from "./slots/types";
@@ -16,7 +16,6 @@ import type { HumanRole } from "./types";
 const SCRYPT = { logN: 15, r: 8, p: 1, keyLen: 32, saltLen: 16 } as const;
 const SCRYPT_MAXMEM = 64 * 1024 * 1024;
 const SEED_BYTES = 20;
-const KEY_BYTES = 32;
 
 export const PASSWORD_MIN = 12;
 export const PASSWORD_MAX = 256;
@@ -195,39 +194,11 @@ export class HumanAccounts {
     return replay;
   }
 
-  private key(create: boolean): Buffer | null {
-    if (!existsSync(this.keyFile)) {
-      if (!create) return null;
-      try {
-        writeFileSync(this.keyFile, randomBytes(KEY_BYTES), { mode: 0o600, flag: "wx" });
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      }
-    }
-    const key = readFileSync(this.keyFile);
-    return key.length === KEY_BYTES ? key : null;
-  }
-
   private seal(seed: Buffer): string {
-    const key = this.key(true);
-    if (!key) throw new Error(`The key file ${this.keyFile} is damaged. Run reset-owner on the host.`);
-    const iv = randomBytes(12);
-    const c = createCipheriv("aes-256-gcm", key, iv);
-    const ct = Buffer.concat([c.update(seed), c.final()]);
-    return ["v1", iv, c.getAuthTag(), ct].map((x) => (typeof x === "string" ? x : x.toString("base64url"))).join(":");
+    return seal(this.keyFile, seed);
   }
 
   private open(sealed: string): Buffer | null {
-    const key = this.key(false);
-    if (!key) return null;
-    const [v, iv, tag, ct] = sealed.split(":");
-    if (v !== "v1" || !iv || !tag || !ct) return null;
-    try {
-      const d = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
-      d.setAuthTag(Buffer.from(tag, "base64url"));
-      return Buffer.concat([d.update(Buffer.from(ct, "base64url")), d.final()]);
-    } catch {
-      return null; // another key: the seed does not open
-    }
+    return open(this.keyFile, sealed);
   }
 }

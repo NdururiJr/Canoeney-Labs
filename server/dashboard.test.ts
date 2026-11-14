@@ -67,6 +67,8 @@ function sampleArgs(d: DashboardHq): Record<string, unknown[]> {
     updateProject: [{ name: "Fixture" }],
     createBoard: ["Board"],
     updateBoard: ["B-1", { title: "x" }],
+    createGithubIdentity: ["ana"],
+    completeGithubIdentity: ["no-such-state", "code"],
   };
 }
 

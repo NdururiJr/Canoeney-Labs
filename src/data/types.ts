@@ -43,6 +43,8 @@ export interface AgentConfig {
   roleMd: string; // contents of ROLE.md
   sandbox: SandboxSettings;
   workspacePath: string | null; // an existing folder to use; null = HQ-managed clone
+  /** The agent's own GitHub App, when the owner has created it (M0-E). Owner only. */
+  github?: { app: string } | null;
   /** MCP servers (names in sbx's registry) this agent's sandbox gets. */
   mcp?: string[];
 }
