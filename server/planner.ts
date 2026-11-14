@@ -21,7 +21,7 @@ export type TaskPatch = Partial<Pick<Task, "title" | "description" | "files" | "
 
 const now = () => new Date().toISOString();
 
-/** SR-D-08: only a merge (or the CTO) closes a builder's task. */
+/** SR-D-08: only a merge (or the CTO) closes a task. */
 export const SELF_DONE = "HQ marks a task done when its PR is merged. Call set_my_status in-review with the PR number.";
 
 export interface PlannerStore {
@@ -173,7 +173,8 @@ export class Planner {
   setStatus(agentId: string, status: Extract<TaskStatus, "in-progress" | "blocked" | "in-review" | "done">, note?: string, prNumber?: number): Task {
     const task = this.currentTask(agentId);
     if (!task) throw new Error("You have no task. Ask the lead for one.");
-    if (status === "done" && this.store.roleOf(agentId) === "builder") throw Object.assign(new Error(SELF_DONE), { code: "SELF_DONE" });
+    // Only the CTO closes a task itself; every other role waits for the merge (PR #8 review).
+    if (status === "done" && this.store.roleOf(agentId) !== "cto") throw Object.assign(new Error(SELF_DONE), { code: "SELF_DONE" });
     const next: Task = { ...task, status, note: note?.slice(0, 300) || null, prNumber: prNumber || task.prNumber };
     this.putTask(next);
     Object.assign(task, next);
