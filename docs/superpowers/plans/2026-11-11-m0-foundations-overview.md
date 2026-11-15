@@ -14,7 +14,7 @@ M0 has 18 goals that fall into separate pieces of software. Each piece gets its 
 | **M0-D1 Company store holds the configuration** (`2026-11-12-m0d1-company-store.md`) | M0.11 config and `plan.json` move to the company store (S7); D1: agents ignore the agent configuration a repo carries; the M0-D carry-forward | A, B, C | No (D1 decided 2026-11-12) |
 | **M0-D2 One HQ, many projects** (`2026-11-13-m0d2-many-projects.md`) | M0.12 many projects under one company with a project switcher, HQ source off-limits (SR-D-05), company website as first project; per-project isolation (SR-D-09); M0.14 company-level workspaces (SR-D-06) | D1 | No |
 | **M0-E Least-privilege GitHub** (`2026-11-14-m0e-least-privilege-github.md`) | M0.10 scoped identity per agent, branch protection, no global consequential secrets, no Local mode for company agents (S3); merge-by as a gated setting; Actions hardening (S9); D2 | B, D | No (decided 2026-11-14: one GitHub App per agent; the website repo is public, so no spend yet) |
-| **M0-F Per-role skills** | M0.18 skills vendored into company-owned forks, pinned by hash, installed per role, changes as category 2 (S12) | A, B | No (the company skill repo is created by the owner) |
+| **M0-F Per-role skills** (`2026-11-15-m0f-per-role-skills.md`) | M0.18 skills vendored into company-owned forks, pinned by hash, installed per role, changes as category 2 (S12) | A, B | No (the company skills repo `NdururiJr/canoeney-skills` was created 2026-11-15) |
 | **M0-G Always-on operations** | M0.6 Linux host; M0.15 external uptime check, public health path, daily heartbeat; M0.16 encrypted nightly off-host backup, daily audit-head anchor, tested restore | A (and C for the public endpoint) | **Yes:** host and monthly budget, after the virtualisation check |
 | **M0-H Rename** | M0.1 new name and logo; M0.17 `~/.jsmhq`, `.jsmhq/`, bin name, `X-HQ-Agent` header | A (it adds `HQ_DIRNAME`) | Name chosen: **Canoeney Labs**. The logo is still open |
 
@@ -41,7 +41,7 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | Done 2026-11-14 | GitHub identity: one GitHub App per agent (a shared App cannot meet SR-E-03 or SR-E-12). GitHub Pro later, once budgeted | M0.10 |
 | Done 2026-11-14 | Local mode is forbidden for every agent: every agent runs in a Docker Sandbox. The owner's desktop runs sandboxes once Docker Sandboxes (`sbx`) is installed | M0.10, SR-E-06 |
 | With the move to GitHub Pro | Make this repo (Canoeney-Labs) private: it develops a different product from jsm-hq. A fork of a public repo can't be made private in place (a new private repo with the full history, or GitHub Support detaches it). On GitHub Free a private repo loses `main`'s branch protection, so the move waits for Pro. Owner-controlled (`.github/`, `CLAUDE.md`, gh's default repo) | Owner, 2026-11-14 |
-| Before M0-F | Create the company-owned skills repository | M0.18 |
+| Done 2026-11-15 | Create the company-owned skills repository: `NdururiJr/canoeney-skills`, **public**. It was created private, but on GitHub Free a private repo gets no branch protection or rulesets (GitHub: "Upgrade to GitHub Pro or make this repository public"), which SR-F-08 needs. A ruleset `skills-main` blocks deleting and force-pushing its default branch. The owner also limited every GitHub App installation to selected repos and deleted the M0-E exit check's three test Apps | M0.18, SR-F-08 |
 | M0 exit | Run `/security-audit` in full mode on the fork; fix or accept each finding; approve the M0 review | M0.8, §6 |
 
 ## M0 exit gate → plan
@@ -118,7 +118,7 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | M0-C plan: the read-only supervisor UI | M1 (M1.11) |
 | M0-D1 plan: check on the Linux host whether `claude --setting-sources user` (project and local settings off) still runs the hooks HQ passes with `--settings`, and whether Codex has a switch that stops `AGENTS.md`. If they work, add them as a second layer to D1's sparse checkout | M0-G, on the Linux host |
 | PR #6 review (non-blocking): `ProjectSettings` accepts any `approved` decision for any relaxing change, any number of times. Accept a decision only for the change its stored parameters name, and only once (`execution_status`). Nothing in M0-D1 creates decisions, so nothing is open before then | M1 (M1.4, with SR-M1-03) |
-| PR #6 review (non-blocking): a stack skill whose name the repo commits is skipped, so a PR can take that skill away from every agent. M0-D1 reports it in the activity (plan Task 5). Install HQ's skills where a repo path cannot shadow them | M0-F |
+| PR #6 review (non-blocking): a stack skill whose name the repo commits is skipped, so a PR can take that skill away from every agent. M0-D1 reports it in the activity (plan Task 5). Install HQ's skills where a repo path cannot shadow them | M0-F (plan Task 5: HQ's copy is written over the skip-worktree path, `sparse.expectFilesOutsideOfPatterns`) |
 | PR #7 review (non-blocking): `README.md:38`, `README.md:74` and `docs/getting-started.md:7` still say HQ works on macOS, but CI no longer runs on a Mac (owner decision, 2026-11-13). Say macOS is untested in this fork, or record why the docs stay | M0-H (the rename rewrites these docs) |
 | M0-D1 plan: an agent can turn sparse checkout off in its own folder and read the repo's `CLAUDE.md` there. This reaches only that agent (T-S6.10, accepted). Security & Audit can flag it from the agent's shell history | M1 (M1.8) |
 | PR #6 review, round 2 (non-blocking): show each board's task titles in the import preview, as agent text | Done (M0-D1 plan Task 3, PR #8) |
@@ -153,3 +153,20 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | M0-D2 final review (deferred): a chosen monorepo subfolder is refused for a sibling folder's tracked `CLAUDE.md` | M0-E (plan Task 8, item 10: documented as intended) |
 | M0-D2 final review (deferred): a company workspace is known only inside `start()`; reattach, the Shell tab and `inspectWorkspace` still use `workspaceFor` | M1 (the plan that adds the company-level agents) |
 | M0-E plan: a token delivered into a real sandbox and refreshed there, and sbx's record of outbound requests (SR-E-15) | M0-G, on the Linux host |
+| PR #12 review (non-blocking): `revoke` with no token held leaves a `github` key in the sandbox | M0-F (plan Task 9, item 1) |
+| PR #12 review (non-blocking): the token refresh delay has no floor (NaN or negative loops), and a failed refresh is silent | M0-F (plan Task 9, item 2) |
+| PR #12 review (non-blocking): `hq-unclaimed` does not restrict deletion | M0-F (plan Task 9, item 3) |
+| PR #12 review (non-blocking): a failed App lookup in `guardAgents` reads as "not installed", and Apply can then write rulesets from it | M0-F (plan Task 9, item 4) |
+| PR #12 review (non-blocking): GitHub drift is only an activity line | M0-F (plan Task 9, item 5: a mark on the Settings button); M1 (route it to the alert channel) |
+| PR #12 review (non-blocking): the owner's task text is not checked for key shapes | M0-F (plan Task 9, item 6: the dashboard sets no task text; documented, with a test that fails if a command adds it) |
+| PR #12 review (non-blocking): the SR-E-07 revoke test is titled `[T-S3.11]`; the threat model lists it under T-S3.9 | M0-F (plan Task 9, item 7) |
+| M0-E final review (deferred): the GitHub return is sent again on every reconnect | M0-F (plan Task 9, item 8) |
+| M0-E final review (deferred): a crash's `.hq-tmp-*` file is not git-excluded | M0-F (plan Task 9, item 9) |
+| M0-E final review (deferred): `GitHubApps.pending` is never pruned | M0-F (plan Task 9, item 10) |
+| M0-E final review (deferred): `createGithubIdentity` accepts a company-level agent | M0-F (plan Task 9, item 11) |
+| M0-E final review (deferred): the guard's `private` flag is wrong once a spending limit has been confirmed | M0-F (plan Task 9, item 12) |
+| M0-E exit check, owner feedback: creating a GitHub identity leaves the owner on GitHub's page. Open GitHub in a new tab, and give the manifest a `setup_url` that brings the browser back to HQ | M0-H |
+| M0-E exit check: the authenticator enrollment screen shows only the key; add a QR code | M0-H |
+| M0-E exit check: a wrong host clock made every TOTP code fail with no hint. Say "your computer's clock looks off" after failures, and check the clock's skew at startup | M0-H |
+| M0-E exit check: HQ did not find `sbx` when its `PATH` predated the install. Also look in sbx's install folder | M0-H |
+| M0-E exit check: the guard's "main missing" text shows when `main` exists but the read failed | M0-H |
