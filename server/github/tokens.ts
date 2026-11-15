@@ -34,6 +34,20 @@ const realSchedule: Schedule = (fn, ms) => {
   return () => clearTimeout(t);
 };
 
+/**
+ * Pausing or retiring one of this project's agents revokes its token, with the actor who
+ * did it (SR-E-07). Returns the unsubscribe.
+ */
+export function revokeOnStatus(
+  agents: { onStatusChange(fn: (companyId: string, to: string, by: Actor) => void): () => void },
+  tokens: Pick<AgentTokens, "revoke">,
+  slug: string,
+): () => void {
+  return agents.onStatusChange((cid, to, by) => {
+    if ((to === "paused" || to === "retired") && cid.startsWith(`${slug}/`)) void tokens.revoke(cid.slice(slug.length + 1), to, by);
+  });
+}
+
 export class AgentTokens {
   private readonly held = new Map<string, Held>();
   private readonly schedule: Schedule;

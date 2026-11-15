@@ -5,7 +5,7 @@ import { makeHq } from "../testing/hqFixture";
 import { withSessions } from "../testing/sessionFixture";
 import type { GitHubApi } from "./api";
 import { APP_PERMISSIONS } from "./appManifest";
-import { AgentTokens } from "./tokens";
+import { AgentTokens, revokeOnStatus } from "./tokens";
 
 const NOW = "2026-11-14T10:00:00.000Z";
 const HOUR = 3_600_000;
@@ -179,4 +179,29 @@ test("an agent that has no sandbox gets no token", async (t) => {
   hq.hub.cfg("ana")!.mode = "local"; // Task 6 removes Local mode; this guards the code path
   await sessions.start("ana", OWNER);
   assert.equal(asked.filter((a) => a.startsWith("deliver")).length, 0);
+});
+
+// PR #12 review, round 1: Pause and Retire reach the revoke (SR-E-07), through the registry.
+test("SR-E-07 [T-S3.11] pausing or retiring an agent revokes its token; another project's agent is not touched", async (t) => {
+  const hq = await makeHq(t);
+  const h = harness();
+  const unwatch = revokeOnStatus(hq.company.agents, h.tokens, hq.slug);
+  const other = revokeOnStatus(hq.company.agents, harness().tokens, "other-project");
+  t.after(() => {
+    unwatch();
+    other();
+  });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  for (const [agent, to] of [["ana", "paused"], ["ben", "retired"]] as const) {
+    await h.tokens.deliver(agent, `${hq.slug}/${agent}`, "acme/site");
+    const token = h.keys.at(-1)!.split(" ").at(-1)!;
+    hq.company.agents.setStatus(hq.slug, agent, to, OWNER);
+    await tick();
+    await tick();
+    const deletes = h.calls.filter((c) => c.method === "DELETE" && c.path === "/installation/token");
+    assert.equal(deletes.at(-1)?.token, token, `${to}: that agent's token is revoked`);
+    const row = h.rows.filter((r) => r.action === "github.token-revoked").at(-1);
+    assert.deepEqual([row?.actorId, row?.data.reason], ["owner", to]);
+  }
+  assert.equal(h.calls.filter((c) => c.method === "DELETE").length, 2, "one revoke per change");
 });

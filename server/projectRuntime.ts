@@ -21,7 +21,7 @@ import { Sbx } from "./sbx";
 import { SbxMcp } from "./sbxMcp";
 import { Sessions } from "./sessions";
 import { companyAgentId } from "./company/agents";
-import { AgentTokens } from "./github/tokens";
+import { AgentTokens, revokeOnStatus } from "./github/tokens";
 import { ghCliApi } from "./github/api";
 import { guardCommands, spendingConfirmed } from "./github/guardCommands";
 import { applyRepoGuard, RepoWatch, type GuardAgent } from "./github/repoGuard";
@@ -100,9 +100,7 @@ export class ProjectRuntime {
       deliver: (id) => tokens.deliver(id, companyAgentId(slug, id), repo.github),
       revoke: (id, reason, by) => tokens.revoke(id, reason, by),
     };
-    const unwatch = company.agents.onStatusChange((cid, to, by) => {
-      if ((to === "paused" || to === "retired") && cid.startsWith(`${slug}/`)) void tokens.revoke(cid.slice(slug.length + 1), to, by);
-    });
+    const unwatch = revokeOnStatus(company.agents, tokens, slug);
     sessions.globalGithubKey = async () => {
       await sbx.refresh();
       return sbx.globalGithubKey();

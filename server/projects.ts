@@ -175,6 +175,13 @@ export class Projects {
     const row = this.company.db.prepare("SELECT repo FROM projects WHERE id = ?").get<{ repo: string }>(id);
     if (!row) throw new Error(`No project ${id}.`);
     const repo = await this.detect(row.repo);
+    // The same checks as add and openAll, before anything is written (SR-D-05, PR #12 review).
+    const actor = actorOf(by);
+    await refuseHqSource(this.company, repo.root, actor);
+    if (inHqHome(repo.root)) {
+      this.company.audit.append({ actorKind: actor.kind, actorId: actor.id, action: "project.refused", target: repo.root, data: { reason: "hq-home" } });
+      throw new ProjectRefusedError("hq-home");
+    }
     const before = this.company.db.prepare("SELECT github FROM project_settings WHERE project_id = ?").get<{ github: string | null }>(id)?.github ?? null;
     // A GitHub repo change relaxes a control: ProjectSettings refuses it without the PIN (SR-D-03).
     this.company.settings.updateProject(id, { github: repo.github }, by);

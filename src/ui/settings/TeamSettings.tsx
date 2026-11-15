@@ -5,6 +5,7 @@ import { officeActions, useOffice } from "../../store/office";
 import { agentPalette } from "../../theme/tokens";
 import { Field, Portrait, SectionTitle } from "../kit";
 import { CommitInput } from "./controls";
+import { LocalModeNotice } from "./LocalModeNotice";
 import { RemoveAgentDialog } from "./RemoveAgentDialog";
 
 export function CliSelect({ value, onChange }: { value: AgentCli; onChange: (v: AgentCli) => void }) {
@@ -96,11 +97,7 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
           </>
         )}
       </div>
-      {agent.mode === "local" && (
-        <div className="border-t-2 border-dashed border-cream-3 px-3 py-1 text-[12px] text-muted">
-          This agent is set to Local mode, which HQ no longer runs: switch it to Sandbox to start it.
-        </div>
-      )}
+      {agent.mode === "local" && <LocalModeNotice onSwitch={set} />}
       {expanded && (
         <div className="grid grid-cols-2 gap-3 border-t-[3px] border-ink bg-cream p-3">
           <Field label="Colour">
