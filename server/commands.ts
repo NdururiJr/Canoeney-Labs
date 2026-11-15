@@ -9,12 +9,13 @@ import { stackSkills } from "../src/data/stack";
 import { cleanStack } from "./stackClean";
 import { resolveAccess } from "./access";
 import { ensureSkillCache } from "./skills";
-import { run } from "./lib/exec";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { hasCredentialShape } from "./company/audit";
 import { ProjectRefusedError } from "./hqSource";
+import { GitHubAppRefusedError } from "./github/apps";
 import type { AgentSettingsPatch } from "./company/projectSettings";
 import type { CommandCtx, CommandSpec } from "./dashboard";
 import { applyImport, boardTitles, hasRepoConfig, previewImport, readImport } from "./repoConfigImport";
@@ -28,6 +29,25 @@ import type { SbxMcp } from "./sbxMcp";
 import type { Sessions } from "./sessions";
 import { mergeByNotice } from "./githubSync";
 
+
+/** HQ's own refusal texts: no value from the command reaches them. */
+class SecretShaped extends Error {
+  constructor() {
+    super("That text looks like a key or a token. HQ doesn't send secret values into a sandbox; give the agent a test credential through an approved variable instead (from M2).");
+  }
+}
+const secretShapeMessage = (err: unknown) => (err instanceof SecretShaped ? err.message : null);
+class EnvFilesOff extends Error {
+  constructor() {
+    super("App variables files are off: no secret values go into sandboxes until you approve each variable (M2).");
+  }
+}
+
+class GlobalKeyRefused extends Error {
+  constructor() {
+    super("A GitHub key would let an agent merge and change repo settings. Give each agent its own GitHub identity in Settings → Team instead.");
+  }
+}
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "agent";
 const str = (v: unknown, max = 2000) => (typeof v === "string" ? v.slice(0, max) : "");
@@ -48,6 +68,12 @@ const proxyHost = (u: string) => {
 };
 
 export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inbox: Inbox, sbx: Sbx, mcp: SbxMcp, company: Company) {
+  /** Text the owner sends into an agent's session must not carry a key (D2, SR-E-13, T-S3.6). */
+  const refuseSecretShape = (ctx: CommandCtx, text: string) => {
+    if (!hasCredentialShape(text)) return;
+    company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "message.refused", target: null, data: { reason: "secret-shape" } });
+    throw new SecretShaped();
+  };
   /**
    * Runs an sbx change and reports it in the activity feed. For a command that
    * takes a secret, a failure is reported without sbx's text, which can repeat
@@ -143,7 +169,10 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
 
     // You → agent: same delivery path as the lead's assign_task / send_message.
     assignTask: { role: "owner", target: first, run: (_ctx, taskId, agentId) => planner.assign(str(taskId, 40), str(agentId, 80), "you") },
-    sendMessage: { role: "owner", target: first, run: (_ctx, toId, text) => planner.message("you", str(toId, 80), str(text, 2000)) },
+    sendMessage: { role: "owner", target: first, run: (ctx, toId, text) => {
+      refuseSecretShape(ctx, str(text, 2000));
+      planner.message("you", str(toId, 80), str(text, 2000));
+    }, explain: secretShapeMessage },
 
     addAgent: { role: "owner", pin: true, run: (ctx, raw) => {
       const input = (raw ?? {}) as Partial<NewAgentInput>;
@@ -242,12 +271,20 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       const svc = str(service, 40);
       if (!(SERVICE_KEYS as readonly string[]).includes(svc) || typeof value !== "string" || !value.trim()) return;
       if (agentId && !hub.cfg(agentId)) return;
+      // A GitHub key, for every sandbox or for one, would give an agent the owner's GitHub powers
+      // (SR-E-05); each agent works as its own App instead (final review, Important 6).
+      if (svc === "github") {
+        company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "settings.refused", target: agentId ? cid(agentId) : null, data: { change: "key", service: "github", scope: agentId ? "sandbox" : "global", reason: "consequential", authority: authorityOf(ctx).via } });
+        throw new GlobalKeyRefused();
+      }
       // The store records which key the owner set for which agent, never the value (SR-D-10).
       return attempt(agentId, `Stored the ${svc} key ${agentId ? `for ${hub.name(agentId)}'s sandbox` : "for every sandbox"}`, async () => {
         await sbx.setKey(agentId, svc, value);
         if (agentId) company.settings.grant(cid(agentId), "secret-name", svc, authorityOf(ctx));
+        // A key for every sandbox has no permissions row: the audit trail records it (PR #8 carry-forward).
+        else company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "sbx.key-changed", target: null, data: { service: svc, scope: "global", change: "set", authority: authorityOf(ctx).via } });
       }, true);
-    } },
+    }, explain: (err) => (err instanceof GlobalKeyRefused ? err.message : null) },
     removeSecret: { role: "owner", target: first, run: (ctx, id, service) => {
       const agentId = id === null ? null : str(id, 80);
       const svc = str(service, 40);
@@ -255,6 +292,7 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       return attempt(agentId, `Removed the ${svc} key ${agentId ? `from ${hub.name(agentId)}'s sandbox` : "from every sandbox"}`, async () => {
         await sbx.removeKey(agentId, svc);
         if (agentId) company.settings.revoke(cid(agentId), "secret-name", svc, authorityOf(ctx));
+        else company.audit.append({ actorKind: "human", actorId: ctx.actor.id, action: "sbx.key-changed", target: null, data: { service: svc, scope: "global", change: "removed", authority: authorityOf(ctx).via } });
       });
     } },
     setProxy: { role: "owner", pin: true, secret: true, run: (_ctx, url) => {
@@ -262,17 +300,13 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
       if (u && !/^https?:\/\/[^\s]+$/i.test(u)) return hub.activity("config", null, "Proxy must be an http(s):// URL");
       return attempt(null, u ? `Set the sandbox proxy to ${proxyHost(u)}` : "Removed the sandbox proxy", () => sbx.setProxy(u), true);
     } },
-    openEnvFile: { role: "owner", localOnly: true, target: first, run: async (_ctx, id) => {
-      const agent = hub.cfg(str(id, 80));
-      if (!agent) return;
-      const file = sbx.ensureEnvFile(agent.id);
-      const [cmd, args] = process.platform === "darwin" ? ["open", ["-t", file]] : process.platform === "win32" ? ["notepad", [file]] : ["xdg-open", [file]];
-      await run(cmd, args, { timeoutMs: 5000 });
-      await sbx.refresh();
+    openEnvFile: { role: "owner", localOnly: true, target: first, explain: (err) => (err instanceof EnvFilesOff ? err.message : null), run: async (_ctx, _id) => {
+      throw new EnvFilesOff();
     } },
     refreshSbx: { role: "owner", run: () => sbx.refresh() },
 
-    resolveActionItem: { role: "owner", target: first, run: (_ctx, id, decision, note) => {
+    resolveActionItem: { role: "owner", target: first, explain: secretShapeMessage, run: (_ctx, id, decision, note) => {
+      refuseSecretShape(_ctx, typeof note === "string" ? note : "");
       const d = decision === "done" || decision === "dismissed" ? decision : null;
       if (d) planner.actions?.resolve(str(id, 40), d, typeof note === "string" ? str(note, 1000) : undefined);
     } },
@@ -451,6 +485,27 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
 
     createBoard: { role: "owner", run: (_ctx, title) => planner.createBoard(str(title, 80)) },
 
+    /**
+     * An agent's own GitHub App (M0-E). The reply is the manifest the page posts
+     * to GitHub, bound to this session by a one-time state. Local only: GitHub
+     * sends the browser back to this machine.
+     */
+    createGithubIdentity: { role: "owner", pin: true, localOnly: true, returns: true, target: first, run: (ctx, id) => {
+      const agentId = str(id, 80);
+      if (!hub.cfg(agentId)) throw new Error("unknown agent");
+      const repo = hub.repo.github;
+      if (!repo) throw new Error("This project has no GitHub repo.");
+      if (!ctx.origin) throw new Error("no origin");
+      return company.githubApps.start(cid(agentId), repo, ctx.actor.id, ctx.sessionId, ctx.origin);
+    }, explain: (err) => (err instanceof Error && /no GitHub repo/.test(err.message) ? err.message : null) },
+
+    /** GitHub sent the browser back with a code: finish the App, then the page opens its install page. */
+    completeGithubIdentity: { role: "owner", localOnly: true, returns: true, run: async (ctx, state, code) => {
+      const done = await company.githubApps.complete(str(state, 200), str(code, 200), ctx.actor.id, ctx.sessionId);
+      hub.configChanged();
+      return done;
+    }, explain: (err) => (err instanceof GitHubAppRefusedError ? err.message : null) },
+
     updateBoard: { role: "owner", target: first, run: (_ctx, id, patch) => {
       const p = (patch ?? {}) as Partial<Board>;
       const status = p.status === "active" || p.status === "planned" || p.status === "done" ? p.status : undefined;
@@ -468,6 +523,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
  */
 export function makeCompanyCommands(projects: Projects): Record<string, CommandSpec> {
   return {
+    /** A project's repo was renamed or moved on GitHub: the owner confirms the folder's new repo (PIN). */
+    confirmProjectRepo: {
+      role: "owner",
+      pin: true,
+      target: (a) => (typeof a[0] === "string" ? a[0] : null),
+      run: async (ctx, id) => void (await projects.confirmRepo(str(id, 80), authorityOf(ctx))),
+      explain: (err) => (err instanceof AuthorityError ? err.message : null),
+    },
     addProject: {
       role: "owner",
       pin: true,

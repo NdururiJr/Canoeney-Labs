@@ -4,7 +4,8 @@
 // the PIN, and the confirmation is bound to the hash of the files the preview
 // showed (D3). Every other part of HQ reads the company store only.
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isInside } from "./company/home";
 import { join } from "node:path";
 import type { AgentCli, AgentMode, Board, HqConfig, ImportLine, Task, WorkflowConfig } from "../src/data/types";
 import type { Company } from "./company";
@@ -35,6 +36,8 @@ export interface ImportPlan {
   skipped: string[];
   /** Domains and MCP names the dashboard would refuse, so not imported. */
   dropped: number;
+  /** Agents the file put in Local mode: imported in a sandbox instead (SR-E-06). */
+  sandboxed: number;
 }
 
 export interface ReadImport {
@@ -64,8 +67,8 @@ export function offerImport(hub: { snap: { welcome?: boolean; importable?: true 
  */
 export function readImport(root: string, company: Company, slug: string): ReadImport {
   const f = files(root);
-  const configBytes = readOwnFile(f.config, ".jsmhq/config.json");
-  const planBytes = existsSync(f.plan) ? readOwnFile(f.plan, ".jsmhq/plan.json") : null;
+  const configBytes = readOwnFile(f.config, ".jsmhq/config.json", root);
+  const planBytes = existsSync(f.plan) ? readOwnFile(f.plan, ".jsmhq/plan.json", root) : null;
   const sha256 = hex(Buffer.from(JSON.stringify({ config: hex(configBytes), plan: planBytes ? hex(planBytes) : null })));
   const config = parseJson(configBytes, ".jsmhq/config.json") as Partial<HqConfig>;
   const planFile = planBytes ? (parseJson(planBytes, ".jsmhq/plan.json") as { boards?: Board[]; tasks?: Task[] }) : {};
@@ -73,8 +76,10 @@ export function readImport(root: string, company: Company, slug: string): ReadIm
 }
 
 /** A file in the repo itself, never one a link points to (outside the repo, or HQ's own). */
-function readOwnFile(path: string, label: string): Buffer {
+function readOwnFile(path: string, label: string, root: string): Buffer {
   if (lstatSync(path).isSymbolicLink()) throw new Error(`\`${label}\` is a link. HQ imports only a file kept in the repo itself.`);
+  // A linked .jsmhq folder: the file itself is plain, but it lives outside the repo (PR #10 review).
+  if (!isInside(realpathSync(path), realpathSync(root))) throw new Error(`\`${label}\` is outside the repo (a linked folder). HQ imports only a file kept in the repo itself.`);
   return readFileSync(path);
 }
 
@@ -176,6 +181,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
 
   const team = Array.isArray(config.team) ? config.team : [];
   let dropped = 0;
+  let sandboxed = 0;
   /** Keeps the values `ok` accepts (after `clean`), counting the others as dropped: the dashboard's own rules. */
   const keep = (values: string[], clean: (v: string) => string, ok: RegExp): string[] => {
     const out: string[] = [];
@@ -199,7 +205,9 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
     const id = str(raw.id, 80);
     const name = str(raw.name, 40).trim() || id;
     const cli: AgentCli = raw.cli === "codex" ? "codex" : "claude";
-    const mode: AgentMode = raw.mode === "local" ? "local" : "sandbox";
+    // Every agent runs in a sandbox (SR-E-06): a file's Local mode is not imported.
+    if (raw.mode === "local") sandboxed++;
+    const mode: AgentMode = "sandbox";
     const displayRole = str(raw.role, 40).trim() || "Developer";
     const color = /^#[0-9a-fA-F]{6}$/.test(str(raw.color, 7)) ? str(raw.color, 7) : "#29adff";
     // A model name that is not plain is dropped (the CLI's default is used): it goes onto a command line.
@@ -217,14 +225,14 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
       const roleText = role === "cto" ? "as the CTO (the lead)" : "as a builder";
       steps.push({
         change: { kind: "agent-added" },
-        text: `Add an agent ${roleText}, using ${cli === "codex" ? "Codex" : "Claude Code"}${mode === "local" ? ", in Local mode: outside a sandbox, on this machine" : ""}`,
+        text: `Add an agent ${roleText}, using ${cli === "codex" ? "Codex" : "Claude Code"}`,
         fromFile: [name],
         apply: (by) => s.addAgent(slug, { id, name, cli, displayRole, color, mode, model }, role, by),
       });
       current = { cli, mode, roleMd: defaults.roleMd, workspacePath: null };
     } else {
       current = { cli: now?.cli ?? "claude", mode: now?.mode ?? "sandbox", roleMd: now?.roleMd ?? "", workspacePath: now?.workspacePath ?? null };
-      if (mode !== current.mode) steps.push(agentStep(s, companyId, "mode", current.mode, mode, mode === "local" ? "An agent runs in Local mode: outside a sandbox, on this machine" : "An agent runs in a sandbox", [name]));
+      if (mode !== current.mode) steps.push(agentStep(s, companyId, "mode", current.mode, mode, "An agent runs in a sandbox", [name]));
       if (cli !== current.cli) steps.push(agentStep(s, companyId, "cli", current.cli, cli, `An agent uses ${cli === "codex" ? "Codex" : "Claude Code"}`, [name]));
       // Cosmetic settings: written (and audited) with the import, not preview lines.
       for (const [field, before, after] of [
@@ -284,7 +292,7 @@ function buildPlan(config: Partial<HqConfig>, planFile: { boards?: Board[]; task
         note: typeof t.note === "string" ? str(t.note, 300) : null,
       }),
     );
-  return { steps, boards, tasks, skipped, dropped };
+  return { steps, boards, tasks, skipped, dropped, sandboxed };
 }
 
 function agentStep(

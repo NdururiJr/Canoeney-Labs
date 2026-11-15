@@ -101,7 +101,7 @@ More detail on workspaces, sandboxes, MCP servers, app variables and what HQ sav
 | "Too many attempts" at login | Wrong passwords or codes from one address lock it for 15 minutes; other devices can still log in. Five wrong PINs lock the PIN step for 15 minutes. |
 | Start fails: "network policy has not been initialized" | A new Docker Sandboxes install needs a base policy once: `sbx policy init balanced`. |
 | Agents fail to start with a sign-in error | Your Docker sign-in expired. Run `sbx login`, then **Check again** in the setup checklist. |
-| Agents can't push or open PRs | Run `sbx secret set github --command "gh auth token"`, and check the repo has a GitHub `origin`. |
+| Agents can't push or open PRs | Give the agent its GitHub identity (Settings → Team → Create GitHub identity) and install it on the project's repo, and check the repo has a GitHub `origin`. Never set a `github` key for every sandbox: HQ starts no agent while one exists. |
 | A Codex agent waits on "Do you trust this folder?" | Answer it once in the agent's terminal. HQ never answers trust prompts for you. |
 | A CLI sign-in in a sandbox opens the browser, then fails on `localhost:<port>` | Press **Forward port** in the agent's drawer, then reload the page. |
 | An agent's state never changes | The sandbox can't reach HQ. `sbx policy ls` should show `localhost:<port>` and `host.docker.internal:<port>` allowed; HQ adds them on start. |

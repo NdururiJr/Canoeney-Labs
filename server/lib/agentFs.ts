@@ -4,8 +4,9 @@
 // symlinked folder on the way is refused, a symlinked file is replaced (writes)
 // or treated as missing (reads).
 
-import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteFileOptions } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { randomBytes } from "node:crypto";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, type WriteFileOptions } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 const lstat = (p: string) => {
   try {
@@ -41,10 +42,19 @@ export function agentWrite(root: string, rel: string, data: string, opts?: Write
   mkdirSync(dirname(abs), { recursive: true });
   agentPath(root, rel);
   if (lstat(abs)?.isSymbolicLink()) rmSync(abs);
-  writeFileSync(abs, data, opts);
-  // writeFileSync applies a mode only when it creates the file: an existing
-  // file (say 0644) keeps its mode unless it is set here.
-  if (typeof opts === "object" && opts?.mode !== undefined) chmodSync(abs, opts.mode);
+  const mode = typeof opts === "object" ? opts?.mode : undefined;
+  if (mode === undefined) return writeFileSync(abs, data, opts);
+  // A secret is never readable while it is written: a fresh file is created with the mode
+  // (an existing 0644 file would keep its mode until a chmod), then renamed over the target.
+  const tmp = join(dirname(abs), `.${basename(abs)}.hq-tmp-${randomBytes(6).toString("hex")}`);
+  try {
+    writeFileSync(tmp, data, { ...(typeof opts === "object" ? opts : {}), mode, flag: "wx" });
+    chmodSync(tmp, mode as number); // the process umask may have narrowed it further; set it exactly
+    renameSync(tmp, abs);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 /** Reads a file inside the agent's folder; a missing file or a symlink reads as null. */

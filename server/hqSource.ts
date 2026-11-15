@@ -22,7 +22,7 @@ const MESSAGES: Record<ProjectRefusal, string> = {
   "hq-folder": "This folder is, holds or sits inside the folder HQ runs from. HQ never manages its own source as a project.",
   "not-a-repo": "This folder is not a git repository.",
   "hq-home": "This folder is inside HQ's home, where HQ keeps agents' folders and its records. Choose a repo outside it.",
-  "other-repo": "This folder now holds a different GitHub repo from the project registered there, so it is not opened as that project. Move the new repo to another folder.",
+  "other-repo": "This folder now holds a different GitHub repo from the project registered there, so it is not opened as that project. If the repo was renamed or moved on GitHub, confirm it with your PIN; otherwise move the new repo to another folder.",
 };
 
 export class ProjectRefusedError extends Error {
@@ -39,7 +39,8 @@ export function hqSourceRoot(): string {
 
 /** `owner/name` of a GitHub URL in the https, ssh:// or git@ form, with or without .git; otherwise null. */
 export function githubOf(url: string): string | null {
-  const m = url.trim().match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?github\.com(?::\d+)?[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  // github.com, www.github.com, and ssh.github.com (SSH over port 443).
+  const m = url.trim().match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?(?:www\.|ssh\.)?github\.com(?::\d+)?[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
   return m ? `${m[1]}/${m[2]}` : null;
 }
 

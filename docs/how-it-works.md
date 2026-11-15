@@ -34,6 +34,7 @@ One HQ runs every project you give it, each with its own team, boards and agents
 - **Adding a project:** the owner presses **Add project**, types the full path of a git repo on this machine, and confirms with the PIN. The repo HQ is started in (or `--repo`) is added too, without the PIN.
 - **What can't be a project:** HQ's own source code (its repo, a clone or fork of it, or the folder HQ runs from), and anything inside HQ's home folder (`~/.jsmhq`, where agents' copies live).
 - **A project whose folder is gone** stays listed as "folder missing". None of its agents start until the folder is back.
+- **A project whose folder now holds a different GitHub repo** is listed as such and not opened, so a new repo never inherits an old project's permissions. If you renamed or moved the repo on GitHub, press **Confirm <name>'s repo** in the top bar and give your PIN.
 - **Agents with the same name in two projects** are separate agents: each project's messages, tasks and tools reach only its own.
 - **Sandbox settings made for every sandbox** (an sbx key or policy set globally) reach every project's sandboxes. Set a key for one agent's sandbox when only that agent should have it.
 
@@ -42,7 +43,7 @@ One HQ runs every project you give it, each with its own team, boards and agents
 - **Its own copy of the repo.** Each agent gets a full clone at `~/.jsmhq/<project>/<agent>/`. Your own working folder is never touched.
 - **Its instructions.** HQ writes `.jsmhq-role.md` into that folder: the agent's role (the ROLE.md text from Settings → Team), the team, the rules and its tools. HQ also adds its hooks and MCP config there, and keeps all of these out of git. The clone leaves out the repo's own agent settings (`CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `.mcp.json`, `.claude/`, `.agents/`, `.codex/`), so a pull request can't change what every agent is told or may run.
 - **Its session.** On macOS and Linux each agent runs in a tmux session called `hq-<project>-<agent>`, so agents keep working if you close HQ or the browser. You can watch one from any terminal with `tmux attach -t hq-<project>-<agent>`, or open its drawer in HQ. Two agents can never share a session name, even in different projects: HQ refuses an agent id that would.
-- **A folder you chose yourself** (Settings → Team) is checked each time its agent starts: it must not be HQ's own source, and the repo (from its top folder, even if you chose a subfolder) must not have its own agent settings such as `CLAUDE.md`. A later `git pull` in that folder can bring such a file back; HQ notices at the agent's next start, not before.
+- **A folder you chose yourself** (Settings → Team) is checked each time its agent starts: it must not be HQ's own source, and the repo (from its top folder, even if you chose a subfolder) must not have its own agent settings such as `CLAUDE.md`. In a monorepo this means any tracked agent-settings file counts, a sibling folder's included. A later `git pull` in that folder can bring such a file back; HQ notices at the agent's next start, not before.
 - **Company-level agents** (the CEO, CIO and Security & Audit, from M1) get an empty folder in `~/.jsmhq/_workspaces/` instead of a copy of the repo. They run only in a sandbox, and HQ won't start one while a GitHub key or token could reach it.
 
 ## Project notes (`CLAUDE.md`)
@@ -85,15 +86,30 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 
 ## GitHub and reviews
 
+**Each agent works on GitHub as its own App** (Settings → Team → Create GitHub identity). You create it from a link HQ prepares and install it on the project's repo only, about a minute per agent, once.
+- **Its token lasts an hour and works on one repo.** It can push the agent's own branches (`<agent>/…`) and open pull requests, nothing else.
+- **HQ cancels it** when the agent stops, is paused or retired, or HQ stops.
+- **No GitHub key is shared by every sandbox.** HQ starts no agent while one exists.
+
+**GitHub itself enforces the limits.** Settings → Project → GitHub protection shows the repo's settings, checked when the project opens and daily, and **Apply protection** sets them with your PIN:
+- only you can update and merge into `main`, after your code-owner review;
+- each agent's branches can be written only by that agent's App;
+- no other branch can be created;
+- auto-merge is off;
+- workflows get a read-only token, cannot approve pull requests, and may use only GitHub's own actions;
+- the repo holds no repository secrets.
+
+CODEOWNERS and workflow files are yours: HQ reads them, never writes them.
+
 HQ reads your PRs, checks and review comments with your `gh` login, about every 20 seconds.
 
-- It matches a PR to its task by the `[TASK-ID]` at the start of the title.
+- **A PR belongs to the App that opened it.** A branch name or a `[TASK-ID]` in the title is only a claim. One that points at another agent is flagged and moves no task.
 - New review comments are sent to the PR's author to fix.
-- When a PR passes review, the lead is told it's ready to merge.
+- When a PR passes review, you're told to merge it; the lead is told too.
 - When a PR is merged, its task is marked done.
 - If a PR has merge conflicts with `main`, the author is told to fix them.
 
-**HQ never merges.** You merge on GitHub.
+**HQ never merges, and no agent can.** You merge on GitHub.
 
 Pick the review tool in Settings → Workflow: CodeRabbit, Greptile, Copilot, you, or your own.
 
@@ -110,7 +126,7 @@ Each agent in Sandbox mode runs in its own [Docker Sandbox](https://docs.docker.
 ## Terminals, links and ports
 
 - **Resize any panel.** Drag a panel's left edge to make it wider (HQ remembers the width in this browser; double-click the edge to reset), or press the square button to fill the screen. Terminals resize with it, so full-screen tools that need more rows fit.
-- **Shell tab.** A shell inside the agent's sandbox (or its folder in Local mode), beside the agent.
+- **Shell tab.** A shell inside the agent's sandbox, beside the agent.
 - **Terminal** (top bar). Your own shell on this machine, not in a sandbox: in your repo, an agent's folder, or any folder you type. Be careful in an agent's folder while it's working: it's the same copy of the repo the agent is editing.
 - **Links** in any terminal open in a new tab when you click them, including long URLs that wrap onto the next line.
 - **Opening the browser.** Tools in a sandbox that open a web page (for example a CLI sign-in) open it in your browser.
@@ -151,7 +167,7 @@ Unticking a server takes effect when that agent's sandbox is recreated, because 
 
 ## App variables and keys
 
-- **App variables** (Settings → Sandbox → App variables) become environment variables in the agent's session and its Shell tab. They're not a `.env` file in the project. Agents are told the names, never the values. Restart the agent after changing them.
+- **App variables are off for now.** No secret value goes into a sandbox in M0 and M1: an agent's app variables file is not passed to it. From M2 you'll approve each variable with your PIN, and only test credentials.
 - **Service keys** (Settings → Sandbox) go to Docker Sandboxes' secret store. A sandbox's proxy adds the key to matching requests, so the key itself never enters the VM.
 
 HQ never stores key values and never reads your env files.
@@ -175,7 +191,7 @@ HQ never stores key values and never reads your env files.
 | `docs/plan.md` (in your repo) | A readable copy of the plan, if **Settings → Project → Export plan** is on. HQ writes it and never reads it | Yes |
 | `~/.jsmhq/<project>/` | Agents' folders, app variables, action items and HQ's own records | No: it's outside your repo, on your machine only |
 
-**Why not in the repo?** An agent can change any file in the repo through a pull request. If the team and its permissions lived there, one merged PR could make a builder the lead, open its sandbox to any site, or let the lead merge. So HQ reads none of it from the repo. Every change goes through the dashboard, and anything that loosens a control (a new site, an MCP server, Local mode, review off, the lead merging, a new agent) asks for your PIN.
+**Why not in the repo?** An agent can change any file in the repo through a pull request. If the team and its permissions lived there, one merged PR could make a builder the lead, open its sandbox to any site, or let the lead merge. So HQ reads none of it from the repo. Every change goes through the dashboard, and anything that loosens a control (a new site, an MCP server, review off, the lead merging, a new agent) asks for your PIN.
 
 **Upgrading from an older HQ:** an older HQ kept the team in `.jsmhq/config.json` and the tasks in `.jsmhq/plan.json`. HQ no longer reads them by itself. The welcome screen offers **Review import from .jsmhq/config.json**: it lists everything the import would loosen, with the file's values shown as text an agent may have written. Import it with your PIN, or set up a new team instead. If the file changes after you review it, the import is refused, so review it again. The import runs once. Afterwards you can delete the two files.
 
@@ -197,7 +213,7 @@ Windows 11 support is experimental. Run HQ in PowerShell or Windows Terminal, no
 
 - There's no tmux, so HQ runs the agents itself. **Agents stop when HQ stops.** Their sandboxes and folders are kept; press **Start** to run them again.
 - Use the terminal in the agent's drawer; there's no `tmux attach`.
-- In Local mode, the agent's env file isn't loaded. Use Sandbox mode for app variables.
+- Every agent runs in a Docker Sandbox, on Windows too (install Docker Sandboxes: `winget install Docker.sbx`). There is no Local mode.
 
 ## Keyboard shortcuts
 

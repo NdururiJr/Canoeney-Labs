@@ -242,7 +242,7 @@ export async function makeHq(
     await new Promise<void>((r) => server.close(() => r()));
   };
   t.after(async () => {
-    projects.stopAll();
+    await projects.stopAll();
     await stop();
     company.close();
     if (previousHome === undefined) delete process.env.HQ_COMPANY_HOME;

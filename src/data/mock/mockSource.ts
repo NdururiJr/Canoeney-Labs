@@ -514,6 +514,13 @@ export function createMockSource(): OfficeDataSource {
       reset();
       boot();
     },
+    applyRepoGuard() {},
+    confirmSpendingLimit() {},
+    recheckRepoGuard() {},
+    createGithubIdentity() {
+      world.activity("config", null, "Demo data: GitHub identities need the real HQ.");
+    },
+    confirmProjectRepo() {},
     addProject() {
       world.activity("config", null, "Demo data: adding a project needs the real HQ.");
     },

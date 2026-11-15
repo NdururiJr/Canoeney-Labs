@@ -54,7 +54,7 @@ function useSetupPrompt() {
     return useOffice.subscribe((s) => {
       if (shown || !s.live || !s.snap || s.snap.welcome) return;
       shown = true;
-      const needed = s.snap.setup.checks.some((c) => c.status !== "ok" && c.neededFor !== "github" && c.neededFor !== "local");
+      const needed = s.snap.setup.checks.some((c) => c.status !== "ok" && c.neededFor !== "github");
       if (needed) ui.openSetup();
     });
   }, []);

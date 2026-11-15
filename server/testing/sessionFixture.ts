@@ -56,20 +56,28 @@ function gitRepo(dir: string) {
   return dir;
 }
 
-/** Sessions on the fixture, with a fake backend and Local-mode agents in their own git repos. */
-export function withSessions(t: { after(fn: () => void): void }, hq: Hq, cli: Partial<Record<string, AgentConfig["cli"]>> = {}) {
+/**
+ * Sessions on the fixture, with a fake backend and sandboxed agents, each in its own
+ * git repo (a chosen folder). Every agent runs in a sandbox (M0-E, SR-E-06): the sbx
+ * calls a start makes are stubbed, so no sandbox is created. `keepModes` leaves the
+ * agents' stored modes alone (a test of a row stored as Local mode).
+ */
+export function withSessions(t: { after(fn: () => void): void }, hq: Hq, cli: Partial<Record<string, AgentConfig["cli"]>> = {}, o: { keepModes?: boolean } = {}) {
   hq.hub.snap.setup = {
     ...hq.hub.snap.setup,
-    checks: ["tmux", "claude", "codex"].map((id) => ({ id, status: "ok", label: id, detail: "" })),
+    sandboxReady: true,
+    checks: ["tmux", "claude", "codex", "openai-secret"].map((id) => ({ id, status: "ok", label: id, detail: "" })),
   } as typeof hq.hub.snap.setup;
   for (const a of hq.hub.snap.config.team) {
-    a.mode = "local";
+    if (!o.keepModes) a.mode = "sandbox";
     a.cli = cli[a.id] ?? "claude";
     a.workspacePath = gitRepo(join(hq.scratch, `work ${a.id}`));
   }
   const sessions = new Sessions(hq.hub, hq.company);
   const backend = new FakeBackend();
   (sessions as unknown as { backend: SessionBackend }).backend = backend;
+  // No real sbx here: the policy is taken as set, and no sandbox exists yet.
+  Object.assign(sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   t.after(() => sessions.shutdown());
   const name = (id: string) => `hq-${hq.slug}-${id}`;
   const fileSecret = (id: string) => {

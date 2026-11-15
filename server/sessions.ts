@@ -24,6 +24,7 @@ import { projectHome, sessionName } from "./paths";
 import { POLICY_NOT_INITIALIZED, policyVerdict, runSetupChecks } from "./setup";
 import { ensureWorkspace, workspaceFor, WorkspaceRefusedError } from "./workspace";
 import { companyWorkspaceFor, ensureCompanyWorkspace, githubCredentialIn, workspaceKind } from "./companyWorkspace";
+import { TokenError } from "./github/tokens";
 
 const TERM_ENV = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<string, string>;
 /**
@@ -80,8 +81,15 @@ export class Sessions {
   onSandboxRemoved: (agentId: string) => void = () => {};
   /** The agent's env file, if it has one (passed with --env-file / sourced). */
   envFileFor: (agentId: string) => string | null = () => null;
+  /**
+   * The agent's own GitHub token (M0-E): delivered before its sandbox starts and when HQ
+   * reattaches to it, revoked when it stops. Null until the project runtime wires it.
+   */
+  github: { deliver(agentId: string): Promise<"issued" | "no-identity">; revoke(agentId: string, reason: "stopped", by?: Actor): Promise<void> } | null = null;
+  /** Whether a `github` key is set for every sandbox, read fresh (SR-E-05). False until the project runtime wires it. */
+  globalGithubKey: () => Promise<boolean | "unknown"> = async () => false;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
-  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => null;
+  githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => "unknown"; // fails closed until wired
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
   onSessionReattached: (agentId: string) => void = () => {};
   /** When the agent's last hook arrived (from the inbox). */
@@ -95,6 +103,21 @@ export class Sessions {
 
   private name(agentId: string) {
     return sessionName(this.hub.slug, agentId);
+  }
+
+  /**
+   * Gives the agent its GitHub token; true when one was issued. A failure is reported in
+   * HQ's own words only (sbx's or GitHub's text could repeat the token, SR-C-17), never fatal.
+   */
+  private async deliverGithub(agentId: string, name: string): Promise<boolean> {
+    if (!this.github) return false;
+    try {
+      if ((await this.github.deliver(agentId)) === "issued") return true;
+      this.hub.activity("session", agentId, `${name} has no GitHub identity: it can't push or open pull requests. Create one in Settings → Team, then install it on this project's repo.`);
+    } catch (err) {
+      this.hub.activity("session", agentId, `${name} couldn't get a GitHub token${err instanceof TokenError ? `: ${err.message}` : "."}`);
+    }
+    return false;
   }
 
   /** Revokes the agent's live secret: HQ ended its session, so no one should use it any more. */
@@ -169,10 +192,8 @@ export class Sessions {
       hub.activity("session", id, `${agent.name} could not start: ${detail.split("\n")[0]}`);
     };
     if (!setup.checks.find((c) => c.id === "tmux" && c.status === "ok")) return fail("tmux is not installed. See the setup checklist.");
-    if (agent.mode === "sandbox" && !setup.sandboxReady) return fail("Docker Sandboxes isn't ready on this machine. Finish the setup checklist, or switch this agent to Local mode.");
+    if (agent.mode === "sandbox" && !setup.sandboxReady) return fail("Docker Sandboxes isn't ready on this machine. Finish the setup checklist.");
     const check = (cid: string) => setup.checks.find((c) => c.id === cid)?.status;
-    if (agent.mode === "local" && agent.cli === "claude" && check("claude") !== "ok") return fail("Claude Code isn't installed. See the setup checklist.");
-    if (agent.mode === "local" && agent.cli === "codex" && check("codex") !== "ok") return fail("Codex isn't installed on this machine. See the setup checklist, or run this agent in a sandbox.");
     if (agent.mode === "sandbox" && agent.cli === "codex" && check("openai-secret") !== "ok")
       return fail("Codex needs an OpenAI key in sbx. Run `sbx secret set openai --oauth` (Setup checklist → Run in terminal).");
 
@@ -185,11 +206,18 @@ export class Sessions {
     const name = this.name(id);
     this.onSessionDown(id);
     let issued = false;
+    /** This start delivered a GitHub token that no running session uses yet. */
+    let delivered = false;
+    let reattached = false;
     // CEO, CIO and Security & Audit work above projects: an empty folder, no repo, no GitHub credential (SR-D-06).
     const company = workspaceKind(reg.role) === "company";
     try {
-      if (company && agent.mode === "local")
-        throw new WorkspaceRefusedError("local-mode", `${agent.name} is a company-level agent: it runs only in a sandbox. Local mode would put your own GitHub login within its reach.`);
+      // Every agent runs in a sandbox (SR-E-06, owner decision 2026-11-14). A row stored as local before is refused.
+      if (agent.mode === "local")
+        throw new WorkspaceRefusedError("local-mode", `${agent.name} is set to Local mode, which HQ no longer runs: it would put your own GitHub login within reach. Switch it to Sandbox in Settings → Team.`);
+      // An MCP server can hold a GitHub token (PR #9 finding 5): a company-level agent gets none.
+      if (company && (agent.mcp ?? []).length)
+        throw new WorkspaceRefusedError("mcp-server", `${agent.name} is a company-level agent and must not reach GitHub, but it has an MCP server (${(agent.mcp ?? []).length}). Remove it in Settings → MCP, then start again.`, { count: (agent.mcp ?? []).length });
       hub.setSession(id, { state: "starting", detail: "Preparing folder…", workspace: company ? companyWorkspaceFor(hub.slug, id) : workspaceFor(agent, hub.slug) });
       const dir = company ? await ensureCompanyWorkspace(hub.slug, id) : await ensureWorkspace(agent, hub.slug, hub.repo);
       if (company) {
@@ -202,14 +230,29 @@ export class Sessions {
           throw new WorkspaceRefusedError("github-credential", `${agent.name} is a company-level agent and must not reach GitHub, but ${where} would reach it. Remove it, then start again.`, { names });
         }
       }
+      // A GitHub key for every sandbox would give this agent the owner's GitHub powers (SR-E-05).
+      if (agent.mode === "sandbox") {
+        const global = await this.globalGithubKey();
+        if (global === "unknown")
+          throw new WorkspaceRefusedError("keys-unread", `HQ couldn't read sbx's keys, so it can't tell whether a GitHub key is set for every sandbox. Check that sbx is running, then start ${agent.name} again.`);
+        if (global)
+          throw new WorkspaceRefusedError("global-github-key", `A GitHub key is set for every sandbox, which would let ${agent.name} merge and change repo settings. Remove it (sbx secret rm github --force), then start again.`);
+      }
+      // The agent's own GitHub token, before its sandbox exists or is reattached (M0-E). Company-level
+      // agents never get one (SR-D-06); an agent without a sandbox has nowhere to put it.
+      if (!company && agent.mode === "sandbox") delivered = await this.deliverGithub(id, agent.name);
       const adapter = adapters[agent.cli];
       // A session that is still running (tmux outlives HQ) keeps the secret and the
       // files it was started with. HQ keeps only a hash of the secret, so it could
       // not write the same one again (ADR 0005): reattach and write nothing.
-      if (await this.backend.exists(name)) this.noteOldKey(id);
+      if (await this.backend.exists(name)) {
+        reattached = true;
+        this.noteOldKey(id);
+      }
       else {
-        // App variables reach the agent in sandbox mode and in Local mode with tmux (not Local on Windows).
-        const hasEnvFile = !!this.envFileFor(id) && (agent.mode === "sandbox" || this.backend.persistent);
+        // No env file reaches any agent in M0 and M1 (D2, SR-E-13): no secret value goes into a sandbox.
+        const hasEnvFile = false;
+        if (this.envFileFor(id)) hub.activity("session", id, `${agent.name}'s app variables file was not passed: no secret values go into sandboxes until you approve each variable (M2).`);
         const secret = this.company.secrets.issue(reg.companyId);
         issued = true;
         const ctoId = this.company.agents.cto(hub.slug, (cid) => !!hub.cfg(cid))?.agentId ?? null;
@@ -227,11 +270,8 @@ export class Sessions {
           for (const rel of skills.skipped) hub.activity("session", id, skillSkippedText(agent.name, rel));
         }
         const launch = adapter.launch(agent, dir);
-        const envFile = this.envFileFor(id);
-        // Local mode: the agent gets the env file's variables (tmux only: there's no shell to load them into otherwise).
+        const envFile = null; // D2: never passed
         let spec: LaunchSpec = { file: localBinary[agent.cli], args: launch.args, envFile };
-        if (agent.mode === "local" && envFile && !this.backend.persistent)
-          hub.activity("session", id, `${agent.name}'s env file isn't loaded in Local mode on Windows. Use Sandbox mode for app variables.`);
         if (agent.mode === "sandbox") {
           hub.setSession(id, { detail: "Allowing the sandbox to reach HQ…" });
           await this.ensurePolicy();
@@ -257,6 +297,8 @@ export class Sessions {
       // A secret this call issued has no session to use it. A reattached
       // session's secret is left alone: that agent is still running.
       if (issued) this.revokeSecret(id);
+      // A token this start delivered has no session to use it (final review, Important 2).
+      if (delivered && !reattached) await this.github?.revoke(id, "stopped").catch(() => {});
       if (err instanceof WorkspaceRefusedError) this.auditRefusal(id, err, by);
       fail(err instanceof Error ? err.message : String(err));
     }
@@ -272,6 +314,7 @@ export class Sessions {
     this.closeShell(id);
     await this.backend.kill(name);
     this.revokeSecret(id);
+    await this.github?.revoke(id, "stopped").catch(() => {});
     // Stop (not remove) the VM so it can resume later with its state.
     if (agent.mode === "sandbox") void run("sbx", ["stop", name], { timeoutMs: 30_000 });
     hub.setSession(id, { state: "stopped", detail: null });
@@ -558,6 +601,10 @@ export class Sessions {
         this.hub.setSession(agent.id, { state: "running", detail: null, workspace });
         this.hub.setStatus(agent.id, { note: "Reattached" });
         this.onSessionReattached(agent.id);
+        // Its token may have expired while HQ was stopped: a fresh one (M0-E).
+        // Only an active agent gets one: a paused agent's surviving session gets none (final review).
+        const reg = this.company.agents.get(this.hub.slug, agent.id);
+        if (agent.mode === "sandbox" && reg?.status === "active" && workspaceKind(reg.role) === "project") void this.deliverGithub(agent.id, agent.name);
         this.noteOldKey(agent.id);
       }
       if (agent.cli === "codex") await this.watchCodexScreen(agent.id, name);
@@ -709,12 +756,12 @@ export class Sessions {
         const name = this.name(agentId);
         // bash when the image has it, else sh; start in the agent's folder (same path inside the sandbox).
         // The agent's app variables too, so what you check here matches what the agent sees.
-        const env = this.envFileFor(agentId);
-        ({ file, args } = await resolveCommand("sbx", ["exec", "-it", ...(env ? ["--env-file", env] : []), ...(win ? [] : ["-w", dir]), name, "sh", "-c", SANDBOX_SHELL]));
+        // D2: the agent's app variables are not passed here either.
+        ({ file, args } = await resolveCommand("sbx", ["exec", "-it", ...(win ? [] : ["-w", dir]), name, "sh", "-c", SANDBOX_SHELL]));
         banner = `sbx exec -it ${name} bash`;
       } else {
         const sh = process.env.SHELL || "/bin/sh";
-        const env = win ? null : this.envFileFor(agentId);
+        const env: string | null = null; // D2: never loaded
         file = win ? "powershell.exe" : env ? "/bin/sh" : sh;
         // Load the env file into the shell (HQ itself never reads it), then hand over to your shell.
         args = win ? ["-NoLogo"] : env ? ["-c", `${loadEnvFile('"$1"')}; exec "$2" -l`, "sh", env, sh] : ["-l"];

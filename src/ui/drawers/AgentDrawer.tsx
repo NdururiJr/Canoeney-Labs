@@ -228,7 +228,7 @@ function SessionBar({ agent, status }: { agent: AgentConfig; status: AgentStatus
 function NotRunning({ agent, status }: { agent: AgentConfig; status: AgentStatus }) {
   const s = status.session;
   const setup = useOffice((st) => st.snap?.setup);
-  const blocked = agent.mode === "sandbox" ? !setup?.sandboxReady : !setup?.localReady;
+  const blocked = agent.mode !== "sandbox" || !setup?.sandboxReady; // Local mode never runs (SR-E-06)
   return (
     <div className="grid h-full place-items-center bg-navy-2 p-6 text-center text-[#dfe6ff]">
       <div className="max-w-[380px]">

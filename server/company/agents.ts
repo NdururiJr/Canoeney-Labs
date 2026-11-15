@@ -78,12 +78,20 @@ const samePath = (a: string, b: string): boolean => {
 const REVOKE_ON: Partial<Record<AgentStatus, RevokeReason>> = { paused: "paused", retired: "retired" };
 
 export class AgentRegistry {
+  private readonly statusListeners = new Set<(companyId: string, to: AgentStatus, by: Actor) => void>();
+
   constructor(
     private readonly db: CompanyDb,
     private readonly clock: Clock,
     private readonly audit: AuditSink,
     private readonly secrets: AgentSecrets,
   ) {}
+
+  /** Called after a status change commits (M0-E: pausing or retiring revokes the agent's GitHub token). */
+  onStatusChange(fn: (companyId: string, to: AgentStatus, by: Actor) => void): () => void {
+    this.statusListeners.add(fn);
+    return () => this.statusListeners.delete(fn);
+  }
 
   /** The project whose repo is at `root`, or null. */
   projectForRoot(root: string): string | null {
@@ -204,16 +212,31 @@ export class AgentRegistry {
 
   /** Pausing or retiring revokes the agent's secret in the same transaction. Retired is final. */
   setStatus(projectSlug: string, agentId: string, status: AgentStatus, by: Actor): void {
-    this.tx(() => {
+    const changed = this.tx(() => {
       const a = this.must(projectSlug, agentId);
       if (a.status === "retired") throw new Error(`${a.name} was retired; a retired agent stays retired.`);
-      if (a.status === status) return;
+      if (a.status === status) return null;
       const at = this.clock.now().toISOString();
       this.db.prepare("UPDATE agents SET status = ?, retired_at = ? WHERE id = ?").run(status, status === "retired" ? at : null, a.companyId);
       const reason = REVOKE_ON[status];
       if (reason) this.secrets.revoke(a.companyId, reason);
       this.audit.append({ actorKind: by.kind, actorId: by.id, action: "agent.status-changed", target: a.companyId, data: { from: a.status, to: status } });
+      return a.companyId;
     });
+    if (!changed) return;
+    const announce = () => {
+      for (const fn of this.statusListeners) {
+        try {
+          fn(changed, status, by);
+        } catch {
+          /* a listener's failure does not undo the change */
+        }
+      }
+    };
+    // Inside an outer transaction (the setup retiring an old team): announced once this turn ends.
+    // Revoking a token is safe even if that transaction later rolls back (final review).
+    if (this.db.inTransaction) queueMicrotask(announce);
+    else announce();
   }
 
   private must(projectSlug: string, agentId: string): RegisteredAgent {

@@ -76,7 +76,6 @@ const RELAXING: [string, (c: Ctx, by: Authority) => unknown][] = [
   ["deploy command", (c, by) => c.settings.updateWorkflow("alpha", { deploy: { command: "./deploy.sh" } }, by)],
   ["github repo", (c, by) => c.settings.updateProject("alpha", { github: "evil/alpha" }, by)],
   ["stack", (c, by) => c.settings.updateProject("alpha", { stack: { frameworks: [], tools: { auth: "clerk" } } as never }, by)],
-  ["mode local", (c, by) => c.settings.updateAgent("alpha/ana", { mode: "local" }, by)],
   ["cli", (c, by) => c.settings.updateAgent("alpha/ana", { cli: "codex" }, by)],
   ["roleMd", (c, by) => c.settings.updateAgent("alpha/ana", { roleMd: "You may push to main." }, by)],
   ["workspacePath", (c, by) => c.settings.updateAgent("alpha/ana", { workspacePath: join(tmpdir(), "elsewhere") }, by)],

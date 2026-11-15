@@ -32,7 +32,7 @@ gh auth login
 
 ## 2. Install Docker Sandboxes
 
-Every agent runs in its own Docker Sandbox: a small VM with its own copy of your repo. Agents can't touch the rest of your machine.
+Every agent runs in its own Docker Sandbox: a small VM with its own copy of your repo. Agents can't touch the rest of your machine. Docker Sandboxes (`sbx`) is an add-on: having Docker installed is not enough.
 
 | macOS | Linux (Ubuntu 24.04+, needs KVM) | Windows 11 |
 |---|---|---|
@@ -68,12 +68,14 @@ sbx policy init balanced
 
 You can allow extra domains for one agent later in **Settings → Sandbox**. To start over with a different policy, run `sbx policy reset`. HQ never changes this policy; it only adds one rule so sandboxes can reach HQ itself.
 
-## 4. Give sandboxes access to GitHub
+## 4. GitHub access: one App per agent, never your own login
 
-Agents push branches and open pull requests from inside their sandbox. Store your GitHub token in Docker's secret store; the sandbox proxy adds it to GitHub requests, so the token itself never enters the VM:
+Agents push branches and open pull requests from inside their sandbox, each as its **own GitHub App**. HQ gives each agent a token that lasts an hour, works on one repo, can push and open pull requests, and can't merge or change settings. You set this up per agent later, in **Settings → Team → Create GitHub identity** (step 7).
+
+**Don't store your own GitHub login for every sandbox.** Older instructions said to run `sbx secret set github --command "gh auth token"`. That gives every agent your full GitHub powers, so HQ refuses to start any agent while such a key exists. If you set one before, remove it:
 
 ```bash
-sbx secret set github --command "gh auth token"
+sbx secret rm github --force
 ```
 
 Using **Codex** agents? Also sign in with ChatGPT once:
@@ -123,6 +125,7 @@ Leave the terminal running while you work. On macOS and Linux, agents keep runni
 
 ## 7. Start the team
 
+0. For each agent, open **Settings → Team** and press **Create GitHub identity**. Confirm with your PIN, click **Create GitHub App** on GitHub, then install it on **only** this project's repo. About a minute per agent, once.
 1. Press **Start team** in the top bar. The first start takes a minute or two while each sandbox is created.
 2. Click the lead (or press **1**) and open the **Messages** tab. Tell them what to build, for example:
    > Read plan.md. Create a board for Phase 1, plan its tasks with the files each one touches, and assign them.
@@ -141,7 +144,7 @@ When an agent needs a website its sandbox blocks (a tool's docs, an API), it ask
 |---|---|
 | Start fails with "network policy has not been initialized" | Step 3: `sbx policy init balanced`. |
 | Start fails with a Docker sign-in error | Your sign-in expired: `sbx login`, then **Check again**. |
-| Agents can't push or open PRs | Step 4 (`sbx secret set github …`), and check the repo has a GitHub `origin` (step 5). |
+| Agents can't push or open PRs | Give the agent its GitHub identity (Settings → Team → Create GitHub identity) and install it on the project's repo; check the repo has a GitHub `origin` (step 5). |
 | A Codex agent waits on "Do you trust this folder?" | Answer it once in the agent's terminal. HQ never answers trust prompts for you. |
 | "Port 7420 is in use" | Another HQ is running. Stop it or use `--port 7421`. |
 | Windows: `listen EACCES` | Windows reserved that port. Use `--port 8420`. |

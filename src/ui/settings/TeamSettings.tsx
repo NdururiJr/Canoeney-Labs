@@ -5,6 +5,7 @@ import { officeActions, useOffice } from "../../store/office";
 import { agentPalette } from "../../theme/tokens";
 import { Field, Portrait, SectionTitle } from "../kit";
 import { CommitInput } from "./controls";
+import { LocalModeNotice } from "./LocalModeNotice";
 import { RemoveAgentDialog } from "./RemoveAgentDialog";
 
 export function CliSelect({ value, onChange }: { value: AgentCli; onChange: (v: AgentCli) => void }) {
@@ -66,7 +67,6 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
         <Field label="Runs in">
           <select className="field" value={agent.mode} onChange={(e) => set({ mode: e.target.value as AgentMode })}>
             <option value="sandbox">Sandbox</option>
-            <option value="local">Local</option>
           </select>
         </Field>
         <div className="flex gap-1.5">
@@ -83,11 +83,21 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
           )}
         </div>
       </div>
-      {agent.mode === "local" && (
-        <div className="border-t-2 border-dashed border-cream-3 px-3 py-1 text-[12px] text-muted">
-          Local mode runs plain <code>{agent.cli}</code> in the agent's own folder. Permission prompts stay on.
-        </div>
-      )}
+      <div className="flex items-center gap-2 border-t-2 border-dashed border-cream-3 px-3 py-1 text-[12px] text-muted">
+        {agent.github ? (
+          <span>
+            GitHub: works as <code>{agent.github.app}</code>. Install it on this project's repo only.
+          </span>
+        ) : (
+          <>
+            <span className="flex-1">No GitHub identity yet: this agent can't push or open pull requests.</span>
+            <button className="btn px-2 text-[12px]" onClick={() => officeActions.createGithubIdentity(agent.id)} title="Creates this agent's own GitHub App on GitHub (asks for your PIN)">
+              Create GitHub identity
+            </button>
+          </>
+        )}
+      </div>
+      {agent.mode === "local" && <LocalModeNotice onSwitch={set} />}
       {expanded && (
         <div className="grid grid-cols-2 gap-3 border-t-[3px] border-ink bg-cream p-3">
           <Field label="Colour">
@@ -173,7 +183,6 @@ function AddAgent() {
         <Field label="Runs in">
           <select className="field" value={mode} onChange={(e) => setMode(e.target.value as AgentMode)}>
             <option value="sandbox">Sandbox</option>
-            <option value="local">Local</option>
           </select>
         </Field>
         <button className="btn" type="submit">

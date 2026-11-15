@@ -2,26 +2,27 @@
 // comments → tell the author; passed → tell the lead; merged → task done.
 
 import type { PullRequest } from "../src/data/types";
-import { branchAgent, fetchPrs, OPEN_LIMIT, RateLimited, taskIdOf, toPullRequest } from "./github";
+import type { AuditSink } from "./company/slots/types";
+import { branchAgent, fetchPrs, OPEN_LIMIT, RateLimited, taskIdOf, toPullRequest, type GhPr } from "./github";
 import type { Hub } from "./hub";
 import { log } from "./lib/log";
 import type { Planner } from "./planner";
 
-const MERGE_CMD = (n: number | string) => `gh pr merge ${n} --squash --delete-branch`;
 
 /** What the lead is told when a PR passes review: merge it, or leave it to the user (Settings → Workflow → Merge). */
 export function passedNotice(pr: Pick<PullRequest, "number" | "title">, author: string, by: "human" | "lead"): string {
   const head = `PR #${pr.number} (${pr.title}) by ${author} passed review.`;
+  // In M0 GitHub lets only the owner merge into main (SR-E-01): with merge.by "lead" the lead is told, and the owner merges.
   return by === "lead"
-    ? `${head} You merge PRs on this project: run \`${MERGE_CMD(pr.number)}\` now. If GitHub refuses (conflicts or failing checks), ask the author to fix it instead. Then assign the next task if anything is waiting.`
+    ? `${head} GitHub lets only the owner merge into main, so the owner has been asked to merge it. If it has conflicts or failing checks, ask the author to fix them. Then assign the next task if anything is waiting.`
     : `${head} It's ready for the user to merge. Don't merge it yourself.`;
 }
 
 /** What the lead is told when the user changes who merges, with the PRs already waiting. */
 export function mergeByNotice(by: "human" | "lead", waiting: number[]): string {
   if (by === "human") return "The user changed the workflow: the user merges PRs now. Don't merge PRs yourself.";
-  const list = waiting.length ? ` These passed review and are waiting: ${waiting.map((n) => `#${n}`).join(", ")}. Merge each with \`${MERGE_CMD("<number>")}\`.` : "";
-  return `The user changed the workflow: you now merge PRs once they pass review.${list}`;
+  const list = waiting.length ? ` These passed review and are waiting for the owner: ${waiting.map((n) => `#${n}`).join(", ")}.` : "";
+  return `The user changed the workflow: you now track merges once PRs pass review. GitHub lets only the owner merge into main, so ask the owner to merge each one.${list}`;
 }
 
 const MIN_POLL_MS = 20_000; // never more often than this (nudges included)
@@ -41,7 +42,44 @@ export class GitHubSync {
   private interval = MIN_POLL_MS;
   private pausedUntil = 0;
 
-  constructor(private hub: Hub, private planner: Planner, private repo: string | null) {}
+  private readonly fetch: typeof fetchPrs;
+  /** PRs already flagged as claiming another agent's branch or task, so each is recorded once. */
+  private readonly flagged = new Set<number>();
+
+  constructor(
+    private hub: Hub,
+    private planner: Planner,
+    private repo: string | null,
+    private readonly o: {
+      fetch?: typeof fetchPrs;
+      /** The project agent whose App's bot user has this id, or null (M0-E, SR-E-12). */
+      agentForBot?: (botUserId: number) => string | null;
+      audit?: AuditSink;
+    } = {},
+  ) {
+    this.fetch = o.fetch ?? fetchPrs;
+  }
+
+  /** The agent that opened the PR: only a Bot whose id is an agent App's bot user. Never a login, branch or title. */
+  private authorOf(gh: GhPr): string {
+    const a = gh.author;
+    if (!a || a.__typename !== "Bot" || typeof a.databaseId !== "number") return "";
+    return this.o.agentForBot?.(a.databaseId) ?? "";
+  }
+
+  /** A branch or task id that points at another agent than the PR's author is flagged once; the claim is agent text. */
+  private flag(gh: GhPr, author: string, claimed: string): void {
+    if (this.flagged.has(gh.number)) return;
+    this.flagged.add(gh.number);
+    try {
+      this.o.audit?.append({ actorKind: "hq", actorId: "hq", action: "pr.misattributed", target: `${this.repo}#${gh.number}`, data: { author: author || null, claimed } });
+    } catch {
+      /* the flag stands in the activity feed */
+    }
+    this.hub.activity("config", author || null, `PR #${gh.number} by ${author ? this.hub.name(author) : "someone who is not an agent"} claims another agent's branch or task. HQ did not link it.`, {
+      quote: { author: author ? this.hub.name(author) : "the PR's author", text: `${gh.headRefName} — ${gh.title}` },
+    });
+  }
 
   start() {
     if (!this.repo) {
@@ -101,18 +139,25 @@ export class GitHubSync {
     this.busy = true;
     this.lastFetch = Date.now();
     try {
-      const { open, merged, closed, rate } = await fetchPrs(this.repo);
+      const { open, merged, closed, rate } = await this.fetch(this.repo);
       if (this.lastError) log.info("GitHub reachable again");
       this.lastError = null;
       this.pace(rate);
       const wf = this.hub.snap.config.workflow;
       const team = new Set(this.hub.snap.config.team.map((a) => a.id));
       const next = [...open, ...merged].map((gh) => {
+        // The author is who opened it (SR-E-12). A branch name and a title's task id are only claims.
+        const authorId = this.authorOf(gh);
         const taskId = taskIdOf(gh);
         const task = taskId ? this.planner.task(taskId) : undefined;
         const fromBranch = branchAgent(gh.headRefName);
-        const authorId = task?.ownerId ?? (fromBranch && team.has(fromBranch) ? fromBranch : "");
-        return toPullRequest(gh, wf.review.tool, wf.review.enabled, task?.id ?? taskId ?? "", authorId);
+        const claimedByBranch = fromBranch && team.has(fromBranch) && fromBranch !== authorId ? fromBranch : null;
+        const claimedByTask = task?.ownerId && task.ownerId !== authorId ? task.ownerId : null;
+        const claimed = claimedByTask ?? claimedByBranch;
+        if (claimed && (authorId || claimedByTask)) this.flag(gh, authorId, claimed);
+        // Only an agent's PR for its own task moves that task.
+        const linked = authorId && task && task.ownerId === authorId ? task.id : "";
+        return toPullRequest(gh, wf.review.tool, wf.review.enabled, linked, authorId);
       });
       // PRs we showed as open that are now neither open nor recently merged were closed. A full page of
       // open PRs may have left older ones out, so then only the recently-closed list proves it.
@@ -193,7 +238,7 @@ export class GitHubSync {
     }
 
     if (pr.review === "passed" && old?.review !== "passed") {
-      hub.activity("review.passed", who, `${tool} approved #${pr.number}`);
+      hub.activity("review.passed", who, `${tool} approved #${pr.number}. Merge it on GitHub: only you can merge into main.`);
       if (leadId) this.planner.notify(leadId, passedNotice(pr, hub.name(who), hub.snap.config.workflow.merge.by));
     }
 

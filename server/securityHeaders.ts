@@ -23,7 +23,8 @@ export function securityHeaders(host: string | undefined): Record<string, string
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'none'",
-    "form-action 'self'",
+    // The owner's browser posts an agent's GitHub App manifest to GitHub (M0-E); nowhere else.
+    "form-action 'self' https://github.com",
     "frame-ancestors 'none'",
   ].join("; ");
   return {

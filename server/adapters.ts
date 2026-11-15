@@ -2,9 +2,9 @@
 // the agent is launched. Everything else (hooks → state, Team MCP, delivery)
 // is shared — Codex and Claude Code send the same hook payloads.
 
-import { agentWrite } from "./lib/agentFs";
+import { agentRemove, agentWrite } from "./lib/agentFs";
 import type { AgentCli, AgentConfig, HqConfig } from "../src/data/types";
-import { removeOldRoleFile, excludeFromGit, HOOK_SCRIPT, type RoleExtras, hookCommand, hookScriptFor, hqUrl, MCP_CONFIG, roleMd, writeClaudeFiles, writeHookScript } from "./agentFiles";
+import { removeOldRoleFile, excludeFromGit, HOOK_AUTH, HOOK_SCRIPT, type RoleExtras, hookCommand, hqUrl, MCP_CONFIG, roleMd, writeClaudeFiles, writeHookAuth } from "./agentFiles";
 
 export interface Launch {
   sbxAgent: string; // agent name for `sbx run`
@@ -40,9 +40,8 @@ const CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Permiss
 /** TOML basic string (JSON's escaping is valid TOML for these characters). */
 const t = (s: string) => JSON.stringify(s);
 
-export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, dir: string, extras: RoleExtras): string {
+export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, _dir: string, extras: RoleExtras): string {
   const url = hqUrl(agent, cfg.project.hqPort);
-  const script = hookScriptFor(agent, dir);
   const lines = [
     "# Written by JSM HQ for this agent (git-excluded). Codex loads it once you trust this folder.",
     `developer_instructions = ${t(roleMd(agent, cfg, extras))}`,
@@ -55,7 +54,7 @@ export function codexConfig(agent: AgentConfig, cfg: HqConfig, token: string, di
     `http_headers = { Authorization = ${t(`Bearer ${token}`)} }`,
   ];
   for (const event of CODEX_EVENTS)
-    lines.push("", `[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"', `command = ${t(hookCommand(url, token, agent.id, event, script))}`);
+    lines.push("", `[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"', `command = ${t(hookCommand(url, agent.id, event))}`);
   return lines.join("\n") + "\n";
 }
 
@@ -64,9 +63,10 @@ const codex: CliAdapter = {
     // A repo that commits .codex/config.toml is refused before this (workspace.ts, trackedHqFiles).
     // The role goes in the config (developer_instructions), from the company store only.
     await removeOldRoleFile(dir);
+    writeHookAuth(dir, token);
     agentWrite(dir, CODEX_CONFIG, codexConfig(agent, cfg, token, dir, extras), { mode: 0o600 });
-    if (hookScriptFor(agent, dir)) writeHookScript(dir);
-    excludeFromGit(dir, [CODEX_CONFIG, HOOK_SCRIPT]);
+    agentRemove(dir, HOOK_SCRIPT); // an earlier HQ's Local-mode script: no longer used
+    excludeFromGit(dir, [CODEX_CONFIG, HOOK_AUTH, HOOK_SCRIPT]);
   },
   launch(agent) {
     const model = agent.model.trim() && !/^default$/i.test(agent.model.trim()) ? agent.model.trim() : null;

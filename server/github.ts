@@ -9,7 +9,8 @@ import { run } from "./lib/exec";
 // GitHub charges GraphQL by how many nested items a query *could* return, from a
 // 5,000-point hourly budget shared with the agents' own `gh` commands. Keep the
 // nested lists small, and fetch only the basics for merged PRs.
-const BASE_FIELDS = "number title url headRefName createdAt mergedAt state mergeable isDraft reviewDecision";
+// The author's type and, for an App's bot, its numeric id: PRs are attributed by these (SR-E-12).
+const BASE_FIELDS = "number title url headRefName createdAt mergedAt state mergeable isDraft reviewDecision author { __typename login ... on Bot { databaseId } }";
 const REVIEW_FIELDS = `
   reviews(last: 10) { nodes { author { login } state submittedAt } }
   reviewThreads(first: 30) { nodes { isResolved isOutdated comments(first: 1) { nodes { author { login } } } } }
@@ -67,6 +68,8 @@ export interface GhPr {
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   isDraft: boolean;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  /** Who opened it. Only a `Bot` with an agent App's id is an agent (SR-E-12). */
+  author: { __typename: string; login: string; databaseId?: number } | null;
   reviews: { nodes: { author: { login: string } | null; state: string; submittedAt: string }[] };
   reviewThreads: { nodes: { isResolved: boolean; isOutdated: boolean; comments: { nodes: { author: { login: string } | null }[] } }[] };
   commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: Ctx[] } } | null } }[] };

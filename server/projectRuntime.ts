@@ -20,6 +20,12 @@ import { offerImport } from "./repoConfigImport";
 import { Sbx } from "./sbx";
 import { SbxMcp } from "./sbxMcp";
 import { Sessions } from "./sessions";
+import { companyAgentId } from "./company/agents";
+import { AgentTokens, revokeOnStatus } from "./github/tokens";
+import { ghCliApi } from "./github/api";
+import { guardCommands, spendingConfirmed } from "./github/guardCommands";
+import { applyRepoGuard, RepoWatch, type GuardAgent } from "./github/repoGuard";
+import { run } from "./lib/exec";
 import { runSetupChecks } from "./setup";
 
 export interface RuntimeParts {
@@ -34,7 +40,7 @@ export interface RuntimeParts {
   commands: Record<string, CommandSpec>;
   /** Starts polling and syncing; `stop` undoes it. */
   start?: () => void;
-  stop?: () => void;
+  stop?: () => void | Promise<void>;
 }
 
 export class ProjectRuntime {
@@ -48,7 +54,7 @@ export class ProjectRuntime {
   readonly mcp: SbxMcp;
   readonly commands: Record<string, CommandSpec>;
   private readonly onStart: () => void;
-  private readonly onStop: () => void;
+  private readonly onStop: () => void | Promise<void>;
   private started = false;
 
   constructor(p: RuntimeParts) {
@@ -88,6 +94,17 @@ export class ProjectRuntime {
     sessions.lastHookAt = (id) => inbox.lastHookAt(id);
     const sbx = new Sbx(hub, company);
     sessions.envFileFor = (id) => (existsSync(sbx.envFile(id)) ? sbx.envFile(id) : null);
+    // Each agent's own one-hour GitHub token (M0-E, SR-E-04, SR-E-07).
+    const tokens = new AgentTokens({ apps: company.githubApps, api: company.githubApi, sbx, clock: company.clock, audit: company.audit });
+    sessions.github = {
+      deliver: (id) => tokens.deliver(id, companyAgentId(slug, id), repo.github),
+      revoke: (id, reason, by) => tokens.revoke(id, reason, by),
+    };
+    const unwatch = revokeOnStatus(company.agents, tokens, slug);
+    sessions.globalGithubKey = async () => {
+      await sbx.refresh();
+      return sbx.globalGithubKey();
+    };
     // Read fresh before a company-level agent starts: a key set a moment ago must count (SR-D-06).
     sessions.githubKeyFor = async (id) => {
       await sbx.refresh();
@@ -115,6 +132,34 @@ export class ProjectRuntime {
       roleOf: (id) => company.agents.get(slug, id)?.role ?? null,
     });
     planner.actions = new ActionItems(hub, planner);
+    // The repo's GitHub protection, read with the owner's own gh login (M0-E Task 4).
+    const ownerGh = ghCliApi(run);
+    const guardAgents = async (): Promise<GuardAgent[]> => {
+      const out: GuardAgent[] = [];
+      for (const a of company.agents.list(slug).filter((x) => x.status !== "retired")) {
+        const appId = company.githubApps.appId(a.companyId);
+        if (appId === null || !repo.github) continue;
+        const inst = await company.githubApps.installation(a.companyId, repo.github).catch(() => null);
+        out.push({ id: a.agentId, appId, installed: !!inst, selection: inst?.selection ?? null });
+      }
+      return out;
+    };
+    const watch = repo.github
+      ? new RepoWatch({
+          api: ownerGh,
+          repo: repo.github,
+          agents: guardAgents,
+          spendingConfirmed: () => spendingConfirmed(company, slug),
+          audit: company.audit,
+          report: (findings) => {
+            hub.snap.githubGuard = { repo: repo.github!, checkedAt: company.clock.now().toISOString(), findings, private: findings.some((f) => f.name === "spending-limit-unconfirmed") || spendingConfirmed(company, slug) };
+            hub.emit({ type: "github.guard", guard: structuredClone(hub.snap.githubGuard) });
+          },
+          notify: (text) => hub.activity("config", null, text),
+        })
+      : null;
+    const applyGuard = async () => applyRepoGuard(ownerGh, repo.github!, { agents: await guardAgents(), spendingConfirmed: spendingConfirmed(company, slug) });
+    let guardTimer: NodeJS.Timeout | null = null;
     let github: GitHubSync | null = null;
     return new ProjectRuntime({
       slug,
@@ -125,14 +170,30 @@ export class ProjectRuntime {
       sessions,
       sbx,
       mcp,
-      commands: makeCommands(hub, sessions, planner, inbox, sbx, mcp, company),
+      commands: { ...makeCommands(hub, sessions, planner, inbox, sbx, mcp, company), ...guardCommands({ company, slug, watch, apply: applyGuard }) },
       start: () => {
         sessions.startPolling();
         sbx.startApprovalPolling();
-        github = new GitHubSync(hub, planner, repo.github);
+        github = new GitHubSync(hub, planner, repo.github, {
+          // A PR is an agent's only when its author is that agent's App bot (SR-E-12).
+          agentForBot: (botUserId) => {
+            const cid = company.githubApps.agentForBot(botUserId);
+            return cid && cid.startsWith(`${slug}/`) ? cid.slice(slug.length + 1) : null;
+          },
+          audit: company.audit,
+        });
         github.start();
+        if (watch) {
+          const check = () => void watch.check().catch((err) => log.warn(`GitHub protection check for ${repo.github} failed: ${err instanceof Error ? err.message : err}`));
+          check();
+          guardTimer = setInterval(check, 24 * 3_600_000);
+          guardTimer.unref();
+        }
       },
-      stop: () => {
+      stop: async () => {
+        unwatch();
+        if (guardTimer) clearInterval(guardTimer);
+        await tokens.revokeAll("hq-stopped");
         sessions.shutdown();
         sbx.stopApprovalPolling();
         github?.stop();
@@ -148,8 +209,8 @@ export class ProjectRuntime {
     this.onStart();
   }
 
-  /** What stopping HQ does for this project: sessions shut down (tmux ones keep running), polling stops. */
-  stop(): void {
-    this.onStop();
+  /** What stopping HQ does for this project: tokens revoked, sessions shut down (tmux ones keep running), polling stops. */
+  async stop(): Promise<void> {
+    await this.onStop();
   }
 }

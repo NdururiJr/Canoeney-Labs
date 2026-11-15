@@ -52,6 +52,7 @@ async function main() {
 
   const hq = await startHq({
     start: resolve(arg("repo") ?? process.env.HQ_REPO ?? process.cwd()),
+    explicitRepo: arg("repo") !== undefined || !!process.env.HQ_REPO,
     port,
     dev,
     distDir: dev ? null : distDir,
@@ -74,9 +75,8 @@ async function main() {
   }
 
   const quit = () => {
-    log.info("stopping HQ and its agents — tmux sessions keep running; sandboxes and folders are kept");
-    hq.close();
-    process.exit(0);
+    log.info("stopping HQ and its agents — tmux sessions keep running; sandboxes and folders are kept; GitHub tokens are revoked");
+    void hq.close().finally(() => process.exit(0));
   };
   process.on("SIGINT", quit);
   process.on("SIGTERM", quit);

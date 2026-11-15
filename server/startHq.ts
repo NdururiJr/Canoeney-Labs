@@ -22,6 +22,8 @@ export const noneOpened = (why: string[]) => `No project could be opened (${why.
 export interface StartOptions {
   /** The folder HQ was started in (or --repo). */
   start: string;
+  /** The owner named it (--repo or HQ_REPO): it must be a git repo. */
+  explicitRepo?: boolean;
   port: number;
   dev: boolean;
   /** The built UI to serve, or null (dev: Vite serves it). */
@@ -41,7 +43,8 @@ export interface RunningHq {
   /** Where the owner's setup code is, while no owner is enrolled. */
   setupFile: string | null;
   server: Server;
-  close(): void;
+  /** Revokes every agent's GitHub token, then stops. */
+  close(): Promise<void>;
 }
 
 export async function startHq(o: StartOptions): Promise<RunningHq> {
@@ -53,7 +56,7 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     const open = o.openRuntime ?? ((c, repo, slug) => ProjectRuntime.open(c, repo, slug, { port: o.port }));
     const opened = new Projects(company, (repo, slug) => open(company, repo, slug));
     projects = opened;
-    await opened.registerStart(o.start);
+    await opened.registerStart(o.start, { required: o.explicitRepo });
     if (opened.list().length === 0) throw new Error(NO_PROJECT);
     log.info("opening projects…");
     await opened.openAll();
@@ -84,10 +87,10 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     opened.startAll();
 
     let closed = false;
-    const close = () => {
+    const close = async () => {
       if (closed) return;
       closed = true;
-      opened.stopAll();
+      await opened.stopAll();
       try {
         // The collapsed terminal rows still counting go in before HQ stops (M0-C final review).
         dashboard.flush(true);
@@ -105,7 +108,7 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     };
     return { projects: opened, url: `${o.uiOrigin}/`, setupFile, server, close };
   } catch (err) {
-    projects?.stopAll();
+    await projects?.stopAll();
     company.close();
     throw err;
   }

@@ -20,7 +20,7 @@ async function checkOs(): Promise<Check> {
   if (os === "darwin") {
     const v = (await run("sw_vers", ["-productVersion"])).stdout.trim();
     const major = Number(v.split(".")[0]);
-    if (arch() !== "arm64") return { ...base, status: "unsupported", detail: `macOS ${v} on Intel. Sandboxes need Apple silicon — use Local mode.` };
+    if (arch() !== "arm64") return { ...base, status: "unsupported", detail: `macOS ${v} on Intel. Sandboxes need Apple silicon, and HQ runs every agent in a sandbox.` };
     if (major < 14) return { ...base, status: "unsupported", detail: `macOS ${v}. Sandboxes need macOS 14 (Sonoma) or later.` };
     return { ...base, status: "ok", detail: `macOS ${v} · Apple silicon`, fix: null };
   }
@@ -28,7 +28,7 @@ async function checkOs(): Promise<Check> {
     const build = Number(release().split(".")[2] ?? 0);
     return build >= 22000
       ? { ...base, status: "ok", detail: "Windows 11 (needs Windows Hypervisor Platform enabled)", fix: null }
-      : { ...base, status: "unsupported", detail: "Windows 10. Sandboxes need Windows 11 — use Local mode." };
+      : { ...base, status: "unsupported", detail: "Windows 10. Sandboxes need Windows 11, and HQ runs every agent in a sandbox." };
   }
   const osRelease = existsSync("/etc/os-release") ? readFileSync("/etc/os-release", "utf8") : "";
   const id = osRelease.match(/^ID=(.*)$/m)?.[1]?.replace(/"/g, "");
@@ -122,17 +122,6 @@ async function checkTmux(brew: boolean): Promise<Check> {
   };
 }
 
-async function checkClaude(): Promise<Check> {
-  const base = { id: "claude" as const, label: "Claude Code (for Local mode)", neededFor: "local" as const };
-  const v = await run("claude", ["--version"], { timeoutMs: 8000 });
-  if (v.ok) return { ...base, status: "ok", detail: v.stdout.trim(), fix: null };
-  return {
-    ...base,
-    status: "missing",
-    detail: "Not installed. Only needed for agents in Local mode.",
-    fix: fix(os === "win32" ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash", false, "https://docs.claude.com/en/docs/claude-code/setup"),
-  };
-}
 
 async function checkGh(brew: boolean): Promise<Check> {
   const base = { id: "gh" as const, label: "GitHub CLI (reads PRs and reviews)", neededFor: "github" as const };
@@ -160,25 +149,32 @@ function checkRemote(repo: RepoInfo): Check {
   };
 }
 
-async function checkGithubSecret(sbxOk: boolean): Promise<Check> {
-  const base = { id: "github-secret" as const, label: "GitHub access inside sandboxes", neededFor: "sandbox" as const };
+/**
+ * No GitHub key for every sandbox (M0-E, SR-E-05). Each agent gets its own GitHub
+ * App's one-hour token instead; a key "for every sandbox" would let every agent
+ * merge and change settings, so while one exists no agent starts.
+ */
+export async function checkGithubSecret(sbxOk: boolean, exec: typeof run = run): Promise<Check> {
+  const base = { id: "github-secret" as const, label: "No GitHub key shared by every sandbox", neededFor: "sandbox" as const };
   if (!sbxOk) return { ...base, status: "missing", detail: "Waiting for sbx.", fix: null };
-  const r = await run("sbx", ["secret", "ls"], { timeoutMs: 10_000 });
-  if (r.ok && /\bgithub\b/.test(r.stdout)) return { ...base, status: "ok", detail: "Stored in Docker's secret store; injected by the proxy.", fix: null };
+  const r = await exec("sbx", ["secret", "ls", "--json"], { timeoutMs: 10_000 });
+  let global: boolean | null = null;
+  try {
+    const list = r.ok ? parseCliJson<{ secrets?: { name: string; scope: string; type?: string }[] }>(r.stdout)?.secrets : undefined;
+    if (list) global = list.some((s) => s.name === "github" && s.scope === "global");
+  } catch {
+    /* sbx down */
+  }
+  if (global === null) return { ...base, status: "warning", detail: "Couldn't read sbx's keys. HQ checks again before each agent starts.", fix: null };
+  if (!global) return { ...base, status: "ok", detail: "Each agent works on GitHub as its own App (Settings → Team).", fix: null };
   return {
     ...base,
     status: "missing",
-    detail: "Agents can't push or open PRs until this is set.",
-    fix: fix("sbx secret set github --command 'gh auth token'", true, "https://docs.docker.com/ai/sandboxes/get-started/"),
+    detail: "A GitHub key is set for every sandbox: every agent could merge and change repo settings. HQ starts no agent until it is removed.",
+    fix: fix("sbx secret rm github --force", true, null),
   };
 }
 
-async function checkCodex(): Promise<Check> {
-  const base = { id: "codex" as const, label: "Codex (for Codex agents in Local mode)", neededFor: "local" as const };
-  const v = await run("codex", ["--version"], { timeoutMs: 8000 });
-  if (v.ok) return { ...base, status: "ok", detail: v.stdout.trim(), fix: null };
-  return { ...base, status: "missing", detail: "Not installed. Only needed for Codex agents in Local mode (sandboxes have it).", fix: fix("npm install -g @openai/codex", false, "https://developers.openai.com/codex/cli") };
-}
 
 async function checkOpenAiSecret(sbxOk: boolean): Promise<Check> {
   const base = { id: "openai-secret" as const, label: "OpenAI sign-in for Codex agents", neededFor: "sandbox" as const };
@@ -197,20 +193,19 @@ async function checkOpenAiSecret(sbxOk: boolean): Promise<Check> {
 /** `team` adds the Codex checks only when the team has Codex agents. */
 export async function runSetupChecks(repo: RepoInfo, team: AgentConfig[] = []): Promise<SetupState> {
   const brew = os === "darwin" && (await has("brew"));
-  const [osCheck, sbx, tmux, claude, gh] = await Promise.all([checkOs(), checkSbx(brew), checkTmux(brew), checkClaude(), checkGh(brew)]);
+  const [osCheck, sbx, tmux, gh] = await Promise.all([checkOs(), checkSbx(brew), checkTmux(brew), checkGh(brew)]);
   const sbxOk = sbx.status === "ok";
   const [login, secret] = await Promise.all([checkSbxLogin(sbxOk), checkGithubSecret(sbxOk)]);
   const policy = await checkSbxPolicy(login.status === "ok");
-  const checks: SetupCheck[] = [osCheck, sbx, login, policy, secret, tmux, claude, gh, checkRemote(repo)];
+  const checks: SetupCheck[] = [osCheck, sbx, login, policy, secret, tmux, gh, checkRemote(repo)];
   const codexAgents = team.filter((a) => a.cli === "codex");
-  if (codexAgents.some((a) => a.mode === "sandbox")) checks.splice(5, 0, await checkOpenAiSecret(sbxOk));
-  if (codexAgents.some((a) => a.mode === "local")) checks.push(await checkCodex());
+  // Every agent runs in a sandbox (SR-E-06), which has Claude Code and Codex: no host CLI check.
+  if (codexAgents.length) checks.splice(5, 0, await checkOpenAiSecret(sbxOk));
   const ok = (c: SetupCheck) => c.status === "ok";
   return {
     machine: { cpus: cpus().length, memoryGb: Math.round(totalmem() / 1024 ** 3), persistentAgents: usesTmux() },
     checks,
     sandboxReady: osCheck.status !== "unsupported" && ok(sbx) && ok(login) && ok(policy) && ok(tmux),
-    localReady: ok(tmux) && ok(claude),
     checkedAt: new Date().toISOString(),
   };
 }

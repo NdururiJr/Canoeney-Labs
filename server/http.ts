@@ -172,10 +172,10 @@ export function startHttp(o: Options) {
     }
     // A session issued locally but replayed through a proxy is remote for this socket.
     const remote = session.remote || o.ownerAuth.isRemote(req);
-    wss.handleUpgrade(req, socket, head, (ws) => onClient(ws, session, remote));
+    wss.handleUpgrade(req, socket, head, (ws) => onClient(ws, session, remote, origin as string));
   });
 
-  function onClient(ws: WebSocket, session: DashboardSession, remote: boolean) {
+  function onClient(ws: WebSocket, session: DashboardSession, remote: boolean, origin: string) {
     const mine = socketsBySession.get(session.id) ?? new Set<WebSocket>();
     mine.add(ws);
     socketsBySession.set(session.id, mine);
@@ -202,7 +202,7 @@ export function startHttp(o: Options) {
     };
     view(o.projects.defaultId());
     const unsubProjects = o.projects.subscribe((projects) => sendEvent({ type: "projects.updated", projects }));
-    const ctxNow = (): CommandCtx => ({ actor: { kind: "human", id: session.humanId }, role: session.role, remote, sessionId: session.id, projectId });
+    const ctxNow = (): CommandCtx => ({ actor: { kind: "human", id: session.humanId }, role: session.role, remote, sessionId: session.id, projectId, origin });
     const allowed = o.dashboard.limiter();
     let limitedRowAt: number | null = null;
     const reply = (id: unknown, r: CommandResult) => {
@@ -230,6 +230,8 @@ export function startHttp(o: Options) {
       // Switching the viewed project: only to an open one; anything else keeps the current view.
       if (msg.type === "select") {
         if (typeof msg.projectId === "string" && o.projects.get(msg.projectId)) view(msg.projectId);
+        // Not open: the page hears the list (with why) instead of nothing.
+        else sendEvent({ type: "projects.updated", projects: o.projects.list() });
         return;
       }
       try {

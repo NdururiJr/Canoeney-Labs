@@ -30,18 +30,18 @@ function git(dir: string, ...args: string[]) {
 function hqHomes(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "hq review "));
   const saved = { HQ_COMPANY_HOME: process.env.HQ_COMPANY_HOME, HQ_HOME: process.env.HQ_HOME };
-  const stops: (() => void)[] = [];
+  const stops: (() => unknown)[] = [];
   process.env.HQ_COMPANY_HOME = join(dir, "company home");
   process.env.HQ_HOME = join(dir, "hq home");
-  t.after(() => {
-    for (const fn of stops.reverse()) fn();
+  t.after(async () => {
+    for (const fn of stops.reverse()) await fn();
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
     rmSync(dir, { recursive: true, force: true });
   });
-  return { dir, stopping: (fn: () => void) => stops.push(fn) };
+  return { dir, stopping: (fn: () => unknown) => stops.push(fn) };
 }
 
 const START = { port: 0, dev: false, distDir: null, uiOrigin: "http://hq.test", extraOrigins: [], openRuntime: openTestRuntime };

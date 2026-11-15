@@ -43,6 +43,8 @@ export interface AgentConfig {
   roleMd: string; // contents of ROLE.md
   sandbox: SandboxSettings;
   workspacePath: string | null; // an existing folder to use; null = HQ-managed clone
+  /** The agent's own GitHub App, when the owner has created it (M0-E). Owner only. */
+  github?: { app: string } | null;
   /** MCP servers (names in sbx's registry) this agent's sandbox gets. */
   mcp?: string[];
 }
@@ -256,7 +258,7 @@ export interface RemoveAgentOptions {
 
 // ---------------------------------------------------------------- Setup
 
-export type SetupCheckId = "os" | "sbx" | "sbx-login" | "sbx-policy" | "tmux" | "gh" | "gh-remote" | "github-secret" | "claude" | "codex" | "openai-secret";
+export type SetupCheckId = "os" | "sbx" | "sbx-login" | "sbx-policy" | "tmux" | "gh" | "gh-remote" | "github-secret" | "openai-secret";
 export type SetupStatus = "ok" | "missing" | "unsupported" | "warning";
 
 export interface SetupFix {
@@ -270,7 +272,7 @@ export interface SetupCheck {
   label: string;
   status: SetupStatus;
   detail: string; // version found, or what is wrong
-  neededFor: "sandbox" | "local" | "all" | "github";
+  neededFor: "sandbox" | "all" | "github";
   fix: SetupFix | null;
 }
 
@@ -333,7 +335,6 @@ export interface SetupState {
   machine: MachineInfo;
   checks: SetupCheck[];
   sandboxReady: boolean; // every sandbox check passes
-  localReady: boolean; // Local mode can run
   checkedAt: string;
 }
 
@@ -345,9 +346,21 @@ export interface ProjectSummary {
   id: string;
   name: string;
   state: "open" | "missing" | "hq-source";
+  /** Why it is not open, in HQ's words ("folder missing", "inside HQ's home", …). */
+  note?: string;
+}
+
+/** What HQ last found wrong with the project repo's GitHub protection (M0-E). Owner only. */
+export interface GithubGuardState {
+  repo: string;
+  checkedAt: string;
+  findings: { name: string; detail: string; fixable: boolean }[];
+  /** A private repo's Actions spending limit, as the owner confirmed it (SR-E-14). */
+  private: boolean;
 }
 
 export interface OfficeSnapshot {
+  githubGuard?: GithubGuardState;
   /** The project this snapshot is of, and every project HQ manages (real HQ only, M0-D2). */
   projectId?: string;
   projects?: ProjectSummary[];
