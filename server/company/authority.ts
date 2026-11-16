@@ -3,7 +3,7 @@
 // ProjectSettings both use relaxes(), so the two cannot drift apart.
 import type { AgentMode, WorkflowConfig } from "../../src/data/types";
 import { canonicalJson } from "./canonicalJson";
-import type { PermissionKind } from "./types";
+import type { PermissionKind, RoleId } from "./types";
 
 /**
  * - `pin`: the owner, confirmed with the approval PIN.
@@ -25,6 +25,10 @@ export type ConfigChange =
   | { kind: "workflow"; before: WorkflowConfig; after: WorkflowConfig }
   | { kind: "project"; field: ProjectField; before: unknown; after: unknown }
   | { kind: "agent"; field: AgentField; before: unknown; after: unknown }
+  /** Pinning the company's skills repo to a commit (M0-F). `before` is the commit pinned now, if any. */
+  | { kind: "skills-pin"; before: string | null; after: string; lockHash: string }
+  /** The skills a role's agents get (M0-F). */
+  | { kind: "role-skills"; role: RoleId; before: string[]; after: string[] }
   | { kind: "agent-added" | "agent-retired" | "import" | "notes-approved" | "project-added" };
 
 export type AuthorityRefusal = "pin-or-decision-required" | "not-owner" | "decision-not-approved" | "hq-cannot-grant" | "local-mode-forbidden";
@@ -51,6 +55,12 @@ const MESSAGES: Record<AuthorityRefusal, string> = {
 const RELAXING_GRANTS: ReadonlySet<PermissionKind> = new Set(["network-allow", "mcp-server", "secret-name", "tool", "skill"]);
 
 const same = (a: unknown, b: unknown): boolean => canonicalJson(a ?? null) === canonicalJson(b ?? null);
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => {
+  const x = new Set(a);
+  const y = new Set(b);
+  return x.size === y.size && [...x].every((v) => y.has(v));
+};
 
 function workflowRelaxes(b: WorkflowConfig, a: WorkflowConfig): boolean {
   if (b.review.enabled && !a.review.enabled) return true;
@@ -81,6 +91,10 @@ export function relaxes(c: ConfigChange): boolean {
       if (c.field === "cli" || c.field === "roleMd") return true;
       if (c.field === "workspacePath") return typeof c.after === "string" && c.after !== "";
       return false;
+    case "skills-pin":
+      return c.before !== c.after;
+    case "role-skills":
+      return !sameSet(c.before, c.after);
     case "agent-added":
     case "project-added":
     case "import":

@@ -5,6 +5,7 @@ import { SqliteAuditSink } from "./audit";
 import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
+import { CompanySkills } from "./companySkills";
 import { HumanAccounts } from "./humanAccounts";
 import { fetchGitHubApi, type GitHubApi } from "../github/api";
 import { GitHubApps } from "../github/apps";
@@ -44,6 +45,8 @@ export interface Company {
   githubApps: GitHubApps;
   /** The GitHub REST client the Apps and tokens use (a fake in tests). */
   githubApi: GitHubApi;
+  /** The skill lock and each role's skill set (M0-F). */
+  skills: CompanySkills;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
@@ -67,6 +70,7 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
     agents,
     secrets,
     settings,
+    skills: new CompanySkills(db, clock, settings),
     plans: new PlanStore(db),
     notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
