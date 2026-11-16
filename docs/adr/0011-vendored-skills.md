@@ -23,7 +23,7 @@ The spec says "company-owned forks". One repo is a narrow reading of that, and h
 The repo is public because GitHub Free gives a private repo no rulesets (GitHub answered 403). Public also means HQ fetches it with no stored credential. A ruleset on the default branch blocks deletion and non-fast-forward pushes. The owner is the only collaborator, and no agent App is installed on it. A required pull-request review is not demanded: the owner is the only writer, and GitHub does not let an author approve their own pull request.
 
 Skills reach the repo through a pull request that the owner reviews (Task 8). The edit rules are written in the repo's README:
-- "your human partner" becomes "your manager", reached with `send_message`;
+- "your human partner" and "the user" (where they mean the person directing the agent) become "your manager". The rule names `send_message`, but in M0 that tool has no recipient for every role (the CTO's manager, the CEO, does not run yet), and a message holds at most 2000 characters. So the vendored skills say "reach them the way your role file says", and the role text will name each role's manager, how to reach them, and its reviewer (carried forward);
 - references to skills outside the role's set, to subagents, and to worktrees or branches HQ owns are removed, and the skill points to the role file instead;
 - no `../` path and no link;
 - no company policy (SR-F-07). Each removal is listed in the pull request, with a note the owner can put into `Knowledge`.
@@ -130,6 +130,7 @@ The D1 agent-config check refuses a start when a tracked agent-configuration pat
 - **"Gone" (SR-F-04)** is read as moved out of the agent's folder into HQ's home (above).
 - **SR-F-07 is a review item, not code.** The vendoring pull request carries the check skill by skill and lists each removal.
 - **"A `../` path" (SR-F-06)** is a file path in the pinned commit that leaves its skill's folder, and the code refuses it. A `../` written inside a skill's text or script is not something HQ can judge; the review removes it (edit rule 4).
+- **Role sets are seeded by migration** with §2a's starting sets. The migration reaches `main` only through the owner's merge, so it is an owner-approved change.
 - **Category 2 decisions arrive in M1.** In M0 the owner's PIN is the only working authority. The `decision` path goes through the same `authorized()` check and is tested with an approved row written directly.
 - **Three §2a skills wait for M1:** humanizer and the charter-first planning skill (CEO), and the company-audit skill (Security & Audit). No CEO or Security & Audit agent runs in M0, and two of the three are new work.
 
