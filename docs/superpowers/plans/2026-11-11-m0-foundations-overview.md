@@ -170,3 +170,5 @@ M0-H can run at any point after M0-A, which puts the folder name behind one cons
 | M0-E exit check: a wrong host clock made every TOTP code fail with no hint. Say "your computer's clock looks off" after failures, and check the clock's skew at startup | M0-H |
 | M0-E exit check: HQ did not find `sbx` when its `PATH` predated the install. Also look in sbx's install folder | M0-H |
 | M0-E exit check: the guard's "main missing" text shows when `main` exists but the read failed | M0-H |
+| M0-F plan, PR #13 review (non-blocking): §2a's humanizer and charter-first planning skills (CEO) and the company-audit skill (Security & Audit) are not in M0-F's starting sets; no CEO or Security & Audit agent runs in M0 | M1 (CEO skills with the CEO agent; company-audit with M1.8) |
+| M0-F plan, PR #13 review (non-blocking): a skill an agent writes to `~/.claude/skills` in its own sandbox is loaded and stays until "Recreate sandbox"; HQ re-syncs only the workspace folders. Reaches only that agent (as T-S6.10). Known limit in ADR 0011 | M1 (M1.8: Security & Audit flags it, or HQ empties the sandbox home's skills folders at start) |
