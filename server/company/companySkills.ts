@@ -144,6 +144,21 @@ export class CompanySkills {
     return { added, removed };
   }
 
+  /** When HQ created this agent's sandbox with sbx's shared skills off, or null when it holds no such record. */
+  skillsOffAt(companyAgentId: string): string | null {
+    return this.db.prepare("SELECT skills_off_at FROM agent_sandboxes WHERE agent_id = ?").get<{ skills_off_at: string }>(companyAgentId)?.skills_off_at ?? null;
+  }
+
+  /** Records that HQ just created this agent's sandbox with sbx's shared skills off. Replaces an older record. */
+  recordSkillsOff(companyAgentId: string): void {
+    this.db.prepare("INSERT OR REPLACE INTO agent_sandboxes(agent_id, skills_off_at) VALUES (?, ?)").run(companyAgentId, this.clock.now().toISOString());
+  }
+
+  /** The agent's sandbox is gone, so the record of it goes too. */
+  clearSkillsOff(companyAgentId: string): void {
+    this.db.prepare("DELETE FROM agent_sandboxes WHERE agent_id = ?").run(companyAgentId);
+  }
+
   /**
    * Fetches `commit` of `repo` (its default branch only) and reads it, so the
    * owner can see what a pin would install. Changes nothing. A refusal is

@@ -53,10 +53,12 @@ const STALE_WORKING_MS = 15_000; // "working" with an idle screen this long = a 
  * not get the opener that sends URLs to the host browser (SR-C-15). The opener sbx
  * installs can still be run by name inside the sandbox; ADR 0007 records that.
  */
-export function sbxRunArgs(o: { name: string; size: string[]; envFile: string | null; sbxAgent: string; dir: string; launchArgs: string[] }): string[] {
+export function sbxRunArgs(o: { name: string; size: string[]; envFile: string | null; sbxAgent: string; dir: string; launchArgs: string[]; skillsOff: boolean }): string[] {
   const env = o.envFile ? ["--env-file", o.envFile] : [];
+  // sbx's machine-wide skills store would reach every agent with no pin (M0-F); only a new sandbox takes the flag.
+  const skills = o.skillsOff ? ["--skills", "off"] : [];
   const args = o.launchArgs.length ? ["--", ...o.launchArgs] : [];
-  return ["run", "--name", o.name, ...o.size, ...env, o.sbxAgent, o.dir, ...args];
+  return ["run", "--name", o.name, ...o.size, ...env, ...skills, o.sbxAgent, o.dir, ...args];
 }
 
 /** Starts bash (else sh) in a sandbox, with links and browser opening set up (see SHELL_ENV, SANDBOX_BROWSER). */
@@ -91,6 +93,10 @@ export class Sessions {
   globalGithubKey: () => Promise<boolean | "unknown"> = async () => false;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
   githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => "unknown"; // fails closed until wired
+  /** What sbx's shared skills store holds, read fresh (M0-F). The project runtime wires it to Sbx. */
+  sharedSkills: () => Promise<"empty" | "some" | "unknown"> = async () => "unknown"; // fails closed until wired
+  /** Runs sbx for the lifecycle calls that tests must be able to fake (remove, recreate). */
+  private sbxExec: typeof run = run;
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
   onSessionReattached: (agentId: string) => void = () => {};
   /** When the agent's last hook arrived (from the inbox). */
@@ -251,6 +257,16 @@ export class Sessions {
         this.noteOldKey(id);
       }
       else {
+        // A sandbox HQ did not create with skills off starts only while sbx's shared store is empty (M0-F).
+        // Checked before a secret is issued or a file is written, so a refusal leaves nothing behind.
+        const isNew = agent.mode === "sandbox" && !(await this.sandboxExists(name));
+        if (agent.mode === "sandbox" && !isNew && this.company.skills.skillsOffAt(reg.companyId) === null) {
+          const store = await this.sharedSkills();
+          if (store === "unknown")
+            throw new WorkspaceRefusedError("shared-skills", `HQ couldn't read sbx's shared skills store, so it can't tell whether skills would reach ${agent.name}'s sandbox. Check that sbx is running, then start ${agent.name} again.`);
+          if (store === "some")
+            throw new WorkspaceRefusedError("shared-skills", "Recreate sandbox: it was made before HQ turned sbx's shared skills off, and that store has skills in it.");
+        }
         // No env file reaches any agent in M0 and M1 (D2, SR-E-13): no secret value goes into a sandbox.
         const hasEnvFile = false;
         if (this.envFileFor(id)) hub.activity("session", id, `${agent.name}'s app variables file was not passed: no secret values go into sandboxes until you approve each variable (M2).`);
@@ -274,11 +290,12 @@ export class Sessions {
           // sbx only accepts a size when it creates the sandbox; an existing (stopped) one keeps its size,
           // and passing --cpus/--memory again makes `sbx run` fail. "Recreate sandbox" applies a new size.
           const { cpus, memoryGb } = agent.sandbox.resources;
-          const isNew = !(await this.sandboxExists(name));
           const size = !isNew ? [] : [...(cpus ? ["--cpus", String(cpus)] : []), ...(memoryGb ? ["--memory", `${Math.round(memoryGb * 1024)}m`] : [])];
-          spec = { file: "sbx", args: sbxRunArgs({ name, size, envFile, sbxAgent: launch.sbxAgent, dir, launchArgs: launch.args }), envFile: null };
+          spec = { file: "sbx", args: sbxRunArgs({ name, size, envFile, sbxAgent: launch.sbxAgent, dir, launchArgs: launch.args, skillsOff: isNew }), envFile: null };
         }
         await this.backend.create(name, dir, spec, { cols: 200, rows: 50 });
+        // Only now is there a sandbox made with skills off to record.
+        if (isNew) this.company.skills.recordSkillsOff(reg.companyId);
       }
       this.attach(id);
       hub.setSession(id, { state: "running", detail: null, workspace: dir });
@@ -386,8 +403,8 @@ export class Sessions {
     this.closeShell(id);
     await this.backend.kill(name);
     if (opts.deleteSandbox) {
-      const rm = await run("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
-      if (rm.ok) (done.push("sandbox"), this.onSandboxRemoved(id));
+      const rm = await this.sbxExec("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
+      if (rm.ok) (done.push("sandbox"), this.forgetSandbox(id));
       else if (!/not found|no such/i.test(rm.stderr)) log.warn(`sbx rm ${name}: ${rm.stderr.trim()}`);
     } else if (agent.mode === "sandbox") void run("sbx", ["stop", name], { timeoutMs: 30_000 });
     if (opts.deleteFolder && !agent.workspacePath) {
@@ -399,6 +416,17 @@ export class Sessions {
       }
     }
     return done;
+  }
+
+  /** The agent's sandbox is gone: what was attached to it, and HQ's record that it was made with skills off. */
+  private forgetSandbox(id: string) {
+    try {
+      const reg = this.company.agents.get(this.hub.slug, id);
+      if (reg) this.company.skills.clearSkillsOff(reg.companyId);
+    } catch (err) {
+      log.warn(`could not clear ${id}'s sandbox record: ${err instanceof Error ? err.message : err}`);
+    }
+    this.onSandboxRemoved(id);
   }
 
   /** True if sbx lists a sandbox with this name (running or stopped). */
@@ -432,12 +460,12 @@ export class Sessions {
     const name = this.name(id);
     if (this.hub.status(id)?.session.state === "running") await this.stopNow(id);
     this.hub.setSession(id, { state: "starting", detail: "Removing the old sandbox…", sandbox: null });
-    const rm = await run("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
+    const rm = await this.sbxExec("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
     if (!rm.ok && !/not found|no such/i.test(rm.stderr)) {
       this.hub.setSession(id, { state: "failed", detail: `sbx rm failed: ${rm.stderr.trim()}` });
       return;
     }
-    this.onSandboxRemoved(id);
+    this.forgetSandbox(id);
     this.hub.setSession(id, { state: "stopped", detail: null });
     this.hub.activity("session", id, `Recreating ${agent.name}'s sandbox with new resources`);
     await this.startNow(id);

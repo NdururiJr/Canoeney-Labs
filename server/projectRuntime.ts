@@ -112,6 +112,8 @@ export class ProjectRuntime {
       await sbx.refresh();
       return sbx.githubKeyFor(id);
     };
+    // Read fresh at the start of an older sandbox: a skill added a moment ago must count (M0-F).
+    sessions.sharedSkills = () => sbx.sharedSkills();
     const mcp = new SbxMcp(hub, (id, file, args, onExit) => sessions.runTerminal(id, file, args, onExit), undefined, company);
     sessions.onSandboxReady = (id) => {
       void sbx.syncRules(id);
