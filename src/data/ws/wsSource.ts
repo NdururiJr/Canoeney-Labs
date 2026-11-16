@@ -61,11 +61,11 @@ export function createWsSource(): OfficeDataSource {
   };
   const send = (cmd: string, ...args: unknown[]) => transmit(cmd, args);
   /** HQ's answer to one command: ask for the PIN when it needs one. */
-  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }) => void) | null = null;
+  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }, args: unknown[]) => void) | null = null;
   const onResult = (e: { id: string; ok: boolean; error?: string; message?: string; data?: unknown }) => {
     const sent = pending.get(e.id);
     pending.delete(e.id);
-    if (sent) resultListener?.(sent.cmd, e);
+    if (sent) resultListener?.(sent.cmd, e, sent.args);
     if (sent && !e.ok && e.error && PIN_ERRORS.has(e.error)) askPin({ ...sent, reason: e.error as "pin-required" });
     if (sent?.cmd === "createGithubIdentity" && e.ok) postManifest(e.data);
     if (sent?.cmd === "completeGithubIdentity" && e.ok) {

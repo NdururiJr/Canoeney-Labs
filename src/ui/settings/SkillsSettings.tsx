@@ -169,7 +169,7 @@ export function SkillsList({ lock }: { lock: { name: string; hash: string; files
 }
 
 /** One checkbox per role and pinned skill. A row is saved whole, with the PIN. */
-export function RoleGrid({ skills, onSave }: { skills: SkillsState; onSave: (role: string, names: string[]) => void }) {
+export function RoleGrid({ skills, errors = {}, onSave }: { skills: SkillsState; /** A role's refused save, in HQ's words. */ errors?: Record<string, string>; onSave: (role: string, names: string[]) => void }) {
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
   const names = skills.lock.map((s) => s.name);
   return (
@@ -188,6 +188,11 @@ export function RoleGrid({ skills, onSave }: { skills: SkillsState; onSave: (rol
                 Save
               </button>
             </div>
+            {errors[role] && (
+              <p className="mb-1 mt-0 text-[13px] font-semibold text-red" role="alert">
+                {errors[role]}
+              </p>
+            )}
             <div className="flex flex-wrap gap-x-4 gap-y-1">
               {[...names, ...stale].map((n) => (
                 <label key={n} className="flex items-center gap-1.5 text-[13px]">
@@ -265,15 +270,48 @@ function RepoCheck({ guard }: { guard: SkillsGuardState }) {
   );
 }
 
+/** The commit field and its Preview button. Preview stays off until the field holds exactly 40 hex characters. */
+export function PinCommitForm({
+  repo,
+  commit,
+  previewing,
+  onChange,
+  onPreview,
+}: {
+  repo: string;
+  commit: string;
+  previewing: boolean;
+  onChange: (commit: string) => void;
+  onPreview: (repo: string, commit: string) => void;
+}) {
+  const valid = isCommitSha(commit);
+  return (
+    <form
+      className="flex gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (valid && !previewing) onPreview(repo, commit.trim().toLowerCase());
+      }}
+    >
+      <input className="field flex-1 font-term text-[17px]" value={commit} onChange={(e) => onChange(e.target.value)} placeholder="commit, 40 hex characters" aria-label="Commit to pin" spellCheck={false} />
+      <button className="btn" type="submit" disabled={!valid || previewing}>
+        {previewing ? "Reading…" : "Preview"}
+      </button>
+    </form>
+  );
+}
+
 export function SkillsSettings() {
   const skills = useOffice((s) => s.snap?.skills) ?? null;
   const guard = useOffice((s) => s.snap?.skillsGuard) ?? null;
   const flow = useOffice((s) => s.skillsPin);
+  const roleErrors = useOffice((s) => s.skillsRoleErrors);
   return (
     <SkillsPanel
       skills={skills}
       guard={guard}
       flow={flow}
+      roleErrors={roleErrors}
       onPreview={(repo, commit) => officeActions.previewSkillsPin(repo, commit)}
       onConfirm={(repo, commit, lockHash) => officeActions.pinSkills(repo, commit, lockHash)}
       onCancel={() => officeActions.resetSkillsPin()}
@@ -286,6 +324,7 @@ export function SkillsPanel({
   skills,
   guard,
   flow,
+  roleErrors,
   onPreview,
   onConfirm,
   onCancel,
@@ -294,6 +333,7 @@ export function SkillsPanel({
   skills: SkillsState | null;
   guard: SkillsGuardState | null;
   flow: SkillsPinFlow;
+  roleErrors?: Record<string, string>;
   onPreview: (repo: string, commit: string) => void;
   onConfirm: (repo: string, commit: string, lockHash: string) => void;
   onCancel: () => void;
@@ -301,7 +341,6 @@ export function SkillsPanel({
 }) {
   const [commit, setCommit] = useState("");
   const repo = skills?.source.repo ?? DEFAULT_SKILLS_REPO;
-  const valid = isCommitSha(commit);
   const pinnedLink = skills ? commitLink(`https://github.com/${skills.source.repo}/commit/${skills.source.commit}`) : null;
   return (
     <div className="flex flex-col gap-5">
@@ -329,18 +368,7 @@ export function SkillsPanel({
         <p className="mb-2 text-[13px] text-muted">
           Paste a commit of {repo} that is on its default branch (40 characters). HQ reads it and shows what would change before anything is pinned.
         </p>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (valid && flow.state !== "previewing") onPreview(repo, commit.trim().toLowerCase());
-          }}
-        >
-          <input className="field flex-1 font-term text-[17px]" value={commit} onChange={(e) => setCommit(e.target.value)} placeholder="commit, 40 hex characters" aria-label="Commit to pin" spellCheck={false} />
-          <button className="btn" type="submit" disabled={!valid || flow.state === "previewing"}>
-            {flow.state === "previewing" ? "Reading…" : "Preview"}
-          </button>
-        </form>
+        <PinCommitForm repo={repo} commit={commit} previewing={flow.state === "previewing"} onChange={setCommit} onPreview={onPreview} />
         {flow.state === "failed" && (
           <p className="mt-2 text-[13px] font-semibold text-red" role="alert">
             {flow.message}
@@ -359,7 +387,7 @@ export function SkillsPanel({
           <section>
             <SectionTitle>What each role gets</SectionTitle>
             <p className="mb-2 text-[13px] text-muted">An agent gets its role's skills, plus any you grant it under Settings → Team. Saving a role asks for your PIN and applies at each agent's next start.</p>
-            <RoleGrid skills={skills} onSave={onSaveRole} />
+            <RoleGrid skills={skills} errors={roleErrors} onSave={onSaveRole} />
           </section>
         </>
       )}

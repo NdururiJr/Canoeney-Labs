@@ -97,7 +97,7 @@ export interface OfficeDataSource {
   addProject(path: string): void;
 
   /** Hears each command's answer (real HQ only): the add-project dialog follows its own. */
-  onCommandResult?(fn: (cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }) => void): void;
+  onCommandResult?(fn: (cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }, args: unknown[]) => void): void;
   /** The owner confirms a renamed or moved repo's new GitHub address for a project (PIN). */
   confirmProjectRepo(projectId: string): void;
   /** Sends a command again with the approval PIN (real HQ only, M0-C). */

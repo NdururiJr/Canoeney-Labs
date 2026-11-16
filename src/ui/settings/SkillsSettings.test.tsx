@@ -10,8 +10,10 @@ import {
   commitLink,
   DEFAULT_SKILLS_REPO,
   isCommitSha,
+  PinCommitForm,
   PinPreviewView,
   RoleGrid,
+  SkillsPanel,
   SkillCheckboxes,
   SkillsList,
   StackSkillStatus,
@@ -181,4 +183,46 @@ test("a commit is exactly 40 hex characters, and the repo defaults to the compan
   assert.equal(isCommitSha("a".repeat(41)), false);
   assert.equal(isCommitSha("g".repeat(40)), false);
   assert.equal(DEFAULT_SKILLS_REPO, "NdururiJr/canoeney-skills");
+});
+
+test("Preview is disabled until the field holds exactly 40 hex characters, and sends the repo and the lower-case commit", () => {
+  const form = (commit: string, previewing = false) => renderToStaticMarkup(<PinCommitForm repo="a/b" commit={commit} previewing={previewing} onChange={() => {}} onPreview={() => {}} />);
+  assert.match(form(""), /<button[^>]*disabled[^>]*>Preview/);
+  assert.match(form("a".repeat(39)), /<button[^>]*disabled[^>]*>Preview/);
+  assert.match(form("a".repeat(41)), /<button[^>]*disabled[^>]*>Preview/);
+  assert.match(form("z".repeat(40)), /<button[^>]*disabled[^>]*>Preview/);
+  assert.doesNotMatch(form("a".repeat(40)), /disabled/);
+  assert.match(form("a".repeat(40), true), /<button[^>]*disabled[^>]*>Reading/);
+
+  const sent: unknown[][] = [];
+  const submit = (commit: string, previewing = false) => {
+    const el = PinCommitForm({ repo: "a/b", commit, previewing, onChange: () => {}, onPreview: (...a: unknown[]) => sent.push(a) }) as ReactElement;
+    (el.props as { onSubmit: (e: { preventDefault(): void }) => void }).onSubmit({ preventDefault() {} });
+  };
+  submit("A".repeat(40));
+  submit("a".repeat(39));
+  submit("a".repeat(40), true);
+  assert.deepEqual(sent, [["a/b", "a".repeat(40)]]);
+});
+
+const panelProps = { skills: null, guard: null, onPreview: () => {}, onConfirm: () => {}, onCancel: () => {}, onSaveRole: () => {} };
+
+test("the panel shows a failed preview's message, and the preview with a failed confirm's reason", () => {
+  const failed = renderToStaticMarkup(<SkillsPanel {...panelProps} flow={{ state: "failed", message: "That commit is not on the default branch." }} />);
+  assert.match(failed, /role="alert"[^>]*>That commit is not on the default branch\./);
+  assert.match(failed, /disabled/, "Preview is off while the field is empty");
+  assert.match(failed, /NdururiJr\/canoeney-skills/, "the repo defaults to the company's");
+  const ready = renderToStaticMarkup(<SkillsPanel {...panelProps} flow={{ state: "ready", preview: preview(), error: "HQ would not pin it." }} />);
+  assert.match(ready, /Confirm with PIN/);
+  assert.match(ready, /HQ would not pin it\./);
+  const idle = renderToStaticMarkup(<SkillsPanel {...panelProps} flow={{ state: "idle" }} />);
+  assert.doesNotMatch(idle, /role="alert"/);
+});
+
+test("a refused role save is shown on its own row", () => {
+  const html = renderToStaticMarkup(<RoleGrid skills={state} errors={{ cto: "x is not a skill name." }} onSave={() => {}} />);
+  assert.match(html, /role="alert"[^>]*>x is not a skill name\./);
+  assert.equal((html.match(/role="alert"/g) ?? []).length, 1);
+  const panel = renderToStaticMarkup(<SkillsPanel {...panelProps} skills={state} flow={{ state: "idle" }} roleErrors={{ builder: "HQ did not save this role." }} />);
+  assert.match(panel, /HQ did not save this role\./);
 });

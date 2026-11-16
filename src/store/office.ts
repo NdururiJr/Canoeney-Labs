@@ -35,6 +35,8 @@ interface OfficeState {
   addProject: AddProjectStatus;
   /** Settings → Skills: a commit previewed, then confirmed with the PIN (M0-F). */
   skillsPin: SkillsPinFlow;
+  /** A role's refused save, by role id, in HQ's words. Cleared by the next save of that role (M0-F). */
+  skillsRoleErrors: Record<string, string>;
 }
 
 /**
@@ -55,6 +57,7 @@ export const useOffice = create<OfficeState>(() => ({
   connection: "connecting",
   addProject: { state: "idle" },
   skillsPin: { state: "idle" },
+  skillsRoleErrors: {},
   source,
 }));
 
@@ -150,25 +153,38 @@ function handle(e: OfficeEvent) {
   });
 }
 
+/**
+ * What a command's answer changes in the store. The add-project dialog and the skills pin flow follow their own
+ * commands; a PIN prompt in between (pin-required, pin-wrong, pin-locked) leaves them waiting where they are.
+ */
+export function settleCommand(cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }, args: unknown[] = []): void {
+  const pinPrompt = e.error === "pin-required" || e.error === "pin-wrong" || e.error === "pin-locked";
+  if (cmd === "addProject" && useOffice.getState().addProject.state === "adding") {
+    if (e.ok) useOffice.setState({ addProject: { state: "done" } });
+    else if (e.error !== "pin-required" && e.error !== "pin-wrong") useOffice.setState({ addProject: { state: "failed", message: e.message } });
+  } else if (cmd === "previewSkillsPin") {
+    const preview = e.ok ? asSkillsPreview(e.data) : null;
+    useOffice.setState({ skillsPin: preview ? { state: "ready", preview } : { state: "failed", message: e.message ?? "HQ could not preview that commit." } });
+  } else if (cmd === "pinSkills") {
+    if (e.ok) useOffice.setState({ skillsPin: { state: "idle" } });
+    else if (!pinPrompt) {
+      useOffice.setState((s) => (s.skillsPin.state === "ready" ? { skillsPin: { ...s.skillsPin, error: e.message ?? "HQ did not pin it." } } : {}));
+    }
+  } else if (cmd === "setRoleSkills") {
+    const role = typeof args[0] === "string" ? args[0] : null;
+    if (!role || pinPrompt) return;
+    useOffice.setState((s) => {
+      const { [role]: _gone, ...rest } = s.skillsRoleErrors;
+      return { skillsRoleErrors: e.ok ? rest : { ...rest, [role]: e.message ?? "HQ did not save that role's skills." } };
+    });
+  }
+}
+
 let disconnect: (() => void) | null = null;
 
 export function connectOffice() {
   if (disconnect) return disconnect;
-  // The add-project dialog and the skills pin flow follow their own commands' answers; a PIN prompt in between keeps them waiting.
-  source.onCommandResult?.((cmd, e) => {
-    if (cmd === "addProject" && useOffice.getState().addProject.state === "adding") {
-      if (e.ok) useOffice.setState({ addProject: { state: "done" } });
-      else if (e.error !== "pin-required" && e.error !== "pin-wrong") useOffice.setState({ addProject: { state: "failed", message: e.message } });
-    } else if (cmd === "previewSkillsPin") {
-      const preview = e.ok ? asSkillsPreview(e.data) : null;
-      useOffice.setState({ skillsPin: preview ? { state: "ready", preview } : { state: "failed", message: e.message ?? "HQ could not preview that commit." } });
-    } else if (cmd === "pinSkills") {
-      if (e.ok) useOffice.setState({ skillsPin: { state: "idle" } });
-      else if (e.error !== "pin-required" && e.error !== "pin-wrong" && e.error !== "pin-locked") {
-        useOffice.setState((s) => (s.skillsPin.state === "ready" ? { skillsPin: { ...s.skillsPin, error: e.message ?? "HQ did not pin it." } } : {}));
-      }
-    }
-  });
+  source.onCommandResult?.(settleCommand);
   disconnect = source.connect(handle, (connection) => useOffice.setState({ connection }));
   return () => {
     disconnect?.();
@@ -179,7 +195,7 @@ export function connectOffice() {
 // ---------------------------------------------------------------- actions
 
 /** The preview HQ sent, or null when it is not shaped like one (the panel then says the preview failed). */
-function asSkillsPreview(data: unknown): SkillsPinPreview | null {
+export function asSkillsPreview(data: unknown): SkillsPinPreview | null {
   const d = data as Partial<SkillsPinPreview> | null;
   if (!d || typeof d !== "object") return null;
   const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -203,7 +219,14 @@ export const officeActions = {
   },
   /** The confirm: it sends back exactly what was previewed. HQ asks for the PIN. */
   pinSkills: (repo: string, commit: string, lockHash: string) => source.pinSkills(repo, commit, lockHash),
-  setRoleSkills: (role: string, names: string[]) => source.setRoleSkills(role, names),
+  setRoleSkills(role: string, names: string[]) {
+    // The earlier refusal is stale the moment the owner tries again.
+    useOffice.setState((s) => {
+      const { [role]: _gone, ...rest } = s.skillsRoleErrors;
+      return { skillsRoleErrors: rest };
+    });
+    source.setRoleSkills(role, names);
+  },
   resetSkillsPin: () => useOffice.setState({ skillsPin: { state: "idle" } }),
   /** Sends a command again with the approval PIN (the PIN dialog). */
   sendWithPin: (cmd: string, args: unknown[], pin: string) => source.sendWithPin?.(cmd, args, pin),
