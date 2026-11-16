@@ -4,6 +4,7 @@
 // and the audit row is written in the same transaction as the change.
 import { join } from "node:path";
 import type { Finding } from "../github/repoGuard";
+import { log } from "../lib/log";
 import { fetchCommit, lockHash as computeLockHash, readCommit, writeStore, type SkillRefusal } from "../skillVendor";
 import type { Authority } from "./authority";
 import type { Clock } from "./clock";
@@ -59,7 +60,7 @@ export interface PinPreview {
 export interface CompanySkillsOptions {
   /** The company home: the bare repo is `<home>/skills/repo.git`, the store `<home>/skills/store`. */
   home?: string;
-  /** The SR-F-08 check of the skills repo's own settings (Task 4 supplies the real one). */
+  /** The SR-F-08 check of the skills repo's own settings (`openCompany` wires `checkSkillsRepo`). */
   check?: (repo: string) => Promise<Finding[]>;
   /** Where `owner/name` is fetched from. */
   urlFor?: (repo: string) => string;
@@ -152,7 +153,7 @@ export class CompanySkills {
     this.assertRepo(repo);
     return this.serial(async () => {
       const read = await this.read(repo, commit, by);
-      return { ...read.preview, findings: await this.check(repo) };
+      return { ...read.preview, findings: await this.runCheck(repo, by) };
     });
   }
 
@@ -173,7 +174,7 @@ export class CompanySkills {
       if (read.preview.lockHash !== lockHash) {
         this.refuse(by, "lock-changed", "This commit no longer reads the way it did when you previewed it. Preview it again before pinning.");
       }
-      const findings = await this.check(repo);
+      const findings = await this.runCheck(repo, by);
       if (findings.length > 0) {
         this.refuse(by, "repo-check", `The skills repo's own settings are not safe yet: ${findings.map((f) => f.name).join(", ")}. Fix them on GitHub, then pin again.`);
       }
@@ -190,6 +191,19 @@ export class CompanySkills {
         this.settings.record(by, "skills.pinned", "company", { repo, commit, lockHash, added, changed, removed });
       });
     });
+  }
+
+  /**
+   * The skills repo check. A check that throws is a refusal, audited with the
+   * caller as the actor, never an error that escapes unaudited (SR-F-08).
+   */
+  private async runCheck(repo: string, by: Authority): Promise<Finding[]> {
+    try {
+      return await this.check(repo);
+    } catch (err) {
+      log.warn(`The skills repo check for ${repo} failed: ${err instanceof Error ? err.message : err}`);
+      return this.refuse(by, "repo-check", "HQ could not check the skills repo's own settings, so it will not pin. Check that gh is signed in, then try again.");
+    }
   }
 
   private pinChange(commit: string, lockHash: string) {

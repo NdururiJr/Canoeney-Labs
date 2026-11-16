@@ -220,7 +220,7 @@ function safe<T>(fn: () => T): T | null {
 // ---------------------------------------------------------------- What a role sees (SR-C-09)
 
 /** Events a supervisor never receives: terminal output and the owner's machine, sandbox and access state. */
-const OWNER_ONLY_EVENTS = new Set(["terminal.output", "workspace.info", "sbx.updated", "mcp.updated", "setup.updated", "access.updated", "projectNotes.updated", "github.guard"]);
+const OWNER_ONLY_EVENTS = new Set(["terminal.output", "workspace.info", "sbx.updated", "mcp.updated", "setup.updated", "access.updated", "projectNotes.updated", "github.guard", "skills.guard"]);
 
 /** A supervisor's view of the team: an explicit keep-list, so a new field is owner-only until it is listed here. */
 function teamForSupervisor(team: AgentConfig[]): Partial<AgentConfig>[] {

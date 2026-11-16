@@ -28,6 +28,7 @@ import type {
   ProjectNotesState,
   ProjectSummary,
   GithubGuardState,
+  SkillsGuardState,
 } from "./types";
 
 export type OfficeEvent =
@@ -53,6 +54,8 @@ export type OfficeEvent =
   | { type: "action.updated"; item: ActionItem }
   /** The project repo's GitHub protection was checked (M0-E, owner only). */
   | { type: "github.guard"; guard: GithubGuardState }
+  /** The company skills repo was checked (M0-F, SR-F-08, owner only). */
+  | { type: "skills.guard"; guard: SkillsGuardState | null }
   /** The projects HQ manages changed: one was added, or its state changed (M0-D2). */
   | { type: "projects.updated"; projects: ProjectSummary[] }
   /** The answer to one command, sent only to the socket that sent it (M0-C). */

@@ -86,10 +86,25 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     // Only now: sessions reattach, sandboxes are polled and GitHub is synced.
     opened.startAll();
 
+    // The company skills repo's own settings (SR-F-08): every open project's owner sees the result,
+    // and a new finding is one activity line in each project. The first check runs now, then daily.
+    const hubs = () => opened.openIds().flatMap((id) => opened.get(id)?.hub ?? []);
+    company.skillsWatch.report = (state) => {
+      for (const hub of hubs()) {
+        hub.snap.skillsGuard = state;
+        hub.emit({ type: "skills.guard", guard: structuredClone(state) });
+      }
+    };
+    company.skillsWatch.notify = (text) => {
+      for (const hub of hubs()) hub.activity("config", null, text);
+    };
+    void company.skillsWatch.start();
+
     let closed = false;
     const close = async () => {
       if (closed) return;
       closed = true;
+      company.skillsWatch.stop();
       await opened.stopAll();
       try {
         // The collapsed terminal rows still counting go in before HQ stops (M0-C final review).
@@ -108,6 +123,7 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
     };
     return { projects: opened, url: `${o.uiOrigin}/`, setupFile, server, close };
   } catch (err) {
+    company.skillsWatch.stop();
     await projects?.stopAll();
     company.close();
     throw err;

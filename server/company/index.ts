@@ -5,10 +5,12 @@ import { SqliteAuditSink } from "./audit";
 import { systemClock, type Clock } from "./clock";
 import { openCompanyDb, type CompanyDb } from "./db";
 import { isInside } from "./home";
-import { CompanySkills } from "./companySkills";
+import { CompanySkills, type CompanySkillsOptions } from "./companySkills";
 import { HumanAccounts } from "./humanAccounts";
-import { fetchGitHubApi, type GitHubApi } from "../github/api";
+import { ghCliApi, fetchGitHubApi, type GitHubApi } from "../github/api";
 import { GitHubApps } from "../github/apps";
+import { run } from "../lib/exec";
+import { SkillsRepoWatch, type AgentInstall } from "../skillsRepoCheck";
 import { PlanStore } from "./planStore";
 import { ProjectNotes } from "./projectNotes";
 import { ProjectSettings } from "./projectSettings";
@@ -47,13 +49,24 @@ export interface Company {
   githubApi: GitHubApi;
   /** The skill lock and each role's skill set (M0-F). */
   skills: CompanySkills;
+  /** The skills repo's own settings, checked at pin time and daily (M0-F, SR-F-08). */
+  skillsWatch: SkillsRepoWatch;
   /** The company home: the store, the owner key file and the setup file live here. */
   home: string;
   close(): void;
 }
 
 /** Open the company store at `home` and build every slot on it. */
-export function openCompany(opts: { home: string; repoRoot: string | null; clock?: Clock; githubApi?: GitHubApi }): Company {
+export function openCompany(opts: {
+  home: string;
+  repoRoot: string | null;
+  clock?: Clock;
+  githubApi?: GitHubApi;
+  /** The owner's own `gh` login, which reads the skills repo's settings (a fake in tests). */
+  ownerGh?: GitHubApi;
+  /** Tests only: where the skills repo is fetched from. The check is always the real one. */
+  skills?: Pick<CompanySkillsOptions, "urlFor" | "allowFile">;
+}): Company {
   const { home, repoRoot } = opts;
   if (repoRoot !== null && isInside(home, repoRoot)) {
     throw new Error(`The company home ${home} is inside the repository ${repoRoot}. Set HQ_COMPANY_HOME to a folder outside it.`);
@@ -66,15 +79,34 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
   const agents = new AgentRegistry(db, clock, audit, secrets);
   const settings = new ProjectSettings(db, clock, audit, agents);
   const githubApi = opts.githubApi ?? fetchGitHubApi();
+  const githubApps = new GitHubApps({ db, audit, clock, keyFile: join(home, "owner.key"), api: githubApi });
+  // SR-F-08: the skills repo's own settings are checked with the owner's gh, at every
+  // pin and daily. The check is never optional; only its GitHub client is injectable.
+  const skillsWatch = new SkillsRepoWatch({
+    api: opts.ownerGh ?? ghCliApi(run),
+    clock,
+    audit,
+    repo: () => skills.source()?.repo ?? null,
+    agents: async (repo) => {
+      const out: AgentInstall[] = [];
+      for (const row of db.prepare("SELECT agent_id FROM agent_github_apps ORDER BY agent_id").all<{ agent_id: string }>()) {
+        // A lookup that fails is "unknown", which the check reports as a finding.
+        out.push({ id: row.agent_id, installed: await githubApps.installation(row.agent_id, repo).then((i) => i !== null, () => "unknown" as const) });
+      }
+      return out;
+    },
+  });
+  const skills: CompanySkills = new CompanySkills(db, clock, settings, { ...opts.skills, home, check: (repo) => skillsWatch.check(repo) });
   return {
     agents,
     secrets,
     settings,
-    skills: new CompanySkills(db, clock, settings, { home }),
+    skills,
+    skillsWatch,
     plans: new PlanStore(db),
     notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
-    githubApps: new GitHubApps({ db, audit, clock, keyFile: join(home, "owner.key"), api: githubApi }),
+    githubApps,
     githubApi,
     home,
     db,

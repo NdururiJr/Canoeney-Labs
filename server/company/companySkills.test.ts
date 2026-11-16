@@ -515,6 +515,31 @@ test("a pin is refused while the skills repo check has findings", async (t) => {
   assert.equal(c.skills.source()!.commit, sha);
 });
 
+test("a check that throws refuses the preview and the pin as repo-check, audited with the caller as actor", async (t) => {
+  let boom = false;
+  const c = freshPin(t, {
+    check: async () => {
+      if (boom) throw new Error("gh exploded");
+      return [];
+    },
+  });
+  const sha = c.origin.commit(skillTree({ alpha: "a" }));
+  const p = await c.skills.preview(SKILLS_REPO, sha, PIN);
+  boom = true;
+  // A supervisor's preview is audited under the supervisor, not the owner.
+  const SUP: Authority = { via: "session", humanId: "sup" };
+  await expectPinRefused(c, () => c.skills.preview(SKILLS_REPO, sha, SUP), "repo-check", "sup");
+  await expectPinRefused(c, () => c.skills.pin(SKILLS_REPO, sha, p.lockHash, PIN), "repo-check");
+  assert.ok(storeIsEmpty(c));
+  // The text the owner reads names no internal error.
+  const err = await c.skills.pin(SKILLS_REPO, sha, p.lockHash, PIN).catch((e: unknown) => e);
+  assert.ok(err instanceof SkillPinRefused);
+  assert.doesNotMatch(err.message, /exploded/);
+  boom = false;
+  await c.skills.pin(SKILLS_REPO, sha, p.lockHash, PIN);
+  assert.equal(c.skills.source()!.commit, sha);
+});
+
 test("two pins at once run one after the other", async (t) => {
   const c = freshPin(t);
   const a = c.origin.commit(skillTree({ alpha: "1" }));

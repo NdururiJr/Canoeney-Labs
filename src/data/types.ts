@@ -359,8 +359,17 @@ export interface GithubGuardState {
   private: boolean;
 }
 
+/** What HQ last found wrong with the company skills repo's own settings (M0-F, SR-F-08). Owner only; null until a skills repo is pinned and checked. */
+export interface SkillsGuardState {
+  repo: string;
+  checkedAt: string;
+  findings: { name: string; detail: string; fixable: boolean }[];
+}
+
 export interface OfficeSnapshot {
   githubGuard?: GithubGuardState;
+  /** The company skills repo's check (M0-F, SR-F-08). Owner only. */
+  skillsGuard?: SkillsGuardState | null;
   /** The project this snapshot is of, and every project HQ manages (real HQ only, M0-D2). */
   projectId?: string;
   projects?: ProjectSummary[];

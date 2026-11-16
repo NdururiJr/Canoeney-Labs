@@ -76,6 +76,8 @@ function reduce(snap: OfficeSnapshot, e: OfficeEvent): OfficeSnapshot {
       return { ...snap, projects: e.projects };
     case "github.guard":
       return { ...snap, githubGuard: e.guard };
+    case "skills.guard":
+      return { ...snap, skillsGuard: e.guard };
     case "sbx.updated":
       return { ...snap, sbx: e.sbx };
     case "setup.updated":
