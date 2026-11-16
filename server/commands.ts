@@ -13,6 +13,8 @@ import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { SKILL_NAME, SKILLS_REPO, SkillPinRefused } from "./company/companySkills";
+import { ROLE_IDS, type RoleId } from "./company/types";
 import { hasCredentialShape } from "./company/audit";
 import { ProjectRefusedError } from "./hqSource";
 import { GitHubAppRefusedError } from "./github/apps";
@@ -539,5 +541,52 @@ export function makeCompanyCommands(projects: Projects): Record<string, CommandS
       // HQ's own refusal texts only; any other failure stays a bare "failed".
       explain: (err) => (err instanceof ProjectRefusedError || err instanceof AuthorityError ? err.message : null),
     },
+
+    // The company's skills (M0-F). The owner previews a commit of the skills repo, then confirms it with the PIN.
+    /** What pinning this commit would install, change and remove; changes nothing. */
+    previewSkillsPin: {
+      role: "owner",
+      target: () => null,
+      returns: true,
+      run: (ctx, repo, commit) => projects.company.skills.preview(skillsRepoArg(repo), str(commit, 80).trim(), authorityOf(ctx)),
+      explain: skillsExplain,
+    },
+    /** The confirm of a preview: it carries back the preview's lock hash, so only what the owner saw is pinned (PIN). */
+    pinSkills: {
+      role: "owner",
+      pin: true,
+      target: () => null,
+      run: async (ctx, repo, commit, lockHash) =>
+        void (await projects.company.skills.pin(skillsRepoArg(repo), str(commit, 80).trim(), str(lockHash, 100).trim(), authorityOf(ctx))),
+      explain: skillsExplain,
+    },
+    /** Makes a role's skill set equal `names` (PIN). */
+    setRoleSkills: {
+      role: "owner",
+      pin: true,
+      target: () => null,
+      returns: true,
+      run: (ctx, role, names) => {
+        const id = str(role, 40);
+        if (!(ROLE_IDS as readonly string[]).includes(id)) throw new SkillsInputError(`"${id}" is not a role.`);
+        if (!Array.isArray(names) || names.length > 200) throw new SkillsInputError("A role's skills are a list of skill names.");
+        const list = names.map((n) => str(n, 100));
+        for (const n of list) if (!SKILL_NAME.test(n)) throw new SkillsInputError(`"${n}" is not a skill name (lower-case letters, digits and -, up to 63 characters).`);
+        return projects.company.skills.setRoleSkills(id as RoleId, list, authorityOf(ctx));
+      },
+      explain: skillsExplain,
+    },
   };
 }
+
+/** HQ's own refusal text for a skills command's bad input. */
+class SkillsInputError extends Error {}
+
+function skillsRepoArg(repo: unknown): string {
+  const r = str(repo, 200).trim();
+  if (!SKILLS_REPO.test(r)) throw new SkillsInputError(`"${r}" is not a GitHub repo name. Write it as owner/name.`);
+  return r;
+}
+
+const skillsExplain = (err: unknown): string | null =>
+  err instanceof SkillPinRefused || err instanceof SkillsInputError || err instanceof AuthorityError ? err.message : null;

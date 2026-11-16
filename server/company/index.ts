@@ -70,7 +70,7 @@ export function openCompany(opts: { home: string; repoRoot: string | null; clock
     agents,
     secrets,
     settings,
-    skills: new CompanySkills(db, clock, settings),
+    skills: new CompanySkills(db, clock, settings, { home }),
     plans: new PlanStore(db),
     notes: new ProjectNotes(db, clock, settings),
     humans: new HumanAccounts(db, clock, audit, join(home, "owner.key")),
