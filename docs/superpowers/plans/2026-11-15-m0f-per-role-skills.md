@@ -54,6 +54,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - **SR-F-04 says the extra skills are "gone".** HQ moves them out of the agent's folder into HQ's home rather than deleting them.
   - In an owner-chosen folder they may be the owner's own files.
   - The audit row names where they went. HQ keeps the newest 5 moves per agent.
+  - A folder too big to move (over 256 files or 2 MiB) refuses the start instead, and the owner moves it. HQ never deletes anything in the agent's folder except a link.
 - **SR-F-07 is a review item, not code.** Task 8's vendoring PR on the skills repo carries the check, skill by skill.
 - **Stack skills** install only once they are vendored and pinned; until then the start says which are missing.
   - Fetching them live from upstream is the threat (T-S12.1, T-S12.2), so the live fetch goes.
@@ -91,23 +92,24 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 | Repo layout | `skills/<name>/SKILL.md` plus the skill's files. `<name>` matches `^[a-z0-9][a-z0-9-]{0,62}$`. A vendored skill also holds `UPSTREAM.json` `{ repo, commit, path, license }` and its upstream licence as `LICENSE.upstream` |
 | Fetch | Every git call carries `-c credential.helper= -c protocol.allow=never -c protocol.https.allow=always` and `GIT_TERMINAL_PROMPT=0`; tests allow `file`. 1) `git ls-remote --symref <url> HEAD` names the default branch. 2) `git fetch --no-tags <url> +refs/heads/<branch>:refs/hq/default` into the bare repo `<company home>/skills/repo.git`, full history (the repo is small; no `--depth`). HQ never fetches a commit by its SHA. 3) `git merge-base --is-ancestor <sha> refs/hq/default`; a commit that is missing or not an ancestor is refused `not-on-default-branch`. Files are read with `git ls-tree -r -z <sha> -- skills/` and `git cat-file --batch`. Nothing is checked out |
 | Pin | One 40-hex commit for the whole repo, on its default branch. Every skill in it is pinned at that commit. The default-branch check runs at preview and again at pin |
-| Refused at pin (SR-F-06) | Mode `120000` (link), `160000` (submodule), or anything but `100644`/`100755`. A path (`safeSkillPath`) with a `..` or `.` segment, an empty segment, a leading `/`, a `\` or a NUL. A folder name outside the pattern. No `SKILL.md`. More than 256 files or 2 MiB in one skill. Any refusal refuses the whole pin |
+| Refused at pin (SR-F-06) | Mode `120000` (link), `160000` (submodule), or anything but `100644`/`100755`. A path (`safeSkillPath`) with a `..` or `.` segment, an empty segment, a leading `/`, a `\` or a NUL. A path segment or folder name Windows cannot hold: a reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9`, any case, with or without an extension, so `aux.txt` too), or one ending in `.` or a space. Two paths in one skill that differ only in letter case (`README.md` and `readme.md`; reason `case-collision`), since Windows keeps them as one file. A folder name outside the pattern. No `SKILL.md`. More than 256 files or 2 MiB in one skill. Any refusal refuses the whole pin |
 | Scripts listed (SR-F-06) | Mode `100755`, or an extension in `.sh .bash .zsh .py .js .mjs .cjs .ts .mts .ps1 .rb .pl` |
 | Skill hash | sha256 hex over the lines `"<mode> <path>\0<sha256 hex of the bytes>\n"`, one per file, sorted bytewise by path. The path is relative to the skill folder and uses `/` |
 | Checking a folder on disk | `hashFolder(dir, files)` takes the locked file list. The folder must hold exactly those paths, all regular files (walked with `lstat`, no link followed). It hashes the bytes on disk and takes each mode from the lock, so the result equals the lock's hash only when every byte matches. On POSIX it also requires the executable bit to match the mode (`100755` ⇔ `0o100` set); `writeStore` and the copy set `0o755`/`0o644`. **On Windows the mode is not checked on disk**: NTFS keeps no executable bit |
 | Lock hash | sha256 of the canonical JSON (`canonicalJson`) of `{ repo, commit, skills: [{ name, hash }] }`, sorted by name. The preview shows it; the confirm must send it back |
 | Content store | `<company home>/skills/store/<skill hash>/`, written once at pin. Re-hashed before every copy into an agent's folder |
 | Install folders | Claude Code: `.claude/skills/<name>`. Codex: `.agents/skills/<name>`. Both folders are HQ's; the one the agent's CLI does not read is kept empty |
-| The agent's folder | The agent controls it. Every list, read, move, copy and delete in it goes through `server/lib/agentFs.ts` (`agentPath`, `agentMkdir`, `agentRemove`), and folders inside a skill are walked with `lstat`. A link at `.claude`, `.agents`, `.claude/skills` or `.agents/skills` refuses the start (`workspace.refused` `{ reason: "skills-link" }`, agentPath's "is a symlink; HQ won't write through it" wording), and nothing is moved or copied. A link at `<install folder>/<name>` is removed as a link; its target is untouched |
+| The agent's folder | The agent controls it. Every list, read, move, copy and delete in it goes through `server/lib/agentFs.ts` (`agentPath`, `agentMkdir`, `agentRemove`), and folders inside a skill are walked with `lstat`. A link at `.claude`, `.agents`, `.claude/skills` or `.agents/skills` refuses the start (`workspace.refused` `{ reason: "skills-link", path }`), and nothing is moved or copied. A link at `<install folder>/<name>` is removed as a link; its target is untouched |
+| Start refusals (text) | The workspace is a folder on the host, so "Recreate sandbox" does not clear it; the text names the absolute path and the one fix. `skills-link`: "<agent>'s `<rel>` is a link, so HQ won't install skills through it. Delete that link (`<absolute path>`), then start <agent> again." `skills-too-big`: "<agent>'s `<rel>` is not one of its skills and holds more than 256 files or 2 MiB, so HQ won't move it aside. Move that folder out of the agent's folder (`<absolute path>`), then start <agent> again." |
 | Shadowing (PR #6 carry-forward) | HQ's clones set `sparse.expectFilesOutsideOfPatterns=true`. HQ writes its copy even where the repo tracks that path, git keeps it skip-worktree, and `git status` stays clean. HQ needs git ≥ 2.37 (was 2.35). Every folder HQ installs is also added to the git exclude (`excludeFromGit`, as today), so a skill the repo does not track is not untracked noise |
-| Drift moves | `<project home>/skills-removed/<agent id>/<UTC stamp>/`. For a company-level agent the same under the company home. The newest 5 per agent are kept. A move is a `rename`; on `EXDEV` (another drive) it copies file by file with `lstat`, skipping links (named in the row), then removes the source. A changed or extra folder over 256 files or 2 MiB (regular files, links not followed) is not moved: it is removed, and the drift row lists it under `deleted` |
+| Drift moves | `<project home>/skills-removed/<agent id>/<UTC stamp>/`. For a company-level agent the same under the company home. The newest 5 per agent are kept. A move is a `rename`; on `EXDEV` (another drive) it copies file by file with `lstat`, skipping links (named in the row), then removes the source. HQ never deletes a folder from the agent's folder other than a link. A changed or extra folder over 256 files or 2 MiB (regular files, links not followed) is neither moved nor deleted: the start is refused (`workspace.refused` `{ reason: "skills-too-big", path }`) before anything is moved, since it may be the owner's own files |
 | Starting role sets (§2a) | `builder`: test-driven-development, systematic-debugging, verification-before-completion, executing-plans. `cto`: writing-plans, requesting-code-review, brainstorming. `ceo` and `cio`: verification-before-completion. Every other role: none. §2a's humanizer, charter-first planning and company-audit skills arrive in M1 |
 | One family per concern | superpowers (MIT). jsm-skills-workflow is not vendored for agents. ADR 0011 records why |
 | sbx | `sbx run … --skills off` whenever HQ creates a sandbox. An existing sandbox without HQ's record of that starts only if `sbx skills ls` lists nothing |
 | SR-F-08 check | `GET /repos/{r}` (`private` false, or rules readable); `GET /repos/{r}/rules/branches/{default}` holds `deletion` and `non_fast_forward`; `GET /repos/{r}/collaborators` lists only the owner; `GET /repos/{r}/keys` holds no key with `read_only: false`; for each agent with an App, `GitHubApps.installation(agent, r)` is null. Read with the owner's `gh`, at pin and every 24 h from HQ's start. Third-party Apps cannot be listed with the owner's `gh`; the exit check covers them by hand |
 | Authority | A pin or a role-set change is a `ConfigChange`; `relaxes()` is true for any real change. `pin` or `decision` pass; `session` and `hq` are refused (`pin-or-decision-required`, `hq-cannot-grant`) |
 | Preview links | `https://github.com/<repo>/commit/<sha>`, and while a pin exists `https://github.com/<repo>/compare/<old>...<new>`, so the owner can read the content they approve |
-| New audit actions | `skills.pinned` `{ repo, commit, lockHash, added, changed, removed }`, `skills.pin-refused` `{ reason }` (reasons include `not-on-default-branch`), `skills.role-set` `{ role, added, removed }`, `skill.refused` `{ skill, reason: "hash" \| "missing" }`, `skill.drift` `{ changed, extra, missing, movedTo, deleted, linksSkipped }`, `skills.repo-findings` `{ repo, findings }`. `workspace.refused` gains `shared-skills` and `skills-link` |
+| New audit actions | `skills.pinned` `{ repo, commit, lockHash, added, changed, removed }`, `skills.pin-refused` `{ reason }` (reasons include `not-on-default-branch`), `skills.role-set` `{ role, added, removed }`, `skill.refused` `{ skill, reason: "hash" \| "missing" }`, `skill.drift` `{ changed, extra, missing, movedTo, linksSkipped }`, `skills.repo-findings` `{ repo, findings }`. `workspace.refused` gains `shared-skills`, `skills-link` and `skills-too-big` |
 
 ## Review focus
 
@@ -182,7 +184,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - `skillVendor.ts`:
   - `fetchCommit(o: { url: string; sha: string; bare: string; allowFile?: boolean }): Promise<{ ok: true; branch: string } | { ok: false; reason: "bad-sha" | "fetch-failed" | "not-on-default-branch" }>`. The commit must be 40 hex. It follows the values table's Fetch row: the default branch only, never the SHA, then the ancestry check.
   - `safeSkillPath(path: string): boolean`, the path rule from the values table.
-  - `readCommit(bare: string, sha: string): Promise<{ skills: LockedSkill[]; refused: { skill: string; reason: string }[] }>`. Reasons: `link`, `submodule`, `mode`, `path`, `name`, `no-skill-md`, `too-big`.
+  - `readCommit(bare: string, sha: string): Promise<{ skills: LockedSkill[]; refused: { skill: string; reason: string }[] }>`. Reasons: `link`, `submodule`, `mode`, `path` (includes Windows-reserved segments), `case-collision`, `name` (includes a reserved folder name such as `aux`), `no-skill-md`, `too-big`.
   - `skillHash(files: { path: string; mode: string; sha256: string }[]): string`;
   - `lockHash(repo: string, commit: string, skills: { name: string; hash: string }[]): string`;
   - `writeStore(bare: string, sha: string, skill: LockedSkill, storeDir: string): void`, which writes `<storeDir>/<hash>/` from the git objects and sets each file's mode (POSIX);
@@ -196,6 +198,8 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
   - `SR-F-06 [T-S12.5] a skill with a path that leaves its folder is refused`, two ways:
     - `safeSkillPath` is false for `../x`, `a/../../x`, `/etc/x`, `a\b`, `a\0b`, `a//b` and `./x`, and true for `scripts/run.sh`;
     - a fixture commit whose skill tree holds a raw `..` entry (written with `git mktree`) gets `readCommit` reason `path`, and the other skills in the commit are still read.
+  - `a path Windows cannot hold is refused at pin`: `safeSkillPath` is false for `aux`, `AUX.txt`, `docs/con.md`, `com1`, `LPT9.log`, `notes.` and `notes ` (trailing space), and true for `auxiliary.md` and `com10.md`; a skill folder named `aux` is refused `name`.
+  - `two paths that differ only in case are refused at pin`: a fixture skill holding `README.md` and `readme.md` gets `case-collision`. The fixture builds the tree with `git mktree`, so the test runs on Windows too.
   - `SR-F-06 [T-S12.6] bundled scripts are listed`: an executable file and a `.py` file appear in `scripts`.
   - `a skill without SKILL.md, with a bad name, or over 256 files is refused`.
   - `fetching uses no credential helper and no prompt`: a fixture `credential.helper` set in the global config is not called (point `GIT_CONFIG_GLOBAL` at a file whose helper writes a marker file; the marker is absent).
@@ -226,7 +230,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
     - `repo-check` when the SR-F-08 check has findings;
     - `refused-skill` when any skill is refused.
 
-    Otherwise it writes the store, then `writePin`, then `skills.pinned`.
+    Otherwise it writes the store first (content-addressed by hash, so a folder left by a failed pin is unused and harmless). Then `writePin` and the `skills.pinned` append run in one `immediate` transaction, inside `authorized()`'s write callback as M0-D1's settings writes do; the audit append joins it. If the append throws, the pin rolls back and the old lock stays active. This follows the PR #1 rule: no action is carried out unaudited.
 - Commands, all role `owner`, all with `target: () => null`:
   - `previewSkillsPin(repo, commit)`, which returns the preview;
   - `pinSkills(repo, commit, lockHash)` and `setRoleSkills(role, names)`, both with `pin: true`.
@@ -236,6 +240,7 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
   - `SR-F-01 [T-S12.1] a commit that is not on the skills repo's default branch is refused`: the fixture repo holds the commit under `refs/pull/1/head` only. `preview` and `pin` (by the owner, with the PIN) both refuse with `not-on-default-branch`, each writes `skills.pin-refused` with the owner as the actor, and the lock reads back unchanged.
   - `SR-F-01 [T-S12.5] a pin with one refused skill pins nothing`.
   - `the preview links the commit and, once a pin exists, the comparison from the old pin`.
+  - `a pin whose audit row cannot be written changes nothing`: with an audit sink that throws on `skills.pinned`, `pin` by the owner throws, and `source()` and `lock()` read back the old pin. The same holds for `setRoleSkills` and `skills.role-set` (the Task 1 write goes through the same transaction).
   - `SR-F-03 [T-S12.4] pinning needs the PIN or an approved decision`, with the same four authorities as Task 1.
   - `the pin preview names the roles that lose a skill` (Review focus 3).
   - `a pin is refused while the skills repo check has findings` (fake check returning one finding).
@@ -292,25 +297,26 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
 - Consumes `CompanySkills` (Task 1) and `hashFolder` (Task 2).
 - `skills.ts`:
   - `effectiveSkills(o: { roleSet: string[]; grants: string[]; stack: string[]; companyLevel: boolean; lock: LockedSkill[] }): { install: LockedSkill[]; missing: string[] }`. A company-level agent gets no stack skills.
-  - `installSkills(o: { workspace: string; cli: "claude" | "codex"; want: LockedSkill[]; storeDir: string; movedDir: string; rename?: typeof renameSync }): { installed: string[]; refused: { skill: string; reason: "hash" | "missing" }[]; drift: { changed: string[]; extra: string[]; missing: string[]; movedTo: string | null; deleted: string[]; linksSkipped: string[] } } | { blocked: string }`. `rename` is injectable so a test can throw `EXDEV`.
+  - `installSkills(o: { workspace: string; cli: "claude" | "codex"; want: LockedSkill[]; storeDir: string; movedDir: string; rename?: typeof renameSync }): { installed: string[]; refused: { skill: string; reason: "hash" | "missing" }[]; drift: { changed: string[]; extra: string[]; missing: string[]; movedTo: string | null; linksSkipped: string[] } } | { blocked: { reason: "skills-link" | "skills-too-big"; path: string } }`. `rename` is injectable so a test can throw `EXDEV`.
   - It runs no process. Every step in the agent's folder follows the values table's "The agent's folder" row. Order:
-    0. Check `.claude`, `.agents` and both install folders with `agentMkdir`. A link there returns `{ blocked }` before anything is read, moved or copied.
-    1. List each install folder through `agentPath`. Compare each entry against `want` with `hashFolder(dir, files)`; a link entry, a non-folder, or a refusal counts as changed.
-    2. Remove a link entry with `agentRemove` (its target untouched). Move every other changed or extra folder to `movedDir` per the "Drift moves" row (rename, `EXDEV` fallback without following links, the 256-file / 2 MiB cap).
-    3. Re-hash each wanted store folder and refuse a mismatch.
-    4. Copy each into `agentPath(workspace, <folder>/<name>)`, setting modes (POSIX).
+    0. Check `.claude`, `.agents` and both install folders with `agentMkdir`. A link there returns `{ blocked: { reason: "skills-link" } }` before anything is read, moved or copied.
+    1. Re-hash each wanted store folder (`hashFolder`); a mismatch is refused `hash` and leaves `want`.
+    2. List each install folder through `agentPath`. Compare each entry against the remaining `want` with `hashFolder(dir, files)`; a link entry, a non-folder, a refusal, or a skill refused in step 1 counts as changed. Measure each changed or extra folder (lstat, links not followed); one over the cap returns `{ blocked: { reason: "skills-too-big" } }` before anything is moved.
+    3. Remove a link entry with `agentRemove` (its target untouched). Move every other changed or extra folder to `movedDir` per the "Drift moves" row (rename, `EXDEV` fallback without following links). A refused skill's earlier copy is moved too, so a refused skill is never left in the agent's folder.
+    4. Copy each remaining wanted skill into `agentPath(workspace, <folder>/<name>)`, setting modes (POSIX).
     5. Hash the copy and refuse a mismatch, removing the copy with `agentRemove`.
     6. `excludeFromGit` the installed folders.
 - `sessions.ts` writes:
   - `skill.refused` per refusal;
   - one `skill.drift` row when anything drifted;
   - one activity line naming refused and missing skills;
-  - on `{ blocked }`, `workspace.refused` `{ reason: "skills-link" }`, and the start is refused: the agent's CLI would read skills through the link.
+  - on `{ blocked }`, `workspace.refused` `{ reason, path }` and the start is refused, with the values table's "Start refusals (text)" wording. For a link, the agent's CLI would otherwise read skills through it; for an oversized folder, HQ would otherwise have to delete what may be the owner's files.
 
   Otherwise the start goes on either way.
 
 - [ ] **Step 1: Write the failing tests**
   - `SR-F-01 [T-S12.5] a store copy changed after the pin is refused at install` (Review focus 2): change one byte in a bundled file of the store copy. That skill is not in the agent's folder, a `skill.refused` row has `reason: "hash"`, and the other skills install.
+  - `a skill refused at install is also taken out of the agent's folder`: install the set once (healthy), change one byte in a store copy, start again. That skill is refused, absent from the agent's folder, and its earlier copy is in `movedTo`.
   - `SR-F-02 [T-S12.2] a session start fetches nothing`: with the store filled, the bare repo deleted and `PATH` emptied for the call (so no `git`, `npx` or `npm` could run), `installSkills` installs the pinned skills.
   - `SR-F-02 [T-S12.2] server/ holds no npx call` (`skillsNoNpx.test.ts`): no file under `server/` other than tests contains `npx` outside a string shown to the user. The check matches `"npx"` and `'npx'` as an argument, and the three `main.ts` help texts are allowed by name.
   - `SR-F-04 [T-S12.3] an edited skill and an added one are both gone after the next start, with one drift row`: one `skill.drift` row lists both, and `movedTo` exists and holds them.
@@ -322,10 +328,10 @@ Order and carry-forward: `docs/superpowers/plans/2026-11-11-m0-foundations-overv
     - `git add -A && git commit` leaves that path unchanged in `HEAD`.
   - `SR-F-05 [T-S12.3] a skill the repo tracks that is not in the set is absent`.
   - `git status is clean with one tracked and one untracked skill installed`: in the same HQ clone, one wanted skill is tracked by the repo and one is not; `git status --porcelain` is empty after install.
-  - `an agent's link at .claude/skills is refused and nothing is moved`: `.claude/skills` is a link to a folder outside holding one skill. `installSkills` returns `blocked`, the start writes `workspace.refused` `{ reason: "skills-link" }`, the outside folder is unchanged, and `movedDir` is empty. (Link tests are skipped on Windows without symlink rights.)
+  - `an agent's link at .claude/skills is refused and nothing is moved`: `.claude/skills` is a link to a folder outside holding one skill. `installSkills` returns `blocked`, the start writes `workspace.refused` `{ reason: "skills-link" }`, the outside folder is unchanged, and `movedDir` is empty. The activity text names the link's absolute path and ends "then start <agent> again". (Link tests are skipped on Windows without symlink rights.)
   - `a linked skill folder is removed as a link, and its target is unchanged`: `.claude/skills/test-driven-development` is a link to an outside folder. After install, that path is HQ's copy (a real folder), and the outside folder's files are unchanged.
   - `a move across drives copies without following links`: the injected `rename` throws `EXDEV`. An extra skill holding a link to an outside file lands in `movedTo` without the link (named in `linksSkipped`), its source is gone, and the outside file is unchanged.
-  - `an extra skill over 256 files is removed, not moved, and the drift row says so` (`deleted` names it).
+  - `an extra folder over 256 files refuses the start, and nothing is moved or deleted`: the start writes `workspace.refused` `{ reason: "skills-too-big" }` with the folder's absolute path in the text, every file of that folder is still in place, the other skill folders are untouched, and `movedDir` is empty. A second case uses one 3 MiB file (the owner's large document).
   - `a Codex agent gets its skills in .agents/skills and none in .claude/skills` (Review focus 5).
   - `a stack skill that is not pinned is named in the start line, and the agent starts`.
   - `the moves keep the newest 5 per agent`.
