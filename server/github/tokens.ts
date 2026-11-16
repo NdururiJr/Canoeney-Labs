@@ -9,7 +9,7 @@ import type { Clock } from "../company/clock";
 import type { AuditSink } from "../company/slots/types";
 import type { GitHubApi } from "./api";
 import { APP_PERMISSIONS } from "./appManifest";
-import type { GitHubApps } from "./apps";
+import { InstallationLookupError, type GitHubApps } from "./apps";
 
 /** A token failure in HQ's own words (never sbx's or GitHub's text, which could repeat the token). */
 export class TokenError extends Error {}
@@ -87,8 +87,18 @@ export class AgentTokens {
     return this.lane(agentId, () => this.deliverNow(agentId, companyId, repo));
   }
 
+  private async lookup(companyId: string, repo: string) {
+    try {
+      return await this.o.apps.installation(companyId, repo);
+    } catch (err) {
+      if (err instanceof InstallationLookupError) return null;
+      throw err;
+    }
+  }
+
   private async deliverNow(agentId: string, companyId: string, repo: string | null): Promise<"issued" | "no-identity"> {
-    const inst = repo && this.o.apps.has(companyId) ? await this.o.apps.installation(companyId, repo) : null;
+    // A lookup GitHub could not answer gives no installation, so no token is minted (as a non-200 always did).
+    const inst = repo && this.o.apps.has(companyId) ? await this.lookup(companyId, repo) : null;
     if (!repo || !inst) {
       await this.o.sbx.removeKey(agentId, "github").catch(() => {});
       return "no-identity";

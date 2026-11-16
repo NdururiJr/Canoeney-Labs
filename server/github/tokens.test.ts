@@ -5,6 +5,7 @@ import { makeHq } from "../testing/hqFixture";
 import { withSessions } from "../testing/sessionFixture";
 import type { GitHubApi } from "./api";
 import { APP_PERMISSIONS } from "./appManifest";
+import { InstallationLookupError } from "./apps";
 import { AgentTokens, revokeOnStatus } from "./tokens";
 
 const NOW = "2026-11-14T10:00:00.000Z";
@@ -12,7 +13,7 @@ const HOUR = 3_600_000;
 const OWNER = { kind: "human", id: "owner" } as const;
 
 /** A fake GitHub that issues numbered tokens for an hour, and a timer queue the test drives. */
-function harness(o: { identity?: boolean } = {}) {
+function harness(o: { identity?: boolean; lookup?: () => Promise<never> } = {}) {
   const clock = new FakeClock(NOW);
   const calls: { method: string; path: string; body?: unknown; token?: string; jwt?: string }[] = [];
   let n = 0;
@@ -29,7 +30,7 @@ function harness(o: { identity?: boolean } = {}) {
   };
   const apps = {
     has: () => o.identity !== false,
-    installation: async () => (o.identity === false ? null : { id: 77, selection: "selected" as const }),
+    installation: async () => (o.lookup ? o.lookup() : o.identity === false ? null : { id: 77, selection: "selected" as const }),
     jwtFor: () => "jwt-for-the-app",
   };
   const keys: string[] = [];
@@ -120,6 +121,25 @@ test("an agent with no GitHub identity gets no token", async () => {
   assert.equal(h.issued(), 0);
   // Any github key in its sandbox is removed: HQ's is the only one an agent may hold (final review).
   assert.deepEqual(h.keys, ["rm ana github"]);
+});
+
+test("an installation lookup GitHub failed (HTTP 500) mints no token and leaves the agent without an identity", async () => {
+  const h = harness({
+    lookup: async () => {
+      throw new InstallationLookupError(500);
+    },
+  });
+  assert.equal(await h.tokens.deliver("ana", "site/ana", "acme/site"), "no-identity");
+  assert.equal(h.issued(), 0);
+  assert.deepEqual(h.keys, ["rm ana github"]);
+  // Any other failure still reaches the caller, as before.
+  const other = harness({
+    lookup: async () => {
+      throw new Error("the App key does not open");
+    },
+  });
+  await assert.rejects(() => other.tokens.deliver("ana", "site/ana", "acme/site"), /does not open/);
+  assert.equal(other.issued(), 0);
 });
 
 // ---------------------------------------------------------------- through Sessions

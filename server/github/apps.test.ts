@@ -10,7 +10,7 @@ import { makeCommands } from "../commands";
 import type { CommandCtx } from "../dashboard";
 import { makeHq, OWNER_PIN } from "../testing/hqFixture";
 import type { GitHubApi } from "./api";
-import { GitHubAppRefusedError, GitHubApps } from "./apps";
+import { GitHubAppRefusedError, GitHubApps, InstallationLookupError } from "./apps";
 import { APP_PERMISSIONS, manifestFor } from "./appManifest";
 
 const NOW = "2026-11-14T10:00:00.000Z";
@@ -131,6 +131,24 @@ test("an installation is recorded once", async (t) => {
   await a.installation("site/ana", "acme/site");
   assert.equal(company.audit.query({ action: "github.app-installed" }).length, 1);
   assert.equal(company.db.prepare("SELECT installation_id FROM agent_github_apps").get<{ installation_id: number }>()?.installation_id, 77);
+});
+
+test("installation: 404 is no installation; any other failed answer throws, naming the status", async (t) => {
+  let status = 404;
+  const gh = fakeGitHub();
+  const api: GitHubApi = { request: (m, p, o) => (p === "/repos/acme/site/installation" ? Promise.resolve({ status, json: null }) : gh.api.request(m, p, o)) };
+  const { a, company } = apps(t, { api, calls: gh.calls });
+  const s = a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420");
+  await a.complete(s.state, "code1", "owner", "s1");
+  assert.equal(await a.installation("site/ana", "acme/site"), null, "404: not installed");
+  for (const bad of [401, 403, 500, 502, 0]) {
+    status = bad;
+    await assert.rejects(() => a.installation("site/ana", "acme/site"), (e: unknown) => e instanceof InstallationLookupError && e.message.includes(bad ? `HTTP ${bad}` : "no answer"), `HTTP ${bad}`);
+  }
+  assert.equal(company.audit.query({ action: "github.app-installed" }).length, 0, "a failed lookup records nothing");
+  status = 200;
+  api.request = (m, p, o) => (p === "/repos/acme/site/installation" ? Promise.resolve({ status: 200, json: { id: 77, repository_selection: "selected" } as never }) : gh.api.request(m, p, o));
+  assert.deepEqual(await a.installation("site/ana", "acme/site"), { id: 77, selection: "selected" });
 });
 
 test("creating a GitHub identity needs the owner's PIN and a local session", async (t) => {

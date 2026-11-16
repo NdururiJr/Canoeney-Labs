@@ -344,3 +344,22 @@ test("SR-F-08 [T-S12.8] an App HQ cannot look up is a finding, not a pass", asyn
   assert.deepEqual(preview.findings.map((f) => f.name), ["read-failed:app:site/ana"]);
   await assert.rejects(() => company.skills.pin(REPO, sha, preview.lockHash, PIN), (e: unknown) => e instanceof SkillPinRefused && e.reason === "repo-check");
 });
+
+test("SR-F-08 [T-S12.8] an App lookup that fails with 401, 403, 500 or no answer is a finding, never 'not installed'", async (t) => {
+  for (const status of [401, 403, 500, 0]) {
+    const { company, sha } = withApp(t, { sealedKey: true, app: { async request() { return { status, json: { message: "no" } as never }; } } });
+    const refusedBefore = company.audit.query({ action: "skills.pin-refused" }).length;
+    const preview = await company.skills.preview(REPO, sha, PIN);
+    assert.deepEqual(preview.findings.map((f) => f.name), ["read-failed:app:site/ana"], `HTTP ${status}`);
+    await assert.rejects(() => company.skills.pin(REPO, sha, preview.lockHash, PIN), (e: unknown) => e instanceof SkillPinRefused && e.reason === "repo-check", `HTTP ${status}`);
+    const refused = company.audit.query({ action: "skills.pin-refused" });
+    assert.equal(refused.length, refusedBefore + 1, `HTTP ${status}: one refusal row`);
+    assert.deepEqual([refused.at(-1)?.actorId, refused.at(-1)?.data.reason], ["owner", "repo-check"]);
+    assert.equal(company.skills.source(), null, `HTTP ${status}: nothing was pinned`);
+  }
+  // An answer that is a real 404 stays "not installed" and the pin goes through.
+  const ok = withApp(t, { sealedKey: true, app: { async request() { return { status: 404, json: null }; } } });
+  const p = await ok.company.skills.preview(REPO, ok.sha, PIN);
+  await ok.company.skills.pin(REPO, ok.sha, p.lockHash, PIN);
+  assert.equal(ok.company.skills.source()?.commit, ok.sha);
+});
