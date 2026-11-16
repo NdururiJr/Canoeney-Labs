@@ -37,6 +37,13 @@ test("SR-F-01 [T-S12.1] a commit that is not on the skills repo's default branch
   // The default branch's own commit still passes.
   assert.deepEqual(await fetchCommit({ url: origin.url, sha: main, bare, allowFile: true }), { ok: true, branch: "main" });
   assert.equal(hasObject(bare, pr), false);
+
+  // The default branch moves to a history without `main`'s commit. The bare repo
+  // still holds that commit from the earlier fetch, but it is refused now.
+  origin.commit({ "skills/a/SKILL.md": "a new history" }, { ref: "refs/heads/trunk" });
+  assert.equal(spawnSync("git", ["--git-dir", origin.dir, "symbolic-ref", "HEAD", "refs/heads/trunk"]).status, 0);
+  assert.deepEqual(await fetchCommit({ url: origin.url, sha: main, bare, allowFile: true }), { ok: false, reason: "not-on-default-branch" });
+  assert.equal(hasObject(bare, main), true, "present in the bare repo, but not on the default branch");
 });
 
 test("fetchCommit accepts an older commit of the default branch", async (t) => {
