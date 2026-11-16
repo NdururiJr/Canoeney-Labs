@@ -60,6 +60,8 @@ export function vendorGit(args: string[], o: { allowFile?: boolean; input?: stri
         resolve({ ok: !err, code, stdout, stderr: stderr.toString() || (err ? err.message : "") });
       },
     );
+    // A git that exits before reading its input closes the pipe (EPIPE): the result above still reports it.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(o.input ?? "");
   });
 }
@@ -292,6 +294,7 @@ function hashObjects(bare: string, oids: string[]): Promise<Map<string, { type: 
       clearTimeout(timer);
       resolve(out);
     });
+    child.stdin.on("error", () => {}); // an early exit is reported by "close"
     child.stdin.end(oids.map((o) => `${o}\n`).join(""));
   });
 }
@@ -455,16 +458,14 @@ export function* folderEntries(dir: string): Generator<string> {
 // swapped in is opened without waiting for a writer, then refused by fstat. Windows has neither.
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
+type FileRefusal = { refused: "link" | "not-file" | "paths" | "too-big" };
+
 /**
  * Opens a regular file without following a link or waiting on a FIFO, and hashes
  * at most `budget` bytes of it. A file larger than the budget is refused from its
- * size before any byte is read.
+ * size before any byte is read. `keep` also returns the bytes.
  */
-function hashRegularFile(
-  abs: string,
-  budget: number,
-  hooks: HashFolderHooks,
-): { sha256: string; bytes: number; mode: number } | { refused: "link" | "not-file" | "paths" | "too-big" } {
+function readRegular(abs: string, budget: number, hooks: HashFolderHooks, keep: boolean): { sha256: string; bytes: number; mode: number; data: Buffer[] } | FileRefusal {
   let fd: number;
   try {
     fd = openSync(abs, OPEN_FLAGS);
@@ -481,6 +482,7 @@ function hashRegularFile(
     if (st.size > budget) return { refused: "too-big" };
     hooks.onRead?.(abs);
     const hash = createHash("sha256");
+    const data: Buffer[] = [];
     const buf = Buffer.alloc(64 * 1024);
     let bytes = 0;
     for (;;) {
@@ -489,11 +491,21 @@ function hashRegularFile(
       bytes += n;
       if (bytes > budget) return { refused: "too-big" }; // it grew since the fstat
       hash.update(buf.subarray(0, n));
+      if (keep) data.push(Buffer.from(buf.subarray(0, n)));
     }
-    return { sha256: hash.digest("hex"), bytes, mode: st.mode };
+    return { sha256: hash.digest("hex"), bytes, mode: st.mode, data };
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Reads a file in a folder an agent controls: a regular file only, never through
+ * a link, never waiting on a FIFO, and at most `budget` bytes (`too-big` past it).
+ */
+export function readRegularFile(abs: string, budget: number): { data: Buffer; mode: number } | FileRefusal {
+  const r = readRegular(abs, budget, {}, true);
+  return "refused" in r ? r : { data: Buffer.concat(r.data), mode: r.mode };
 }
 
 /**
@@ -555,7 +567,7 @@ export function hashFolder(dir: string, files: LockedSkill["files"], hooks: Hash
   for (const f of files) {
     const abs = join(dir, ...f.path.split("/"));
     hooks.beforeOpen?.(abs);
-    const r = hashRegularFile(abs, budget, hooks);
+    const r = readRegular(abs, budget, hooks, false);
     if ("refused" in r) return { refused: r.refused };
     if (posixHost && ((r.mode & 0o100) !== 0) !== (f.mode === "100755")) return { refused: "mode" };
     budget -= r.bytes;

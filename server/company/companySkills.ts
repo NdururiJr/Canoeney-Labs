@@ -229,7 +229,8 @@ export class CompanySkills {
     return join(this.home(), "skills", "repo.git");
   }
 
-  private storeDir(): string {
+  /** The content store: `<home>/skills/store/<skill hash>/`, written at pin, read at every agent start. */
+  storeDir(): string {
     return join(this.home(), "skills", "store");
   }
 

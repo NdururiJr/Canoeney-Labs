@@ -15,7 +15,7 @@ import type { RepoInfo } from "./repo";
  */
 export class WorkspaceRefusedError extends Error {
   constructor(
-    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source" | "company-git" | "github-credential" | "keys-unread" | "local-mode" | "global-github-key" | "mcp-server",
+    readonly reason: "store" | "hq-home" | "agent-config" | "hq-file" | "hq-source" | "company-git" | "github-credential" | "keys-unread" | "local-mode" | "global-github-key" | "mcp-server" | "skills-link" | "skills-too-big",
     message: string,
     readonly data: Record<string, unknown> = {},
   ) {
@@ -84,7 +84,8 @@ export async function ensureWorkspace(agent: AgentConfig, projectSlug: string, r
 
 /** Refuses a folder that holds the repo's agent settings, or a repo that commits one of HQ's own files. */
 async function checkFolder(dir: string, chosen: boolean): Promise<void> {
-  const config = await agentConfigOnDisk(dir);
+  // HQ's own clone holds HQ's skill copies at paths the repo may track; a chosen folder is the owner's checkout.
+  const config = await agentConfigOnDisk(dir, { hqSkills: !chosen });
   if (config.length) {
     const end = chosen ? "Use an HQ-managed folder for this agent." : "Commit or discard the change in " + dir + ", then start again.";
     throw new WorkspaceRefusedError("agent-config", `${dir} has the repo's agent settings on disk (${config[0]}). HQ keeps them out of agent folders. ${end}`);

@@ -8,9 +8,8 @@ import type { HqConfig } from "../src/data/types";
 import { adapters, CODEX_CONFIG } from "./adapters";
 import { AGENT_CONFIG_PATTERNS, isAgentConfigPath } from "./agentIsolation";
 import { MCP_CONFIG, ROLE_FILE } from "./agentFiles";
-import { managedWorkspace, projectHome } from "./paths";
+import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
-import { skillSkippedText, syncSkillsInto } from "./skills";
 import { newAgent } from "./store";
 import { ensureWorkspace } from "./workspace";
 
@@ -153,22 +152,6 @@ test("the sparse patterns and isAgentConfigPath agree", async (t) => {
     const [tag, path] = [line.slice(0, 1), line.slice(2)];
     assert.equal(tag === "S", isAgentConfigPath(path), path);
   }
-});
-
-test("a stack skill whose name the repo commits is skipped, and the activity says so", async (t) => {
-  const { repo } = setup(t); // the repo commits .claude/skills/x/SKILL.md
-  const dir = await ensureWorkspace(builder(), "demo", repo);
-  // HQ's cache holds the stack's skills x and z.
-  for (const name of ["x", "z"]) {
-    mkdirSync(join(projectHome("demo"), "skills-cache", ".claude", "skills", name), { recursive: true });
-    writeFileSync(join(projectHome("demo"), "skills-cache", ".claude", "skills", name, "SKILL.md"), `stack ${name}`);
-  }
-  const r = await syncSkillsInto("demo", dir);
-  assert.deepEqual(r.skipped, [".claude/skills/x"]);
-  assert.deepEqual(r.installed, [".claude/skills/z"]);
-  // Neither copy of x is on disk: the repo's is outside the sparse set, and HQ's was not installed.
-  assert.equal(existsSync(join(dir, ".claude", "skills", "x")), false);
-  assert.equal(skillSkippedText("Ana", ".claude/skills/x"), "The repo commits .claude/skills/x, so Ana starts without the stack's x skill.");
 });
 
 test("a clone whose first checkout never finished is checked out at its next start, not left empty", async (t) => {

@@ -6,12 +6,13 @@ import { spawn as spawnPty, type IPty } from "@lydell/node-pty";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { stackSkills } from "../src/data/stack";
-import { hasHqSkills, prepareSkills, skillSkippedText } from "./skills";
+import { effectiveSkills, installSkills, skillMovesDir, skillsBlockedText, skillsMissingText } from "./skills";
 import { refreshProjectNotes } from "./projectNotesSync";
 import { resolve, sep } from "node:path";
 import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
 import { adapters, localBinary } from "./adapters";
 import type { Company } from "./company";
+import type { RoleId } from "./company/types";
 import { companyAgentId, type Actor } from "./company/agents";
 import type { Hub } from "./hub";
 import { sessionBackend, type LaunchSpec, type TermHandle } from "./backends";
@@ -260,15 +261,9 @@ export class Sessions {
         refreshProjectNotes(hub, this.company);
         const approved = company ? null : this.company.notes.current(hub.slug);
         const notes = approved ? { version: approved.version, content: approved.content } : null;
+        // Before HQ writes into .claude/: a link there refuses the start (M0-F).
+        this.installSkills(id, agent.name, agent.cli, agent.skills ?? [], reg.role, company, dir, by);
         await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId, notes });
-        // A company-level agent gets no project notes and no stack skills.
-        const specs = company ? [] : stackSkills(hub.snap.config.stack);
-        if (!company && (specs.length || hasHqSkills(hub.slug, dir))) {
-          hub.setSession(id, { detail: "Installing agent skills…" });
-          const skills = await prepareSkills(hub.slug, dir, specs);
-          if (skills.error) hub.activity("session", id, `${agent.name}: some agent skills didn't install (${skills.error.slice(0, 120)}). Starting anyway.`);
-          for (const rel of skills.skipped) hub.activity("session", id, skillSkippedText(agent.name, rel));
-        }
         const launch = adapter.launch(agent, dir);
         const envFile = null; // D2: never passed
         let spec: LaunchSpec = { file: localBinary[agent.cli], args: launch.args, envFile };
@@ -302,6 +297,37 @@ export class Sessions {
       if (err instanceof WorkspaceRefusedError) this.auditRefusal(id, err, by);
       fail(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /**
+   * Installs exactly the agent's pinned skills from HQ's store, at every start,
+   * company-level agents included (M0-F, SR-F-01, 02, 04, 05). Nothing is fetched.
+   * A refused or missing skill and any drift are audited with `by` as the actor,
+   * and the agent starts without that skill. A link where the skills go, or a
+   * folder too big to move aside, refuses the start.
+   */
+  private installSkills(id: string, name: string, cli: AgentCli, grants: string[], role: RoleId, companyLevel: boolean, dir: string, by: Actor) {
+    const hub = this.hub;
+    const skills = this.company.skills;
+    const cid = companyAgentId(hub.slug, id);
+    hub.setSession(id, { detail: "Installing agent skills…" });
+    const stack = companyLevel ? [] : stackSkills(hub.snap.config.stack).flatMap((s) => s.skills);
+    const { install, missing } = effectiveSkills({ roleSet: skills.roleSet(role), grants, stack, companyLevel, lock: skills.lock() });
+    // Drift goes to HQ's home: the project's, or the company's for a company-level agent.
+    const movedDir = skillMovesDir(companyLevel ? this.company.home : projectHome(hub.slug), companyLevel ? cid : id, this.company.clock.now());
+    const r = installSkills({ workspace: dir, cli, want: install, storeDir: skills.storeDir(), movedDir });
+    if ("blocked" in r) throw new WorkspaceRefusedError(r.blocked.reason, skillsBlockedText(name, dir, r.blocked), { path: r.blocked.path });
+    const audit = (action: string, data: Record<string, unknown>) => {
+      try {
+        this.company.audit.append({ actorKind: by.kind, actorId: by.id, action, target: cid, data });
+      } catch (err) {
+        log.warn(`could not record ${action} for ${id}: ${err instanceof Error ? err.message : err}`);
+      }
+    };
+    for (const x of [...r.refused, ...missing.map((skill) => ({ skill, reason: "missing" as const }))]) audit("skill.refused", x);
+    if (r.drift.changed.length || r.drift.extra.length) audit("skill.drift", { ...r.drift });
+    const line = skillsMissingText(name, r.refused, missing);
+    if (line) hub.activity("session", id, line);
   }
 
   private async stopNow(id: string) {

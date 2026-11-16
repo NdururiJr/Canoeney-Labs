@@ -5,10 +5,8 @@
 
 import { SERVICE_KEYS, type AgentCli, type AgentConfig, type AgentPatch, type ReviewTool, type WelcomeInput, type NewMcpServer, type Board, type NewAgentInput, type ProjectConfig, type RemoveAgentOptions, type SandboxSettings, type SetupCheckId, type WorkflowPatch } from "../src/data/types";
 import { LEAD_NAME, OFFICE_NAME_MAX } from "../src/data/names";
-import { stackSkills } from "../src/data/stack";
 import { cleanStack } from "./stackClean";
 import { resolveAccess } from "./access";
-import { ensureSkillCache } from "./skills";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
@@ -342,11 +340,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     updateStack: { role: "owner", pin: pinIf((a) => [{ kind: "project", field: "stack", before: hub.snap.config.stack ?? null, after: cleanStack(a[0]) }]), run: (ctx, raw) => {
       const stack = cleanStack(raw);
       company.settings.updateProject(hub.slug, { stack }, authorityOf(ctx));
+      // The stack's skills install at each agent's next start, once they are pinned: nothing is fetched (SR-F-02).
       hub.configChanged();
-      if (!stack) return;
-      // Fetch the skills now so the next Start doesn't wait for them.
-      const specs = stackSkills(stack);
-      if (specs.length) void ensureSkillCache(hub.slug, specs).catch((e) => hub.activity("config", null, `Couldn't fetch agent skills: ${String(e instanceof Error ? e.message : e).slice(0, 160)}`));
     } },
 
     resolveAccess: { role: "owner", pin: pinIf((a) => (a[1] === "agent" || a[1] === "everyone" ? [{ kind: "grant", permission: "network-allow", value: "*" }] : [])), target: first, run: (ctx, id, decision) => {
@@ -389,10 +384,6 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
         const cto = company.settings.addAgent(hub.slug, lead, "cto", by);
         for (const w of workers) company.settings.addAgent(hub.slug, w, "builder", by, cto.companyId);
       });
-      if (stack) {
-        const specs = stackSkills(stack);
-        if (specs.length) void ensureSkillCache(hub.slug, specs).catch(() => {}); // retried on Start
-      }
       hub.snap.welcome = false;
       delete hub.snap.importable;
       delete hub.snap.importPreview;

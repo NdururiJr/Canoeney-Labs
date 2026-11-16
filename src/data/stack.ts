@@ -6,6 +6,11 @@
 export type StackCategory = "auth" | "payments" | "database" | "analytics" | "security";
 
 export interface SkillSpec {
+  /**
+   * The upstream repo the skills come from: provenance for vendoring them into
+   * the company's skills repo (M0-F). HQ never fetches from it; a stack skill
+   * installs only once it is vendored and pinned.
+   */
   source: string;
   skills: string[];
 }
@@ -20,7 +25,7 @@ export interface StackTool {
   api: string[];
   /** Env var names the tool needs. HQ never asks for or stores the values. */
   keys: string[];
-  /** Agent skills to install: a `npx skills add` source and which of its skills. */
+  /** Agent skills for this tool: the upstream source (for vendoring) and which of its skills. */
   skills: SkillSpec[];
   /** A hosted MCP server, if the tool has one. */
   mcp?: string;
