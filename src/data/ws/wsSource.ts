@@ -61,7 +61,7 @@ export function createWsSource(): OfficeDataSource {
   };
   const send = (cmd: string, ...args: unknown[]) => transmit(cmd, args);
   /** HQ's answer to one command: ask for the PIN when it needs one. */
-  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string }) => void) | null = null;
+  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }) => void) | null = null;
   const onResult = (e: { id: string; ok: boolean; error?: string; message?: string; data?: unknown }) => {
     const sent = pending.get(e.id);
     pending.delete(e.id);
@@ -175,6 +175,9 @@ export function createWsSource(): OfficeDataSource {
     previewRepoImport: () => send("previewRepoImport"),
     importRepoConfig: (sha256) => send("importRepoConfig", { sha256 }),
     approveProjectNotes: (sha256) => send("approveProjectNotes", sha256),
+    previewSkillsPin: (repo, commit) => send("previewSkillsPin", repo, commit),
+    pinSkills: (repo, commit, lockHash) => send("pinSkills", repo, commit, lockHash),
+    setRoleSkills: (role, names) => send("setRoleSkills", role, names),
     openShell: (id) => send("openShell", id),
     closeShell: (id) => send("closeShell", id),
     openHostShell: (dir, fresh) => send("openHostShell", dir, fresh === true),

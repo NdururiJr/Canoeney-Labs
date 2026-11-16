@@ -16,6 +16,7 @@ import { officeActions, useOffice } from "../../store/office";
 import { ui } from "../../store/ui";
 import { Field, SectionTitle } from "../kit";
 import { CommitInput } from "./controls";
+import { StackSkillStatus } from "./SkillsSettings";
 
 /** Optional: what the project is built with. Agents get it in ROLE.md, plus skills and access. */
 export function StackSettings() {
@@ -152,18 +153,12 @@ function ToolRow({ category, label, hint, stack, save }: { category: StackCatego
 /** What choosing this tool brings: skills and MCP. */
 function Skills({ id }: { id: string }) {
   const t = stackTool(id);
+  const lock = useOffice((s) => s.snap?.skills?.lock);
   if (!t) return null;
+  const pinned = new Set((lock ?? []).map((k) => k.name));
   return (
     <div className="flex flex-wrap items-center gap-1.5 pb-1 text-[12px]">
-      {t.skills.length ? (
-        t.skills.map((s) => (
-          <span key={s.source} className="chip font-term text-[14px]" title={s.skills.join(", ")}>
-            {s.skills.length} skill{s.skills.length === 1 ? "" : "s"} · {s.source}
-          </span>
-        ))
-      ) : (
-        <span className="text-muted">No agent skills listed</span>
-      )}
+      {t.skills.length ? <StackSkillStatus skills={t.skills} pinned={pinned} /> : <span className="text-muted">No agent skills listed</span>}
       {t.mcp && (
         <span className="chip font-term text-[14px]" title={t.mcp}>
           MCP

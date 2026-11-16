@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CompanySkills, type PinPreview } from "./company/companySkills";
-import type { CommandCtx } from "./dashboard";
+import type { OfficeSnapshot } from "../src/data/types";
+import { viewFor, type CommandCtx } from "./dashboard";
 import { makeSkillsRepo } from "./testing/skillsRepo";
 import { makeHq, OWNER_PIN } from "./testing/hqFixture";
 
@@ -86,4 +87,14 @@ test("previewSkillsPin and pinSkills: only what was previewed is pinned, and the
     assert.equal(bad.ok, false);
     assert.match(message(bad), /owner\/name/);
   }
+});
+
+test("the supervisor's view has no skills: not in the snapshot, and the update is owner only", () => {
+  const skills = { source: { repo: "acme/skills", commit: "a".repeat(40), lockHash: "L" }, lock: [], roles: {} };
+  const snapshot = { welcome: false, skills, config: { project: {}, team: [], workflow: {} }, agents: [] } as unknown as OfficeSnapshot;
+  const seen = viewFor("supervisor", { type: "snapshot", snapshot });
+  assert.ok(seen && seen.type === "snapshot");
+  assert.equal("skills" in seen.snapshot, false);
+  assert.equal(viewFor("supervisor", { type: "skills.updated", skills }), null);
+  assert.ok(viewFor("owner", { type: "skills.updated", skills }));
 });

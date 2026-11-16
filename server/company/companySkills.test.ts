@@ -548,3 +548,39 @@ test("two pins at once run one after the other", async (t) => {
   await Promise.all([c.skills.pin(SKILLS_REPO, a, pa.lockHash, PIN), c.skills.pin(SKILLS_REPO, b, pb.lockHash, PIN)]);
   assert.equal(c.skills.source()!.commit, b);
 });
+
+// ---------------------------------------------------------------- what the dashboard shows (Task 7)
+
+test("view is null before a pin, and after one holds the lock (file counts) and every role's set", async (t) => {
+  const c = freshPin(t);
+  assert.equal(c.skills.view(), null);
+  const a = c.origin.commit(skillTree({ alpha: "alpha v1" }));
+  const preview = await c.skills.preview(SKILLS_REPO, a, PIN);
+  await c.skills.pin(SKILLS_REPO, a, preview.lockHash, PIN);
+  const view = c.skills.view()!;
+  assert.deepEqual(view.source, { repo: SKILLS_REPO, commit: a, lockHash: preview.lockHash });
+  assert.deepEqual(view.lock, [{ name: "alpha", hash: preview.skills[0].hash, files: 1, scripts: [] }]);
+  assert.deepEqual(Object.keys(view.roles), [...ROLE_IDS]);
+  assert.deepEqual(view.roles.builder, c.skills.roleSet("builder"));
+});
+
+test("onChange is called after a pin and after a real role-set change, and a throwing listener changes nothing", async (t) => {
+  const c = freshPin(t);
+  let calls = 0;
+  c.skills.onChange = () => {
+    calls++;
+    throw new Error("the dashboard is gone");
+  };
+  const a = c.origin.commit(skillTree({ alpha: "alpha v1" }));
+  const preview = await c.skills.preview(SKILLS_REPO, a, PIN);
+  assert.equal(calls, 0, "a preview changes nothing");
+  await c.skills.pin(SKILLS_REPO, a, preview.lockHash, PIN);
+  assert.equal(calls, 1);
+  assert.equal(c.skills.source()!.commit, a, "the pin stands although the listener threw");
+  c.skills.setRoleSkills("qa", ["alpha"], PIN);
+  assert.equal(calls, 2);
+  c.skills.setRoleSkills("qa", ["alpha"], PIN);
+  assert.equal(calls, 2, "a write that changes nothing is not a change");
+  assert.throws(() => c.skills.setRoleSkills("qa", [], SESSION));
+  assert.equal(calls, 2, "a refused change is not a change");
+});

@@ -7,7 +7,7 @@ import type { ConnectionStatus, DataPreset, OfficeDataSource, OfficeEvent, SimSp
 import { chosenSource } from "../data/authState";
 import { createWsSource } from "../data/ws/wsSource";
 import type { StackConfig } from "../data/stack";
-import type { AccessDecision, NewMcpServer, AgentConfig, AgentStatus, OfficeSnapshot, RemoveAgentOptions, SetupCheckId, WelcomeInput, WorkspaceInfo } from "../data/types";
+import type { AccessDecision, NewMcpServer, AgentConfig, AgentStatus, OfficeSnapshot, RemoveAgentOptions, SetupCheckId, SkillsPinFlow, SkillsPinPreview, WelcomeInput, WorkspaceInfo } from "../data/types";
 import { appendTerminal, clearTerminals } from "./terminal";
 import { ui, useUi } from "./ui";
 
@@ -33,6 +33,8 @@ interface OfficeState {
   source: OfficeDataSource;
   /** The add-project dialog's progress (M0-E): set when sent, settled by HQ's answer. */
   addProject: AddProjectStatus;
+  /** Settings → Skills: a commit previewed, then confirmed with the PIN (M0-F). */
+  skillsPin: SkillsPinFlow;
 }
 
 /**
@@ -52,6 +54,7 @@ export const useOffice = create<OfficeState>(() => ({
   workspaceInfo: {},
   connection: "connecting",
   addProject: { state: "idle" },
+  skillsPin: { state: "idle" },
   source,
 }));
 
@@ -78,6 +81,8 @@ function reduce(snap: OfficeSnapshot, e: OfficeEvent): OfficeSnapshot {
       return { ...snap, githubGuard: e.guard };
     case "skills.guard":
       return { ...snap, skillsGuard: e.guard };
+    case "skills.updated":
+      return { ...snap, skills: e.skills };
     case "sbx.updated":
       return { ...snap, sbx: e.sbx };
     case "setup.updated":
@@ -149,11 +154,20 @@ let disconnect: (() => void) | null = null;
 
 export function connectOffice() {
   if (disconnect) return disconnect;
-  // The add-project dialog follows its own command's answer; a PIN prompt in between keeps it waiting.
+  // The add-project dialog and the skills pin flow follow their own commands' answers; a PIN prompt in between keeps them waiting.
   source.onCommandResult?.((cmd, e) => {
-    if (cmd !== "addProject" || useOffice.getState().addProject.state !== "adding") return;
-    if (e.ok) useOffice.setState({ addProject: { state: "done" } });
-    else if (e.error !== "pin-required" && e.error !== "pin-wrong") useOffice.setState({ addProject: { state: "failed", message: e.message } });
+    if (cmd === "addProject" && useOffice.getState().addProject.state === "adding") {
+      if (e.ok) useOffice.setState({ addProject: { state: "done" } });
+      else if (e.error !== "pin-required" && e.error !== "pin-wrong") useOffice.setState({ addProject: { state: "failed", message: e.message } });
+    } else if (cmd === "previewSkillsPin") {
+      const preview = e.ok ? asSkillsPreview(e.data) : null;
+      useOffice.setState({ skillsPin: preview ? { state: "ready", preview } : { state: "failed", message: e.message ?? "HQ could not preview that commit." } });
+    } else if (cmd === "pinSkills") {
+      if (e.ok) useOffice.setState({ skillsPin: { state: "idle" } });
+      else if (e.error !== "pin-required" && e.error !== "pin-wrong" && e.error !== "pin-locked") {
+        useOffice.setState((s) => (s.skillsPin.state === "ready" ? { skillsPin: { ...s.skillsPin, error: e.message ?? "HQ did not pin it." } } : {}));
+      }
+    }
   });
   disconnect = source.connect(handle, (connection) => useOffice.setState({ connection }));
   return () => {
@@ -164,7 +178,33 @@ export function connectOffice() {
 
 // ---------------------------------------------------------------- actions
 
+/** The preview HQ sent, or null when it is not shaped like one (the panel then says the preview failed). */
+function asSkillsPreview(data: unknown): SkillsPinPreview | null {
+  const d = data as Partial<SkillsPinPreview> | null;
+  if (!d || typeof d !== "object") return null;
+  const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
+  const ok =
+    typeof d.repo === "string" && typeof d.commit === "string" && typeof d.lockHash === "string" &&
+    Array.isArray(d.skills) && d.skills.every((s) => s && typeof s.name === "string" && typeof s.hash === "string" && typeof s.files === "number" && strings(s.scripts)) &&
+    Array.isArray(d.refused) && d.refused.every((r) => r && typeof r.skill === "string" && typeof r.reason === "string") &&
+    strings(d.added) && strings(d.changed) && strings(d.removed) &&
+    Array.isArray(d.rolesLosing) && d.rolesLosing.every((r) => r && typeof r.role === "string" && strings(r.skills)) &&
+    Array.isArray(d.findings) && d.findings.every((f) => f && typeof f.name === "string" && typeof f.detail === "string") &&
+    !!d.links && typeof d.links.commit === "string";
+  return ok ? (d as SkillsPinPreview) : null;
+}
+
 export const officeActions = {
+  /** Reads a commit of the skills repo and shows what pinning it would change (nothing is changed). */
+  previewSkillsPin(repo: string, commit: string) {
+    if (!useOffice.getState().live) return void useOffice.setState({ skillsPin: { state: "failed", message: "The demo has no skills repo." } });
+    useOffice.setState({ skillsPin: { state: "previewing" } });
+    source.previewSkillsPin(repo, commit);
+  },
+  /** The confirm: it sends back exactly what was previewed. HQ asks for the PIN. */
+  pinSkills: (repo: string, commit: string, lockHash: string) => source.pinSkills(repo, commit, lockHash),
+  setRoleSkills: (role: string, names: string[]) => source.setRoleSkills(role, names),
+  resetSkillsPin: () => useOffice.setState({ skillsPin: { state: "idle" } }),
   /** Sends a command again with the approval PIN (the PIN dialog). */
   sendWithPin: (cmd: string, args: unknown[], pin: string) => source.sendWithPin?.(cmd, args, pin),
   /** Views another project. What belonged to the last one (drawers, the selected agent, terminal tabs) is closed. */

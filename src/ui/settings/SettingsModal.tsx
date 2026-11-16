@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { ui, useUi, type SettingsTab } from "../../store/ui";
 import { BoardsSettings } from "./BoardsSettings";
 import { ProjectSettings } from "./ProjectSettings";
+import { SkillsSettings } from "./SkillsSettings";
 import { SandboxSettingsTab } from "./SandboxSettings";
 import { StackSettings } from "./StackSettings";
 import { McpSettings } from "./McpSettings";
@@ -12,6 +13,7 @@ const TABS: { id: SettingsTab; label: string; hint: string }[] = [
   { id: "team", label: "Team", hint: "Agents, roles, skills" },
   { id: "workflow", label: "Workflow", hint: "Review, merge, deploy" },
   { id: "stack", label: "Stack", hint: "Frameworks, tools" },
+  { id: "skills", label: "Skills", hint: "Pinned skills, role sets" },
   { id: "mcp", label: "MCP", hint: "Servers for agents" },
   { id: "sandbox", label: "Sandbox", hint: "Network, proxy, secrets" },
   { id: "boards", label: "Boards", hint: "Progress boards" },
@@ -62,6 +64,7 @@ export function SettingsModal() {
             {settings.tab === "team" && <TeamSettings />}
             {settings.tab === "workflow" && <WorkflowSettings />}
             {settings.tab === "stack" && <StackSettings />}
+            {settings.tab === "skills" && <SkillsSettings />}
             {settings.tab === "mcp" && <McpSettings />}
             {settings.tab === "sandbox" && <SandboxSettingsTab initialAgentId={settings.agentId} />}
             {settings.tab === "boards" && <BoardsSettings />}

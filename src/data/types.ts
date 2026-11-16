@@ -366,10 +366,42 @@ export interface SkillsGuardState {
   findings: { name: string; detail: string; fixable: boolean }[];
 }
 
+/** The company's pinned skills and each role's set of them (M0-F). Owner only; null until a skills repo is pinned. */
+export interface SkillsState {
+  source: { repo: string; commit: string; lockHash: string };
+  lock: { name: string; hash: string; files: number; scripts: string[] }[];
+  /** Every role, by id: the skill names its agents get. */
+  roles: Record<string, string[]>;
+}
+
+/** What pinning a commit would do, as the owner reads it before confirming (M0-F). The confirm sends repo, commit and lockHash back. */
+export interface SkillsPinPreview {
+  repo: string;
+  commit: string;
+  lockHash: string;
+  skills: { name: string; hash: string; files: number; scripts: string[] }[];
+  refused: { skill: string; reason: string }[];
+  added: string[];
+  changed: string[];
+  removed: string[];
+  rolesLosing: { role: string; skills: string[] }[];
+  findings: { name: string; detail: string; fixable: boolean }[];
+  links: { commit: string; compare: string | null };
+}
+
+/** The Skills panel's pin flow: a commit previewed, then confirmed with the PIN. */
+export type SkillsPinFlow =
+  | { state: "idle" }
+  | { state: "previewing" }
+  | { state: "failed"; message: string }
+  | { state: "ready"; preview: SkillsPinPreview; error?: string };
+
 export interface OfficeSnapshot {
   githubGuard?: GithubGuardState;
   /** The company skills repo's check (M0-F, SR-F-08). Owner only. */
   skillsGuard?: SkillsGuardState | null;
+  /** The pinned skills and the role sets (M0-F). Owner only. */
+  skills?: SkillsState | null;
   /** The project this snapshot is of, and every project HQ manages (real HQ only, M0-D2). */
   projectId?: string;
   projects?: ProjectSummary[];

@@ -3,6 +3,7 @@
 // through ProjectSettings.authorized(): the owner's PIN or an approved decision,
 // and the audit row is written in the same transaction as the change.
 import { join } from "node:path";
+import type { SkillsState } from "../../src/data/types";
 import type { Finding } from "../github/repoGuard";
 import { log } from "../lib/log";
 import { fetchCommit, lockHash as computeLockHash, readCommit, writeStore, type SkillRefusal } from "../skillVendor";
@@ -87,6 +88,8 @@ export class CompanySkills {
   private readonly allowFile: boolean;
   /** One preview or pin at a time: they share one bare repo and one default-branch ref. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Called after a pin or a role-set change has committed: the server then sends the owner's dashboards the new `view()`. */
+  onChange: () => void = () => {};
 
   constructor(
     private readonly db: CompanyDb,
@@ -103,6 +106,25 @@ export class CompanySkills {
   source(): { repo: string; commit: string; lockHash: string } | null {
     const r = this.db.prepare("SELECT repo, commit_sha, lock_hash FROM skill_source WHERE id = 1").get<SourceRow>();
     return r ? { repo: r.repo, commit: r.commit_sha, lockHash: r.lock_hash } : null;
+  }
+
+  /** What the owner's dashboard shows: the pin, each skill (file count, not the file list) and every role's set. Null before the first pin. */
+  view(): SkillsState | null {
+    const source = this.source();
+    if (!source) return null;
+    return {
+      source,
+      lock: this.lock().map((s) => ({ name: s.name, hash: s.hash, files: s.files.length, scripts: s.scripts })),
+      roles: Object.fromEntries(ROLE_IDS.map((role) => [role, this.roleSet(role)])),
+    };
+  }
+
+  private changed(): void {
+    try {
+      this.onChange();
+    } catch (err) {
+      log.warn(`A skills change was saved but could not be sent to the dashboard: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /** Every pinned skill, by name. */
@@ -141,6 +163,7 @@ export class CompanySkills {
       for (const n of added) this.db.prepare("INSERT INTO role_skills(role, skill) VALUES (?, ?)").run(role, n);
       this.settings.record(by, "skills.role-set", "company", { role, added, removed });
     });
+    this.changed();
     return { added, removed };
   }
 
@@ -205,6 +228,7 @@ export class CompanySkills {
         this.writePin({ repo, commit, lockHash, skills: read.skills }, by);
         this.settings.record(by, "skills.pinned", "company", { repo, commit, lockHash, added, changed, removed });
       });
+      this.changed();
     });
   }
 

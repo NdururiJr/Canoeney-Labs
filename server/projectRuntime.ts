@@ -86,6 +86,7 @@ export class ProjectRuntime {
     const hub = new Hub(repo, slug, configSource, company.plans.load(slug), setup);
     // The skills repo's last check (company-wide), so a project opened later still shows it.
     hub.snap.skillsGuard = company.skillsWatch.state();
+    hub.snap.skills = company.skills.view();
     // Until the owner completes the welcome or confirms an import, nothing is read from the repo.
     offerImport(hub, company);
     refreshProjectNotes(hub, company);

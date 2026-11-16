@@ -474,6 +474,10 @@ export function createMockSource(): OfficeDataSource {
       // The demo has no repo files to import.
     },
     importRepoConfig() {},
+    // The demo has no skills repo.
+    previewSkillsPin() {},
+    pinSkills() {},
+    setRoleSkills() {},
     approveProjectNotes() {},
     completeWelcome() {
       // The demo never shows the welcome screen.

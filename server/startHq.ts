@@ -99,6 +99,13 @@ export async function startHq(o: StartOptions): Promise<RunningHq> {
       for (const hub of hubs()) hub.activity("config", null, text);
     };
     void company.skillsWatch.start();
+    // A pin or a role-set change reaches every open project's owner dashboard, and the project opened next.
+    company.skills.onChange = () => {
+      for (const hub of hubs()) {
+        hub.snap.skills = company.skills.view();
+        hub.emit({ type: "skills.updated", skills: structuredClone(hub.snap.skills) });
+      }
+    };
 
     let closed = false;
     const close = async () => {
