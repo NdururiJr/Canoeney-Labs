@@ -376,3 +376,75 @@ test("hashFolder refuses a folder holding a link", async (t) => {
   symlinkSync(join(dir), linkedRoot, "junction");
   assert.deepEqual(hashFolder(linkedRoot, skill.files), { refused: "link" });
 });
+
+// --- hashFolder in the agent's folder (the agent controls it) -------------------
+
+/** A lock entry for `data` at `path`, so a test can build any folder and its lock. */
+const entry = (path: string, data: string | Buffer, mode = "100644") => ({ path, mode, sha256: sha256(data) });
+
+test("hashFolder refuses a file over the 2 MiB cap without reading it", async (t) => {
+  const d = scratch(t);
+  const dir = join(d, "big");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "SKILL.md"), "x");
+  const big = Buffer.alloc(3 * 1024 * 1024, 1);
+  writeFileSync(join(dir, "big.bin"), big);
+  const files = [entry("SKILL.md", "x"), entry("big.bin", big)];
+  const read: string[] = [];
+  assert.deepEqual(hashFolder(dir, files, { onRead: (p) => read.push(p) }), { refused: "too-big" });
+  assert.deepEqual(read, [join(dir, "SKILL.md")], "the big file was refused from its size, before any byte was read");
+});
+
+test("hashFolder refuses files that together pass 2 MiB, and a lock of more than 256 files", async (t) => {
+  const d = scratch(t);
+  const dir = join(d, "two");
+  mkdirSync(dir);
+  const half = Buffer.alloc(1024 * 1024 + 1, 2);
+  writeFileSync(join(dir, "a.bin"), half);
+  writeFileSync(join(dir, "b.bin"), half);
+  assert.deepEqual(hashFolder(dir, [entry("a.bin", half), entry("b.bin", half)]), { refused: "too-big" });
+
+  const many = Array.from({ length: 257 }, (_, i) => entry(`f${i}.md`, "x"));
+  assert.deepEqual(hashFolder(dir, many), { refused: "too-big" });
+});
+
+test("hashFolder stops walking at the first entry the lock does not list", async (t) => {
+  const d = scratch(t);
+  const dir = join(d, "crowded");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "SKILL.md"), "x");
+  for (let i = 0; i < 2000; i++) writeFileSync(join(dir, `junk${i}`), "");
+  let visited = 0;
+  assert.deepEqual(hashFolder(dir, [entry("SKILL.md", "x")], { onVisit: () => visited++ }), { refused: "paths" });
+  assert.ok(visited >= 1 && visited <= 2, `visited ${visited} entries`);
+});
+
+test("hashFolder refuses a FIFO swapped in after the walk, without hanging", { skip: !posix && "no FIFOs on Windows" }, async (t) => {
+  const d = scratch(t);
+  const dir = join(d, "fifo");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "SKILL.md"), "x");
+  // A child process, so a hang fails the test instead of stopping the run. The hook
+  // swaps SKILL.md for a FIFO between the lstat walk and the open.
+  const script = `
+    const { hashFolder } = await import(${JSON.stringify(join(import.meta.dirname, "skillVendor.ts"))});
+    const { rmSync } = await import("node:fs");
+    const { execFileSync } = await import("node:child_process");
+    const dir = ${JSON.stringify(dir)};
+    const r = hashFolder(dir, [{ path: "SKILL.md", mode: "100644", sha256: ${JSON.stringify(sha256("x"))} }], {
+      beforeOpen: (p) => { rmSync(p); execFileSync("mkfifo", [p]); },
+    });
+    console.log(JSON.stringify(r));
+  `;
+  const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.error, undefined, "the child finished in time");
+  assert.deepEqual(JSON.parse(r.stdout.trim()), { refused: "not-file" });
+});
+
+test("hashFolder refuses a FIFO found by the walk", { skip: !posix && "no FIFOs on Windows" }, async (t) => {
+  const d = scratch(t);
+  const dir = join(d, "fifo2");
+  mkdirSync(dir);
+  spawnSync("mkfifo", [join(dir, "SKILL.md")]);
+  assert.deepEqual(hashFolder(dir, [entry("SKILL.md", "x")]), { refused: "not-file" });
+});

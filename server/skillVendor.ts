@@ -13,7 +13,7 @@
 //   against the lock without following a link.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, posix as posixPath } from "node:path";
 import { canonicalJson } from "./company/canonicalJson";
 import { SKILL_NAME, type LockedSkill } from "./company/companySkills";
@@ -429,14 +429,87 @@ export function writeStore(bare: string, sha: string, skill: LockedSkill, storeD
 
 // --- checking a folder on disk -------------------------------------------------------
 
+export type FolderRefusal = "link" | "not-file" | "paths" | "mode" | "too-big";
+
+/** Test seams: see each entry and file the check touches. */
+export interface HashFolderHooks {
+  /** Called for every entry the walk lstats. */
+  onVisit?: (path: string) => void;
+  /** Called just before a file is opened (a test swaps the file here). */
+  beforeOpen?: (path: string) => void;
+  /** Called just before a file's bytes are read. */
+  onRead?: (path: string) => void;
+}
+
+/** The names in a folder, read one at a time (a folder of millions of entries is never listed whole). */
+export function* folderEntries(dir: string): Generator<string> {
+  const d = opendirSync(dir);
+  try {
+    for (let e = d.readSync(); e !== null; e = d.readSync()) yield e.name;
+  } finally {
+    d.closeSync();
+  }
+}
+
+// O_NOFOLLOW: a file swapped for a link since the walk is not followed. O_NONBLOCK: a FIFO
+// swapped in is opened without waiting for a writer, then refused by fstat. Windows has neither.
+const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
+/**
+ * Opens a regular file without following a link or waiting on a FIFO, and hashes
+ * at most `budget` bytes of it. A file larger than the budget is refused from its
+ * size before any byte is read.
+ */
+function hashRegularFile(
+  abs: string,
+  budget: number,
+  hooks: HashFolderHooks,
+): { sha256: string; bytes: number; mode: number } | { refused: "link" | "not-file" | "paths" | "too-big" } {
+  let fd: number;
+  try {
+    fd = openSync(abs, OPEN_FLAGS);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") return { refused: "link" };
+    if (code === "ENOENT" || code === "ENOTDIR") return { refused: "paths" };
+    if (code === "EISDIR" || code === "ENXIO" || code === "EPERM" || code === "EACCES") return { refused: "not-file" };
+    throw e;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { refused: "not-file" };
+    if (st.size > budget) return { refused: "too-big" };
+    hooks.onRead?.(abs);
+    const hash = createHash("sha256");
+    const buf = Buffer.alloc(64 * 1024);
+    let bytes = 0;
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      bytes += n;
+      if (bytes > budget) return { refused: "too-big" }; // it grew since the fstat
+      hash.update(buf.subarray(0, n));
+    }
+    return { sha256: hash.digest("hex"), bytes, mode: st.mode };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Hashes a skill folder on disk against the locked file list. The folder must
  * hold exactly the locked paths, all regular files; no link is followed. Each
  * mode is taken from the lock, so the hash equals the lock's only when every
  * byte matches. On POSIX the executable bit must also match the mode; NTFS keeps
  * no executable bit, so Windows does not check it. The caller compares `hash`.
+ *
+ * The folder may be in an agent's folder, which the agent controls: the walk
+ * stops at the first entry the lock does not list, a FIFO or a link swapped in
+ * after the walk is refused when opened, and no more than 256 files or 2 MiB
+ * are read (`too-big`), a file over what is left being refused from its size.
  */
-export function hashFolder(dir: string, files: LockedSkill["files"]): { hash: string } | { refused: "link" | "not-file" | "paths" | "mode" } {
+export function hashFolder(dir: string, files: LockedSkill["files"], hooks: HashFolderHooks = {}): { hash: string } | { refused: FolderRefusal } {
+  if (files.length > MAX_FILES) return { refused: "too-big" };
   const want = new Map(files.map((f) => [f.path, f]));
   if (want.size !== files.length || files.some((f) => !safeSkillPath(f.path) || !REGULAR.has(f.mode))) return { refused: "paths" };
   const wantFolders = new Set<string>();
@@ -450,50 +523,43 @@ export function hashFolder(dir: string, files: LockedSkill["files"]): { hash: st
   if (root.isSymbolicLink()) return { refused: "link" };
   if (!root.isDirectory()) return { refused: "not-file" };
 
-  let link = false;
-  let other = false;
-  let extra = false;
-  const found: string[] = [];
-  const walk = (rel: string) => {
-    for (const name of readdirSync(rel ? join(dir, ...rel.split("/")) : dir)) {
+  // Every entry must be a locked file or a folder on the way to one, so the walk
+  // ends at the first that is not: it never visits more entries than the lock names.
+  let found = 0;
+  const walk = (rel: string): FolderRefusal | null => {
+    for (const name of folderEntries(rel ? join(dir, ...rel.split("/")) : dir)) {
       const childRel = rel ? `${rel}/${name}` : name;
-      const st = lstatSync(join(dir, ...childRel.split("/")));
-      if (st.isSymbolicLink()) link = true;
-      else if (st.isDirectory()) {
-        if (wantFolders.has(childRel)) walk(childRel);
-        else extra = true;
+      const abs = join(dir, ...childRel.split("/"));
+      hooks.onVisit?.(abs);
+      const st = lstatSync(abs, { throwIfNoEntry: false });
+      if (!st) return "paths";
+      if (st.isSymbolicLink()) return "link";
+      if (st.isDirectory()) {
+        if (!wantFolders.has(childRel)) return "paths";
+        const inner = walk(childRel);
+        if (inner) return inner;
       } else if (st.isFile()) {
-        if (want.has(childRel)) found.push(childRel);
-        else extra = true;
-      } else other = true;
+        if (!want.has(childRel)) return "paths";
+        found++;
+      } else return "not-file";
     }
+    return null;
   };
-  walk("");
-  if (link) return { refused: "link" };
-  if (other) return { refused: "not-file" };
-  if (extra || found.length !== want.size) return { refused: "paths" };
+  const bad = walk("");
+  if (bad) return { refused: bad };
+  if (found !== want.size) return { refused: "paths" };
 
   const posixHost = process.platform !== "win32";
   const hashed: SkillFile[] = [];
+  let budget = MAX_BYTES;
   for (const f of files) {
-    // O_NOFOLLOW where the system has it, so a file swapped for a link since the walk is not read.
-    let fd: number;
-    try {
-      fd = openSync(join(dir, ...f.path.split("/")), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code === "ELOOP") return { refused: "link" };
-      if (code === "ENOENT") return { refused: "paths" };
-      throw e;
-    }
-    try {
-      const st = fstatSync(fd);
-      if (!st.isFile()) return { refused: "not-file" };
-      if (posixHost && ((st.mode & 0o100) !== 0) !== (f.mode === "100755")) return { refused: "mode" };
-      hashed.push({ path: f.path, mode: f.mode, sha256: sha256(readFileSync(fd)) });
-    } finally {
-      closeSync(fd);
-    }
+    const abs = join(dir, ...f.path.split("/"));
+    hooks.beforeOpen?.(abs);
+    const r = hashRegularFile(abs, budget, hooks);
+    if ("refused" in r) return { refused: r.refused };
+    if (posixHost && ((r.mode & 0o100) !== 0) !== (f.mode === "100755")) return { refused: "mode" };
+    budget -= r.bytes;
+    hashed.push({ path: f.path, mode: f.mode, sha256: r.sha256 });
   }
   return { hash: skillHash(hashed) };
 }
