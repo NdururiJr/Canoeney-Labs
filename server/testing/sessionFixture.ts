@@ -80,7 +80,7 @@ export function withSessions(t: { after(fn: () => void): void }, hq: Hq, cli: Pa
   const backend = new FakeBackend();
   (sessions as unknown as { backend: SessionBackend }).backend = backend;
   // No real sbx here: the policy is taken as set, and no sandbox exists yet.
-  Object.assign(sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
+  Object.assign(sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxState: async () => "no", whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   t.after(() => sessions.shutdown());
   const name = (id: string) => `hq-${hq.slug}-${id}`;
   const fileSecret = (id: string) => {

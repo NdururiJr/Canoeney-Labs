@@ -16,22 +16,32 @@ const OWNER: Actor = { kind: "human", id: "owner" };
 type Answer = "empty" | "some" | "unknown";
 
 /** Sessions on the fixture, with sbx's shared skills store answering `answer` and the sandbox existing or not. */
-async function setup(t: Parameters<typeof makeHq>[0], answer: Answer = "empty") {
+async function setup(t: Parameters<typeof makeHq>[0], answer: Answer = "empty", o: { realLs?: boolean } = {}) {
   const hq = await makeHq(t);
   const s = withSessions(t, hq);
-  const state = { exists: false, asked: 0, removed: [] as string[] };
+  const state = { exists: false, asked: 0, removed: [] as string[], ls: "ok" as "ok" | "fail" | "garbage" | "timeout" };
   s.sessions.sharedSkills = async () => {
     state.asked++;
     return answer;
   };
   const exec = async (_cmd: string, args: string[]): Promise<RunResult> => {
+    if (args[0] === "ls") {
+      if (state.ls === "fail") return { ok: false, code: 1, stdout: "", stderr: "daemon is not running" };
+      if (state.ls === "timeout") return { ok: false, code: null, stdout: "", stderr: "Command failed: timed out" };
+      if (state.ls === "garbage") return { ok: true, code: 0, stdout: "A new version of sbx is available.", stderr: "" };
+      return { ok: true, code: 0, stdout: JSON.stringify(state.exists ? [{ name: `hq-${hq.slug}-ana` }] : []), stderr: "" };
+    }
     if (args[0] === "rm") {
       state.removed.push(args[args.length - 1]);
       state.exists = false;
     }
     return { ok: true, code: 0, stdout: "", stderr: "" };
   };
-  Object.assign(s.sessions as unknown as Record<string, unknown>, { sandboxExists: async () => state.exists, sbxExec: exec });
+  Object.assign(s.sessions as unknown as Record<string, unknown>, { sbxExec: exec });
+  // Most tests say whether the sandbox exists; the `sbx ls` ones read it through the injected exec.
+  // The fixture stubs the sandbox check; deleting its stub brings back the real one, which runs the injected exec.
+  if (o.realLs) delete (s.sessions as unknown as Record<string, unknown>).sandboxState;
+  else Object.assign(s.sessions as unknown as Record<string, unknown>, { sandboxState: async () => (state.exists ? "yes" : "no") });
   const cid = companyAgentId(hq.slug, "ana");
   const refusals = () => hq.company.audit.query({ action: "workspace.refused" });
   return { hq, ...s, state, cid, refusals };
@@ -110,6 +120,56 @@ test("an old sandbox starts only while sbx's shared skills store is empty", asyn
     assert.equal(hq.company.secrets.hasLive(cid), false, "no live secret is left behind");
     assert.equal(JSON.stringify(hq.hub.cfg("ana")), files, "the agent's settings are unchanged");
   }
+});
+
+test("a start that cannot read sbx's sandbox list is refused, never taken for a new sandbox", async (t) => {
+  for (const ls of ["fail", "timeout", "garbage"] as const) {
+    for (const exists of [false, true]) {
+      const { hq, sessions, backend, state, cid, name, refusals } = await setup(t, "empty", { realLs: true });
+      state.ls = ls;
+      state.exists = exists; // whatever is really there, HQ cannot see it
+      await sessions.start("ana", OWNER);
+      const why = `${ls}, sandbox ${exists ? "exists" : "absent"}`;
+      const st = hq.hub.status("ana")!.session;
+      assert.equal(st.state, "failed", why);
+      const who = hq.hub.cfg("ana")!.name;
+      assert.equal(st.detail, `HQ couldn't read sbx's sandbox list, so it can't tell whether ${who}'s sandbox is new. Check that sbx is running, then start ${who} again.`, why);
+      assert.deepEqual(
+        refusals().map((r) => [r.actorKind, r.actorId, r.target, r.data.reason]),
+        [["human", "owner", cid, "shared-skills"]],
+        why,
+      );
+      assert.equal(backend.created.length, 0, why);
+      assert.equal(backend.live.has(name("ana")), false, why);
+      assert.equal(hq.company.skills.skillsOffAt(cid), null, `no record: ${why}`);
+      assert.equal(hq.company.secrets.hasLive(cid), false, `no live secret: ${why}`);
+      assert.equal(state.asked, 0, why);
+    }
+  }
+});
+
+test("a start that cannot read sbx's sandbox list is refused even when HQ holds a record", async (t) => {
+  // A record says HQ made a sandbox once; it does not say the sandbox is still there. If it was removed by
+  // hand, `sbx run` would create a new one with the shared store on.
+  const { hq, sessions, backend, state, cid, refusals } = await setup(t, "empty", { realLs: true });
+  hq.company.skills.recordSkillsOff(cid);
+  state.ls = "fail";
+  await sessions.start("ana", OWNER);
+  assert.equal(hq.hub.status("ana")?.session.state, "failed");
+  assert.deepEqual(refusals().map((r) => r.data.reason), ["shared-skills"]);
+  assert.equal(backend.created.length, 0);
+});
+
+test("a readable sbx sandbox list decides: listed means existing, not listed means new", async (t) => {
+  const absent = await setup(t, "some", { realLs: true });
+  await absent.sessions.start("ana", OWNER);
+  assert.equal(absent.hq.hub.status("ana")?.session.state, "running", absent.hq.hub.status("ana")?.session.detail ?? "");
+  assert.ok(absent.backend.created[0].spec.args.includes("--skills"));
+  const listed = await setup(t, "empty", { realLs: true });
+  listed.state.exists = true;
+  await listed.sessions.start("ana", OWNER);
+  assert.equal(listed.hq.hub.status("ana")?.session.state, "running", listed.hq.hub.status("ana")?.session.detail ?? "");
+  assert.ok(!listed.backend.created[0].spec.args.includes("--skills"));
 });
 
 test("an old sandbox that HQ made with skills off starts whatever the store holds", async (t) => {

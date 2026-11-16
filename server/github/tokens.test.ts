@@ -151,7 +151,7 @@ async function sandboxed(t: TestContext) {
   hq.hub.snap.setup = { ...hq.hub.snap.setup, sandboxReady: true };
   const ana = hq.hub.cfg("ana")!;
   ana.mode = "sandbox";
-  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
+  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxState: async () => "no", whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   const asked: string[] = [];
   let identity = true;
   s.sessions.github = {

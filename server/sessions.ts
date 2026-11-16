@@ -259,7 +259,11 @@ export class Sessions {
       else {
         // A sandbox HQ did not create with skills off starts only while sbx's shared store is empty (M0-F).
         // Checked before a secret is issued or a file is written, so a refusal leaves nothing behind.
-        const isNew = agent.mode === "sandbox" && !(await this.sandboxExists(name));
+        // Only a readable `sbx ls` decides new or existing: a record of an earlier sandbox does not say it is still there.
+        const found = agent.mode === "sandbox" ? await this.sandboxState(name) : "no";
+        if (found === "unknown")
+          throw new WorkspaceRefusedError("shared-skills", `HQ couldn't read sbx's sandbox list, so it can't tell whether ${agent.name}'s sandbox is new. Check that sbx is running, then start ${agent.name} again.`);
+        const isNew = agent.mode === "sandbox" && found === "no";
         if (agent.mode === "sandbox" && !isNew && this.company.skills.skillsOffAt(reg.companyId) === null) {
           const store = await this.sharedSkills();
           if (store === "unknown")
@@ -429,13 +433,19 @@ export class Sessions {
     this.onSandboxRemoved(id);
   }
 
-  /** True if sbx lists a sandbox with this name (running or stopped). */
-  private async sandboxExists(name: string): Promise<boolean> {
-    const r = await run("sbx", ["ls", "--json"], { timeoutMs: 10_000 });
+  /**
+   * Whether sbx lists a sandbox with this name (running or stopped). "unknown" when `sbx ls` failed,
+   * timed out or printed nothing HQ can read: that is not the same as "no" (M0-F, shared skills).
+   */
+  private async sandboxState(name: string): Promise<"yes" | "no" | "unknown"> {
+    const r = await this.sbxExec("sbx", ["ls", "--json"], { timeoutMs: 10_000 });
+    if (!r.ok) return "unknown";
     try {
-      return (sandboxList(r.stdout) ?? []).some((s) => s.name === name);
+      const list = sandboxList(r.stdout);
+      if (list === null) return "unknown";
+      return list.some((s) => s.name === name) ? "yes" : "no";
     } catch {
-      return false;
+      return "unknown";
     }
   }
 

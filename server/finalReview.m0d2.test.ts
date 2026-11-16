@@ -124,7 +124,7 @@ test("SR-D-06 [T-S3.10] a company-level agent does not start when sbx's keys can
     await sbx.refresh();
     return sbx.githubKeyFor(id);
   };
-  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
+  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxState: async () => "no", whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   await s.sessions.start("ana", OWNER);
   assert.equal(hq.hub.status("ana")?.session.state, "failed");
   assert.equal(s.backend.live.has(s.name("ana")), false);
