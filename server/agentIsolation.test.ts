@@ -11,7 +11,7 @@ import { MCP_CONFIG, ROLE_FILE } from "./agentFiles";
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
 import { newAgent } from "./store";
-import { ensureWorkspace } from "./workspace";
+import { ensureWorkspace, WorkspaceRefusedError } from "./workspace";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" });
 
@@ -31,7 +31,7 @@ const REPO_FILES: Record<string, string> = {
 };
 
 /** An upstream repo with REPO_FILES (plus `extra`), and HQ's homes in a temporary folder. */
-function setup(t: TestContext, extra: Record<string, string> = {}) {
+function setup(t: TestContext, extra: Record<string, string> = {}, base: Record<string, string> = REPO_FILES) {
   const root = mkdtempSync(join(tmpdir(), "hq isolation "));
   const saved = { HQ_HOME: process.env.HQ_HOME, HQ_COMPANY_HOME: process.env.HQ_COMPANY_HOME };
   process.env.HQ_HOME = join(root, "hq home");
@@ -43,7 +43,7 @@ function setup(t: TestContext, extra: Record<string, string> = {}) {
   const upstream = join(root, "upstream");
   mkdirSync(upstream);
   git(upstream, "init", "-q", "-b", "main");
-  for (const [rel, text] of Object.entries({ ...REPO_FILES, ...extra })) {
+  for (const [rel, text] of Object.entries({ ...base, ...extra })) {
     mkdirSync(dirname(join(upstream, rel)), { recursive: true });
     writeFileSync(join(upstream, rel), text);
   }
@@ -133,6 +133,45 @@ test("a chosen folder holding the repo's agent configuration is refused and left
   await assert.rejects(ensureWorkspace(builder(chosen), "demo", repo), /agent settings on disk.*Use an HQ-managed folder/s);
   assert.ok(existsSync(join(chosen, "CLAUDE.md")));
   assert.equal(existsSync(join(chosen, ".git", "info", "sparse-checkout")), false, "HQ does not make the owner's checkout sparse");
+});
+
+test("a CLAUDE.md written back into HQ's sparse clone is refused with the one fix that works: delete it", async (t) => {
+  const { repo } = setup(t);
+  const dir = await ensureWorkspace(builder(), "demo", repo);
+  writeFileSync(join(dir, "CLAUDE.md"), "notes an agent wrote (/init)");
+  // The path stays skip-worktree: git neither sees it nor can restore it.
+  assert.equal(git(dir, "status", "--porcelain"), "");
+  assert.throws(() => execFileSync("git", ["restore", "CLAUDE.md"], { cwd: dir, stdio: "pipe" }));
+  const abs = join(dir, "CLAUDE.md");
+  await assert.rejects(ensureWorkspace(builder(), "demo", repo), (err: Error) => {
+    assert.match(err.message, /agent settings on disk \(CLAUDE\.md\)/);
+    assert.ok(err.message.endsWith(`Delete ${abs}, then start again.`), err.message);
+    assert.equal(err.message.includes("Commit or discard"), false);
+    return true;
+  });
+  assert.equal(readFileSync(abs, "utf8"), "notes an agent wrote (/init)", "HQ deletes nothing itself");
+  // The fix named works.
+  rmSync(abs);
+  await ensureWorkspace(builder(), "demo", repo);
+});
+
+// The exemption for HQ's skill folders (M0-F) has two bounds: HQ's own clone only, and the exact case.
+const SKILL_ONLY = { "src/a.ts": "export const a = 1;\n", ".claude/skills/x/SKILL.md": "a skill the repo commits" };
+
+test("a chosen folder whose repo tracks only .claude/skills/x/SKILL.md is still refused", async (t) => {
+  const { root, repo } = setup(t, {}, SKILL_ONLY);
+  const chosen = join(root, "my checkout");
+  git(root, "clone", "-q", repo.root, chosen);
+  assert.ok(existsSync(join(chosen, ".claude", "skills", "x", "SKILL.md")));
+  await assert.rejects(ensureWorkspace(builder(chosen), "demo", repo), (err: unknown) => err instanceof WorkspaceRefusedError && err.reason === "agent-config");
+});
+
+test("a case variant of a skills folder in HQ's clone is not exempted", async (t) => {
+  const { repo } = setup(t, {}, { "src/a.ts": "export const a = 1;\n", ".Claude/skills/x/SKILL.md": "a skill the repo commits" });
+  const dir = await ensureWorkspace(builder(), "demo", repo);
+  mkdirSync(join(dir, ".Claude", "skills", "x"), { recursive: true });
+  writeFileSync(join(dir, ".Claude", "skills", "x", "SKILL.md"), "put back on disk");
+  await assert.rejects(ensureWorkspace(builder(), "demo", repo), (err: unknown) => err instanceof WorkspaceRefusedError && err.reason === "agent-config");
 });
 
 for (const hqFile of [".claude/settings.local.json", ".jsmhq-role.md"]) {

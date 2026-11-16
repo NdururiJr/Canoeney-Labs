@@ -50,9 +50,16 @@ export function effectiveSkills(o: { roleSet: string[]; grants: string[]; stack:
   return { install, missing };
 }
 
-/** `<base>/skills-removed/<agent id>/<UTC stamp>`: where one start's drift is moved. `agentId` may be `project/agent`. */
+/**
+ * The folder drift is moved into, under the project home (or the company home).
+ * Its `_` is outside the agent-id alphabet, so no agent's clone can be this folder
+ * or hold it (as `_company`).
+ */
+export const MOVES_DIRNAME = "_skills-removed";
+
+/** `<base>/_skills-removed/<agent id>/<UTC stamp>`: where one start's drift is moved. `agentId` may be `project/agent`. */
 export function skillMovesDir(base: string, agentId: string, now: Date): string {
-  return join(base, "skills-removed", ...agentId.split("/"), now.toISOString().replace(/[:.]/g, "-"));
+  return join(base, MOVES_DIRNAME, ...agentId.split("/"), now.toISOString().replace(/[:.]/g, "-"));
 }
 
 export interface SkillDrift {
@@ -75,9 +82,11 @@ export type InstallResult =
 /** The start refusal's text: the absolute path and the one fix (the workspace is a host folder, so recreating the sandbox does not clear it). */
 export function skillsBlockedText(agentName: string, workspace: string, blocked: { reason: "skills-link" | "skills-too-big"; path: string }): string {
   const rel = relative(workspace, blocked.path).split(sep).join("/");
-  return blocked.reason === "skills-link"
-    ? `${agentName}'s \`${rel}\` is a link, so HQ won't install skills through it. Delete that link (\`${blocked.path}\`), then start ${agentName} again.`
-    : `${agentName}'s \`${rel}\` is not one of its skills and holds more than 256 files or 2 MiB, so HQ won't move it aside. Move that folder out of the agent's folder (\`${blocked.path}\`), then start ${agentName} again.`;
+  if (blocked.reason === "skills-link") return `${agentName}'s \`${rel}\` is a link, so HQ won't install skills through it. Delete that link (\`${blocked.path}\`), then start ${agentName} again.`;
+  // An install folder itself with more entries than HQ will walk.
+  if ((Object.values(INSTALL_FOLDERS) as string[]).includes(rel))
+    return `${agentName}'s \`${rel}\` holds more than 256 entries, so HQ won't sort it. Move the extra folders out of the agent's folder (\`${blocked.path}\`), then start ${agentName} again.`;
+  return `${agentName}'s \`${rel}\` is not one of its skills and holds more than 256 files or 2 MiB, so HQ won't move it aside. Move that folder out of the agent's folder (\`${blocked.path}\`), then start ${agentName} again.`;
 }
 
 /** The start's activity line for skills it could not install, or null. */
@@ -166,14 +175,14 @@ function writeNew(abs: string, data: Buffer, mode: number): void {
 }
 
 /**
- * Makes the moves folder in HQ's home one level at a time from `skills-removed`
+ * Makes the moves folder in HQ's home one level at a time from `_skills-removed`
  * down, refusing a link on the way before anything is made through it.
  */
 function makeMovesDir(want: string): string {
   const parts: string[] = [];
   let top = want;
-  while (basename(top) !== "skills-removed") {
-    if (dirname(top) === top) throw new Error(`${want} is not under a skills-removed folder.`);
+  while (basename(top) !== MOVES_DIRNAME) {
+    if (dirname(top) === top) throw new Error(`${want} is not under a ${MOVES_DIRNAME} folder.`);
     parts.unshift(basename(top));
     top = dirname(top);
   }

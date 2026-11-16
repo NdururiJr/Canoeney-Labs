@@ -325,7 +325,8 @@ export class Sessions {
       }
     };
     for (const x of [...r.refused, ...missing.map((skill) => ({ skill, reason: "missing" as const }))]) audit("skill.refused", x);
-    if (r.drift.changed.length || r.drift.extra.length) audit("skill.drift", { ...r.drift });
+    // A pinned skill the agent deleted is drift too, so a first install is recorded as all missing.
+    if (r.drift.changed.length || r.drift.extra.length || r.drift.missing.length) audit("skill.drift", { ...r.drift });
     const line = skillsMissingText(name, r.refused, missing);
     if (line) hub.activity("session", id, line);
   }

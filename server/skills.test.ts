@@ -8,9 +8,10 @@ import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { companyAgentId, type Actor } from "./company/agents";
 import type { LockedSkill } from "./company/companySkills";
-import { projectHome } from "./paths";
+import { isInside } from "./company/home";
+import { managedWorkspace, projectHome } from "./paths";
 import type { RepoInfo } from "./repo";
-import { effectiveSkills, installSkills, overCap, skillMovesDir } from "./skills";
+import { effectiveSkills, installSkills, MOVES_DIRNAME, overCap, skillMovesDir, skillsBlockedText } from "./skills";
 import { lockHash, readCommit, writeStore } from "./skillVendor";
 import { newAgent } from "./store";
 import { makeHq, SEED_AUTHORITY, type Hq } from "./testing/hqFixture";
@@ -90,7 +91,7 @@ async function pinnedHq(t: TestContext) {
   hq.company.skills.writePin({ repo: "owner/skills", commit: sha, lockHash: lockHash("owner/skills", sha, lock), skills: lock }, SEED_AUTHORITY);
   const ana = hq.hub.cfg("ana")!;
   const work = ana.workspacePath!;
-  const moves = join(projectHome(hq.slug), "skills-removed", "ana");
+  const moves = join(projectHome(hq.slug), MOVES_DIRNAME, "ana");
   return { hq, ...s, storeDir, lock, work, moves };
 }
 
@@ -133,8 +134,9 @@ test("a skill refused at install is also taken out of the agent's folder", async
   assert.equal(existsSync(join(work, CLAUDE, TDD)), false, "the earlier copy is gone from the agent's folder");
   assert.deepEqual(refusedRows(hq).filter((r) => r.data.reason === "hash").map((r) => r.data.skill), [TDD]);
   const drift = driftRows(hq);
-  assert.equal(drift.length, 1);
-  const movedTo = drift[0].data.movedTo as string;
+  assert.equal(drift.length, 2, "the first install (all missing) and this start");
+  assert.deepEqual(drift[1].data.changed, [`${CLAUDE}/${TDD}`]);
+  const movedTo = drift[1].data.movedTo as string;
   assert.equal(readFileSync(join(movedTo, CLAUDE, TDD, "SKILL.md"), "utf8"), "# tdd, as pinned\n", "the earlier copy is in movedTo");
 });
 
@@ -165,7 +167,10 @@ test("SR-F-02 [T-S12.2] a session start fetches nothing", async (t) => {
 test("SR-F-04 [T-S12.3] an edited skill and an added one are both gone after the next start, with one drift row", async (t) => {
   const { hq, sessions, work, moves } = await pinnedHq(t);
   await sessions.start("ana", OWNER);
-  assert.equal(driftRows(hq).length, 0, "a first install is not drift");
+  const first = driftRows(hq);
+  assert.equal(first.length, 1, "a first install is recorded: every skill was missing");
+  assert.deepEqual([first[0].data.changed, first[0].data.extra, first[0].data.movedTo], [[], [], null]);
+  assert.deepEqual(first[0].data.missing, ["executing-plans", "systematic-debugging", TDD, "verification-before-completion"]);
   await sessions.stop("ana");
 
   writeFileSync(join(work, CLAUDE, TDD, "SKILL.md"), "# tdd, as pinned!\n"); // one byte
@@ -175,16 +180,40 @@ test("SR-F-04 [T-S12.3] an edited skill and an added one are both gone after the
   assert.equal(hq.hub.status("ana")?.session.state, "running");
   assert.equal(readFileSync(join(work, CLAUDE, TDD, "SKILL.md"), "utf8"), "# tdd, as pinned\n");
   assert.equal(existsSync(join(work, CLAUDE, "stray")), false);
-  const rows = driftRows(hq);
-  assert.equal(rows.length, 1);
+  const rows = driftRows(hq).slice(first.length);
+  assert.equal(rows.length, 1, "this start wrote one drift row");
   assert.equal(rows[0].actorId, "owner");
   assert.equal(rows[0].target, companyAgentId(hq.slug, "ana"));
+  assert.deepEqual(rows[0].data.missing, []);
   assert.deepEqual(rows[0].data.changed, [`${CLAUDE}/${TDD}`]);
   assert.deepEqual(rows[0].data.extra, [`${CLAUDE}/stray`]);
   const movedTo = rows[0].data.movedTo as string;
   assert.equal(dirname(movedTo), moves);
   assert.equal(readFileSync(join(movedTo, CLAUDE, TDD, "SKILL.md"), "utf8"), "# tdd, as pinned!\n");
   assert.equal(readFileSync(join(movedTo, CLAUDE, "stray", "SKILL.md"), "utf8"), "# a skill the agent added\n");
+});
+
+test("SR-F-04 [T-S12.3] a pinned skill the agent deleted is drift, and the next start puts it back", async (t) => {
+  const { hq, sessions, work } = await pinnedHq(t);
+  await sessions.start("ana", OWNER);
+  await sessions.stop("ana");
+  const before = driftRows(hq).length;
+  rmSync(join(work, CLAUDE, TDD), { recursive: true });
+  await sessions.start("ana", OWNER);
+  const rows = driftRows(hq).slice(before);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].actorId, "owner");
+  assert.deepEqual([rows[0].data.changed, rows[0].data.extra, rows[0].data.missing, rows[0].data.movedTo], [[], [], [TDD], null]);
+  assert.equal(readFileSync(join(work, CLAUDE, TDD, "SKILL.md"), "utf8"), "# tdd, as pinned\n");
+});
+
+test("a start with nothing changed writes no drift row", async (t) => {
+  const { hq, sessions } = await pinnedHq(t);
+  await sessions.start("ana", OWNER);
+  await sessions.stop("ana");
+  const before = driftRows(hq).length;
+  await sessions.start("ana", OWNER);
+  assert.equal(driftRows(hq).length, before);
 });
 
 test("SR-F-04 [T-S12.3] an extra skill in a chosen folder is moved to HQ's home, not deleted", async (t) => {
@@ -377,6 +406,42 @@ test("an extra folder over 256 files refuses the start, and nothing is moved or 
   }
 });
 
+test("an install folder of more than 256 entries refuses the start with its own text, and nothing is moved", async (t) => {
+  const d = scratch(t);
+  const { lock, storeDir } = await pinnedStore(d);
+  const work = join(d, "work");
+  for (let i = 0; i < 300; i++) put(work, `${CLAUDE}/e${i}/SKILL.md`, "x");
+  const r = installSkills({ workspace: work, cli: "claude", want: pick(lock, TDD), storeDir, movedDir: movesAt(d, 1) });
+  const folder = join(work, ".claude", "skills");
+  assert.deepEqual(r, { blocked: { reason: "skills-too-big", path: folder } });
+  assert.equal(readdirSync(folder).length, 300);
+  assert.equal(existsSync(join(d, "hq home", MOVES_DIRNAME)), false);
+  const blocked = { reason: "skills-too-big" as const, path: folder };
+  assert.equal(
+    skillsBlockedText("Ana", work, blocked),
+    "Ana's `.claude/skills` holds more than 256 entries, so HQ won't sort it. Move the extra folders out of the agent's folder (`" + folder + "`), then start Ana again.",
+  );
+  // An extra folder keeps the values table's text.
+  assert.ok(skillsBlockedText("Ana", work, { ...blocked, path: join(folder, "big") }).startsWith("Ana's `.claude/skills/big` is not one of its skills and holds more than 256 files or 2 MiB"));
+});
+
+test("no agent's clone can be the moves folder or hold it", (t) => {
+  const saved = process.env.HQ_HOME;
+  process.env.HQ_HOME = scratch(t);
+  t.after(() => (saved === undefined ? delete process.env.HQ_HOME : (process.env.HQ_HOME = saved)));
+  // `_` is outside the agent-id alphabet, as with `_company`.
+  assert.throws(() => managedWorkspace("demo", MOVES_DIRNAME));
+  assert.throws(() => companyAgentId("demo", MOVES_DIRNAME));
+  const moves = join(projectHome("demo"), MOVES_DIRNAME);
+  for (const id of ["ana", "skills-removed", "skills", "a", "0"]) {
+    const clone = managedWorkspace("demo", id);
+    assert.notEqual(clone, moves);
+    assert.equal(isInside(moves, clone), false, id);
+    assert.equal(isInside(clone, moves), false, id);
+  }
+  assert.equal(dirname(skillMovesDir(projectHome("demo"), "ana", new Date(0))), join(moves, "ana"));
+});
+
 test("the size walk stops as soon as a folder passes the cap", async (t) => {
   const d = scratch(t);
   const crowded = join(d, "crowded");
@@ -454,7 +519,7 @@ test("the moves keep the newest 5 per agent", async (t) => {
     assert.ok("installed" in r);
     assert.equal(r.drift.movedTo, movedDir);
   }
-  assert.deepEqual(readdirSync(join(base, "skills-removed", "ana")).sort(), stamps.slice(2));
+  assert.deepEqual(readdirSync(join(base, MOVES_DIRNAME, "ana")).sort(), stamps.slice(2));
   assert.equal(stamps[0], "2026-11-16T08-00-00-000Z");
 });
 
@@ -465,8 +530,8 @@ test("a link in HQ's moves folder is refused before anything is moved through it
   const base = join(d, "hq home");
   const elsewhere = join(d, "elsewhere");
   mkdirSync(elsewhere);
-  mkdirSync(join(base, "skills-removed"), { recursive: true });
-  if (!linkFolder(elsewhere, join(base, "skills-removed", "ana"))) return t.skip("this machine cannot create links");
+  mkdirSync(join(base, MOVES_DIRNAME), { recursive: true });
+  if (!linkFolder(elsewhere, join(base, MOVES_DIRNAME, "ana"))) return t.skip("this machine cannot create links");
   put(work, `${CLAUDE}/stray/SKILL.md`, "# stray\n");
   const movedDir = skillMovesDir(base, "ana", new Date(Date.UTC(2026, 10, 16)));
   assert.throws(() => installSkills({ workspace: work, cli: "claude", want: pick(lock, TDD), storeDir, movedDir }), /not a plain folder/);

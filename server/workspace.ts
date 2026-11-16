@@ -1,6 +1,7 @@
 // Agent folders: an HQ-managed clone per agent, or a folder the user chose.
 
 import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentConfig } from "../src/data/types";
 import { companyHome, hqHome, isInside } from "./company/home";
 import { hqSourceReason } from "./hqSource";
@@ -87,7 +88,9 @@ async function checkFolder(dir: string, chosen: boolean): Promise<void> {
   // HQ's own clone holds HQ's skill copies at paths the repo may track; a chosen folder is the owner's checkout.
   const config = await agentConfigOnDisk(dir, { hqSkills: !chosen });
   if (config.length) {
-    const end = chosen ? "Use an HQ-managed folder for this agent." : "Commit or discard the change in " + dir + ", then start again.";
+    // In HQ's clone the file stays skip-worktree (sparse.expectFilesOutsideOfPatterns), so git
+    // cannot see, restore or commit it: deleting it is the one fix.
+    const end = chosen ? "Use an HQ-managed folder for this agent." : `Delete ${join(dir, ...config[0].split("/"))}, then start again.`;
     throw new WorkspaceRefusedError("agent-config", `${dir} has the repo's agent settings on disk (${config[0]}). HQ keeps them out of agent folders. ${end}`);
   }
   const own = await trackedHqFiles(dir);
