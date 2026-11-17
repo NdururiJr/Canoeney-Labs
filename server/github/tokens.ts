@@ -101,18 +101,23 @@ export class AgentTokens {
     return this.lane(agentId, () => this.deliverNow(agentId, companyId, repo));
   }
 
-  private async lookup(companyId: string, repo: string) {
+  /**
+   * `strict` (a refresh): a lookup GitHub could not answer throws, so the working key stays and
+   * the refresh is retried. A first delivery keeps the conservative reading: no installation, no token.
+   */
+  private async lookup(companyId: string, repo: string, strict: boolean) {
     try {
       return await this.o.apps.installation(companyId, repo);
     } catch (err) {
-      if (err instanceof InstallationLookupError) return null;
-      throw err;
+      if (!(err instanceof InstallationLookupError)) throw err;
+      if (strict) throw new TokenError("GitHub did not say whether the App is installed.");
+      return null;
     }
   }
 
-  private async deliverNow(agentId: string, companyId: string, repo: string | null): Promise<"issued" | "no-identity"> {
-    // A lookup GitHub could not answer gives no installation, so no token is minted (as a non-200 always did).
-    const inst = repo && this.o.apps.has(companyId) ? await this.lookup(companyId, repo) : null;
+  private async deliverNow(agentId: string, companyId: string, repo: string | null, refreshing = false): Promise<"issued" | "no-identity"> {
+    // A 404 is an App that is really not installed: no token, and the key goes. An answer HQ could not read is not a 404.
+    const inst = repo && this.o.apps.has(companyId) ? await this.lookup(companyId, repo, refreshing) : null;
     if (!repo || !inst) {
       await this.o.sbx.removeKey(agentId, "github").catch(() => {});
       return "no-identity";
@@ -179,7 +184,7 @@ export class AgentTokens {
       const h = this.held.get(agentId);
       if (!h) return; // revoked meanwhile
       try {
-        await this.deliverNow(agentId, h.companyId, h.repo);
+        await this.deliverNow(agentId, h.companyId, h.repo, true);
       } catch {
         // The old token stays until it expires; the next start issues a new one.
         if (!retried) h.cancel = this.schedule(() => void this.refresh(agentId, true), MIN_REFRESH_MS);

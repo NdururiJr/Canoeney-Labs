@@ -15,7 +15,7 @@ const OWNER = { kind: "human", id: "owner" } as const;
 /** A fake GitHub that issues numbered tokens for an hour, and a timer queue the test drives. */
 function harness(o: { identity?: boolean; lookup?: () => Promise<never>; expiresAt?: (now: number) => string } = {}) {
   const clock = new FakeClock(NOW);
-  const state = { failIssue: false };
+  const state = { failIssue: false, lookup: null as null | "fail" | "404" };
   const calls: { method: string; path: string; body?: unknown; token?: string; jwt?: string }[] = [];
   let n = 0;
   const api: GitHubApi = {
@@ -32,7 +32,7 @@ function harness(o: { identity?: boolean; lookup?: () => Promise<never>; expires
   };
   const apps = {
     has: () => o.identity !== false,
-    installation: async () => (o.lookup ? o.lookup() : o.identity === false ? null : { id: 77, selection: "selected" as const }),
+    installation: async () => (state.lookup === "fail" ? Promise.reject(new InstallationLookupError(500)) : state.lookup === "404" ? null : o.lookup ? o.lookup() : o.identity === false ? null : { id: 77, selection: "selected" as const }),
     jwtFor: () => "jwt-for-the-app",
   };
   const keys: string[] = [];
@@ -61,7 +61,7 @@ function harness(o: { identity?: boolean; lookup?: () => Promise<never>; expires
   const tokens = new AgentTokens({ apps, api, sbx, clock, audit, schedule, activity: (id, text) => void said.push(`${id}: ${text}`), companyIdOf: (id) => `site/${id}` });
   const issued = () => n;
   const attempts = () => calls.filter((c) => c.method === "POST").length;
-  return { tokens, calls, keys, rows, advance, issued, attempts, clock, said, state };
+  return { tokens, calls, keys, rows, advance, issued, attempts, clock, said, state, timers };
 }
 
 test("SR-E-04 [T-S3.10] a sandboxed agent gets a one-repo token as its own github key", async () => {
@@ -173,10 +173,49 @@ test("revoking while a refresh retry is waiting cancels it", async () => {
   await h.tokens.deliver("ana", "site/ana", "acme/site");
   h.state.failIssue = true;
   await h.advance(HOUR - 10 * 60_000);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 1, "the retry is waiting");
   await h.tokens.revoke("ana", "stopped", OWNER);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 0, "the revoke cleared the retry timer itself");
   h.state.failIssue = false;
   await h.advance(HOUR);
   assert.equal(h.issued(), 1, "no token after the revoke");
+  assert.deepEqual(h.said, []);
+});
+
+test("a refresh whose App lookup fails keeps the key, retries after 60 s, then says so", async () => {
+  const h = harness();
+  await h.tokens.deliver("ana", "site/ana", "acme/site");
+  h.state.lookup = "fail"; // GitHub answers 500 at refresh time
+  await h.advance(HOUR - 10 * 60_000); // the refresh is due
+  assert.equal(h.keys.some((k) => k.startsWith("rm ")), false, "the working key is not removed on a lookup that could not tell");
+  assert.deepEqual(h.said, []);
+  await h.advance(59_999);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 1, "a retry is scheduled, not lost");
+  await h.advance(1); // the retry fails too
+  assert.equal(h.keys.some((k) => k.startsWith("rm ")), false);
+  const at = new Date(Date.parse(NOW) + HOUR);
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  assert.deepEqual(h.said, [`ana: ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 0, "no third try");
+  // A lookup that recovers at the retry refreshes the token and says nothing.
+  const ok = harness();
+  await ok.tokens.deliver("ana", "site/ana", "acme/site");
+  ok.state.lookup = "fail";
+  await ok.advance(HOUR - 10 * 60_000);
+  ok.state.lookup = null;
+  await ok.advance(60_000);
+  assert.equal(ok.issued(), 2);
+  assert.deepEqual(ok.said, []);
+  assert.equal(ok.keys.some((k) => k.startsWith("rm ")), false);
+});
+
+test("a refresh that finds the App really uninstalled (404) still removes the key", async () => {
+  const h = harness();
+  await h.tokens.deliver("ana", "site/ana", "acme/site");
+  h.state.lookup = "404";
+  await h.advance(HOUR - 10 * 60_000);
+  assert.equal(h.keys.at(-1), "rm ana github");
+  assert.equal(h.issued(), 1, "no new token");
   assert.deepEqual(h.said, []);
 });
 
