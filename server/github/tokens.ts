@@ -74,6 +74,8 @@ export class AgentTokens {
       activity?: (agentId: string, text: string) => void;
       /** The audit target of a revoke for an agent that holds nothing: the agent's company id. */
       companyIdOf?: (agentId: string) => string;
+      /** The agent's display name, for the activity feed. */
+      nameOf?: (agentId: string) => string;
     },
   ) {
     this.schedule = o.schedule ?? realSchedule;
@@ -188,7 +190,7 @@ export class AgentTokens {
       } catch {
         // The old token stays until it expires; the next start issues a new one.
         if (!retried) h.cancel = this.schedule(() => void this.refresh(agentId, true), MIN_REFRESH_MS);
-        else this.o.activity?.(agentId, `${agentId}'s GitHub token could not be refreshed; it stops working at ${clockTime(h.expiresAt)}.`);
+        else this.o.activity?.(agentId, `${this.o.nameOf?.(agentId) ?? agentId}'s GitHub token could not be refreshed; it stops working at ${clockTime(h.expiresAt)}.`);
       }
     });
   }

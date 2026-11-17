@@ -58,7 +58,7 @@ function harness(o: { identity?: boolean; lookup?: () => Promise<never>; expires
   const rows: { action: string; actorId: string; data: Record<string, unknown> }[] = [];
   const audit = { append: (r: { action: string; actorId: string; data?: Record<string, unknown> }) => void rows.push({ action: r.action, actorId: r.actorId, data: r.data ?? {} }) } as never;
   const said: string[] = [];
-  const tokens = new AgentTokens({ apps, api, sbx, clock, audit, schedule, activity: (id, text) => void said.push(`${id}: ${text}`), companyIdOf: (id) => `site/${id}` });
+  const tokens = new AgentTokens({ apps, api, sbx, clock, audit, schedule, activity: (id, text) => void said.push(`${id}: ${text}`), companyIdOf: (id) => `site/${id}`, nameOf: (id) => (id === "ana" ? "Ana" : id) });
   const issued = () => n;
   const attempts = () => calls.filter((c) => c.method === "POST").length;
   return { tokens, calls, keys, rows, advance, issued, attempts, clock, said, state, timers };
@@ -154,7 +154,7 @@ test("a failed refresh retries once, then says so", async () => {
   assert.equal(h.attempts(), 3);
   const at = new Date(Date.parse(NOW) + HOUR);
   const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-  assert.deepEqual(h.said, [`ana: ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
+  assert.deepEqual(h.said, [`ana: Ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
   await h.advance(2 * HOUR);
   assert.equal(h.attempts(), 3, "no third try");
   // A retry that works says nothing, and the new token is scheduled as usual.
@@ -195,7 +195,7 @@ test("a refresh whose App lookup fails keeps the key, retries after 60 s, then s
   assert.equal(h.keys.some((k) => k.startsWith("rm ")), false);
   const at = new Date(Date.parse(NOW) + HOUR);
   const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-  assert.deepEqual(h.said, [`ana: ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
+  assert.deepEqual(h.said, [`ana: Ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
   assert.equal(h.timers.filter((t) => !t.cancelled).length, 0, "no third try");
   // A lookup that recovers at the retry refreshes the token and says nothing.
   const ok = harness();

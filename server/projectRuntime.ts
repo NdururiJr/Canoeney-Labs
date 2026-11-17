@@ -106,6 +106,7 @@ export class ProjectRuntime {
       audit: company.audit,
       activity: (id, text) => hub.activity("config", id, text),
       companyIdOf: (id) => companyAgentId(slug, id),
+      nameOf: (id) => hub.cfg(id)?.name ?? id,
     });
     sessions.github = {
       deliver: (id) => tokens.deliver(id, companyAgentId(slug, id), repo.github),
