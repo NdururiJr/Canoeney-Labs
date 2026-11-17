@@ -53,7 +53,7 @@ It has no `workflows`, `administration`, `secrets`, `actions` or `members` permi
 Branch protection and rulesets on each managed repo enforce the limits; the App's own permissions do not:
 - only the repository admin updates `main` (`hq-main`);
 - each `<agent>/**` branch is writable only by that agent's App (`hq-agent-<id>`);
-- no other branch may be created (`hq-unclaimed`).
+- no other branch may be created, updated or deleted (`hq-unclaimed`).
 
 HQ checks these daily (M0-E Task 4).
 

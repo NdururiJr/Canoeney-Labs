@@ -62,7 +62,7 @@ test("SR-E-05 [T-S3.1] with a global github key present, the startup check repor
   const s = withSessions(t, hq);
   hq.hub.snap.setup = { ...hq.hub.snap.setup, sandboxReady: true };
   hq.hub.cfg("ana")!.mode = "sandbox";
-  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
+  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxState: async () => "no", whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   const { sbx } = fakeSbx(hq, [{ scope: "global", name: "github" }]);
   s.sessions.globalGithubKey = async () => {
     await sbx.refresh();

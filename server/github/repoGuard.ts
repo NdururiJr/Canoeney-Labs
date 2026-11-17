@@ -20,8 +20,32 @@ export interface Finding {
 export interface GuardAgent {
   id: string;
   appId: number;
-  installed: boolean;
+  /** "unknown": GitHub could not say. That is a finding and never a pass, and no ruleset is written meanwhile (PR #12 review). */
+  installed: boolean | "unknown";
   selection: "selected" | "all" | null;
+}
+
+/**
+ * The agents with an App on this repo, as the guard reads them. A lookup that fails is
+ * "unknown", never "not installed": the owner's Apply would otherwise write rules from a guess.
+ */
+export async function readGuardAgents(o: {
+  agents: { agentId: string; companyId: string }[];
+  repo: string;
+  apps: { appId(companyId: string): number | null; installation(companyId: string, repo: string): Promise<{ selection: "selected" | "all" } | null> };
+}): Promise<GuardAgent[]> {
+  const out: GuardAgent[] = [];
+  for (const a of o.agents) {
+    const appId = o.apps.appId(a.companyId);
+    if (appId === null) continue;
+    try {
+      const inst = await o.apps.installation(a.companyId, o.repo);
+      out.push({ id: a.agentId, appId, installed: !!inst, selection: inst?.selection ?? null });
+    } catch {
+      out.push({ id: a.agentId, appId, installed: "unknown", selection: null });
+    }
+  }
+  return out;
 }
 
 /** The paths D1 makes owner-reviewed, each on its own CODEOWNERS line. */
@@ -43,7 +67,7 @@ const rules = (...types: string[]) => types.map((type) => ({ type }));
 
 /** The rulesets HQ wants: `main`, one per installed agent App, and every other branch. */
 export function desiredRulesets(agents: GuardAgent[]): Ruleset[] {
-  const installed = agents.filter((a) => a.installed);
+  const installed = agents.filter((a) => a.installed === true);
   const branch = (include: string[], exclude: string[]) => ({ ref_name: { include, exclude } });
   return [
     { name: "hq-main", target: "branch", enforcement: "active", conditions: branch(["refs/heads/main"], []), rules: rules("update", "deletion", "non_fast_forward"), bypass_actors: [{ ...ADMIN }] },
@@ -63,7 +87,8 @@ export function desiredRulesets(agents: GuardAgent[]): Ruleset[] {
       target: "branch",
       enforcement: "active",
       conditions: branch(["~ALL"], ["refs/heads/main", ...installed.map((a) => `refs/heads/${a.id}/**`)]),
-      rules: rules("creation", "update"),
+      // Deletion too: an agent's contents:write could otherwise delete a branch that is nobody's.
+      rules: rules("creation", "update", "deletion"),
       bypass_actors: [{ ...ADMIN }],
     },
     // Tags: an agent App's contents:write could otherwise create, move or delete them, release tags included.
@@ -138,7 +163,13 @@ const sameBypass = (a: Partial<Ruleset>, b: Ruleset) =>
 
 const decode = (j: { content?: string } | null) => (j?.content ? Buffer.from(j.content, "base64").toString("utf8") : null);
 
-export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardAgent[]; spendingConfirmed: boolean }): Promise<Finding[]> {
+/** What a check found, and whether GitHub says the repo is private (null: HQ could not read it). */
+export interface RepoCheck {
+  findings: Finding[];
+  private: boolean | null;
+}
+
+export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardAgent[]; spendingConfirmed: boolean }): Promise<RepoCheck> {
   const out: Finding[] = [];
   const add = (name: string, detail: string, fixable: boolean) => out.push({ name, detail, fixable });
   const get = <T>(path: string) => gh.request<T>("GET", `/repos/${repo}${path}`);
@@ -178,7 +209,8 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
   if (list !== undefined && !Array.isArray(list)) failed("rulesets", "the rulesets", 200);
   else if (Array.isArray(list)) {
     const byName = new Map<string, Partial<Ruleset>>();
-    let complete = true;
+    // Which rulesets HQ wants depends on which Apps are installed: with one unknown, nothing is compared.
+    let complete = !o.agents.some((a) => a.installed === "unknown");
     for (const r of list.filter((x) => typeof x?.name === "string" && x.name.startsWith("hq-"))) {
       const one = await read<Partial<Ruleset>>(`ruleset:${r.name}`, `the ${r.name} rule`, `/rulesets/${r.id}`);
       if (one) byName.set(r.name, one);
@@ -199,7 +231,8 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
     }
   }
   for (const a of o.agents) {
-    if (!a.installed) add(`app-not-installed:${a.id}`, `${a.id}'s GitHub App is not installed on ${repo}.`, false);
+    if (a.installed === "unknown") add(`read-failed:app:${a.id}`, `HQ couldn't tell whether ${a.id}'s GitHub App is installed on ${repo}. Check again.`, false);
+    else if (!a.installed) add(`app-not-installed:${a.id}`, `${a.id}'s GitHub App is not installed on ${repo}.`, false);
     else if (a.selection === "all") add(`app-all-repositories:${a.id}`, `${a.id}'s GitHub App is installed on all your repositories. Reinstall it on ${repo} only.`, false);
   }
 
@@ -255,7 +288,7 @@ export async function checkRepo(gh: GitHubApi, repo: string, o: { agents: GuardA
   }
 
   if (info?.private && !o.spendingConfirmed) add("spending-limit-unconfirmed", "This private repo's Actions spending limit is not confirmed. Set it on GitHub, then confirm it in HQ.", false);
-  return out;
+  return { findings: out, private: typeof info?.private === "boolean" ? info.private : null };
 }
 
 /** Sets every fixable setting, then reads the repo again. CODEOWNERS and workflow files are never written. */
@@ -273,7 +306,8 @@ export async function applyRepoGuard(gh: GitHubApi, repo: string, o: { agents: G
   await r("PUT", "/branches/main/protection", protectionBody(now.status === 200 ? (now.json as ProtectionNow) : null), "main-protection", "main's protection");
   const listed = (await r("GET", "/rulesets")).json;
   const existing = new Map((Array.isArray(listed) ? (listed as { id: number; name: string }[]) : []).map((x) => [x.name, x.id]));
-  for (const want of desiredRulesets(o.agents)) {
+  // With an App's installation unknown, HQ cannot say which rulesets it wants: it writes none.
+  for (const want of o.agents.some((a) => a.installed === "unknown") ? [] : desiredRulesets(o.agents)) {
     const id = existing.get(want.name);
     if (id !== undefined) await r("PUT", `/rulesets/${id}`, want, `ruleset:${want.name}`, `the ${want.name} rule`);
     else await r("POST", "/rulesets", want, `ruleset:${want.name}`, `the ${want.name} rule`);
@@ -285,7 +319,7 @@ export async function applyRepoGuard(gh: GitHubApi, repo: string, o: { agents: G
     await r("PUT", "/actions/permissions/selected-actions", { github_owned_allowed: true, verified_allowed: false, patterns_allowed: [] }, "selected-actions", "the allowed actions");
   }
   await r("PUT", "/actions/permissions/workflow", { default_workflow_permissions: "read", can_approve_pull_request_reviews: false }, "workflow-token", "the workflow token");
-  return [...refused, ...(await checkRepo(gh, repo, o))];
+  return [...refused, ...(await checkRepo(gh, repo, o)).findings];
 }
 
 const HQ: Actor = { kind: "hq", id: "hq" };
@@ -301,16 +335,16 @@ export class RepoWatch {
       agents: () => Promise<GuardAgent[]>;
       spendingConfirmed: () => boolean;
       audit: AuditSink;
-      /** Every check's full result, for the dashboard. */
-      report: (findings: Finding[]) => void;
+      /** Every check's full result, for the dashboard. `private` is GitHub's own answer. */
+      report: (findings: Finding[], repo: { private: boolean | null }) => void;
       /** One line per new finding. */
       notify: (text: string) => void;
     },
   ) {}
 
   async check(): Promise<Finding[]> {
-    const findings = await checkRepo(this.o.api, this.o.repo, { agents: await this.o.agents(), spendingConfirmed: this.o.spendingConfirmed() });
-    this.o.report(findings);
+    const { findings, private: isPrivate } = await checkRepo(this.o.api, this.o.repo, { agents: await this.o.agents(), spendingConfirmed: this.o.spendingConfirmed() });
+    this.o.report(findings, { private: isPrivate });
     const fresh = findings.filter((f) => !this.seen.has(f.name));
     this.seen = new Set(findings.map((f) => f.name));
     if (fresh.length) {

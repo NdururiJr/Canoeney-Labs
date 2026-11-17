@@ -5,14 +5,15 @@
 
 import { SERVICE_KEYS, type AgentCli, type AgentConfig, type AgentPatch, type ReviewTool, type WelcomeInput, type NewMcpServer, type Board, type NewAgentInput, type ProjectConfig, type RemoveAgentOptions, type SandboxSettings, type SetupCheckId, type WorkflowPatch } from "../src/data/types";
 import { LEAD_NAME, OFFICE_NAME_MAX } from "../src/data/names";
-import { stackSkills } from "../src/data/stack";
 import { cleanStack } from "./stackClean";
 import { resolveAccess } from "./access";
-import { ensureSkillCache } from "./skills";
 import { agentPalette } from "../src/theme/tokens";
 import type { Company } from "./company";
 import { companyAgentId } from "./company/agents";
 import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
+import { SKILL_NAME, SKILLS_REPO, SkillPinRefused } from "./company/companySkills";
+import { ROLE_IDS, type RoleId } from "./company/types";
+import { COMPANY_ROLES } from "./companyWorkspace";
 import { hasCredentialShape } from "./company/audit";
 import { ProjectRefusedError } from "./hqSource";
 import { GitHubAppRefusedError } from "./github/apps";
@@ -57,6 +58,7 @@ export const authorityOf = (ctx: CommandCtx): Authority => ({ via: ctx.pin === t
 /** A PIN rule from the store's own classifier, so the dashboard and the store cannot disagree (SR-D-03). */
 const pinIf = (changes: (args: unknown[]) => ConfigChange[]) => (args: unknown[]) => changes(args).some(relaxes);
 /** The first argument as an agent id or name, for the audit row. */
+const COMPANY_AGENT_NO_GITHUB = "Company-level agents don't reach GitHub (SR-D-06).";
 const first = (a: unknown[]) => (typeof a[0] === "string" ? a[0] : null);
 /** A proxy as host:port only: the user-info part can hold a password (SR-C-17). */
 const proxyHost = (u: string) => {
@@ -340,11 +342,8 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     updateStack: { role: "owner", pin: pinIf((a) => [{ kind: "project", field: "stack", before: hub.snap.config.stack ?? null, after: cleanStack(a[0]) }]), run: (ctx, raw) => {
       const stack = cleanStack(raw);
       company.settings.updateProject(hub.slug, { stack }, authorityOf(ctx));
+      // The stack's skills install at each agent's next start, once they are pinned: nothing is fetched (SR-F-02).
       hub.configChanged();
-      if (!stack) return;
-      // Fetch the skills now so the next Start doesn't wait for them.
-      const specs = stackSkills(stack);
-      if (specs.length) void ensureSkillCache(hub.slug, specs).catch((e) => hub.activity("config", null, `Couldn't fetch agent skills: ${String(e instanceof Error ? e.message : e).slice(0, 160)}`));
     } },
 
     resolveAccess: { role: "owner", pin: pinIf((a) => (a[1] === "agent" || a[1] === "everyone" ? [{ kind: "grant", permission: "network-allow", value: "*" }] : [])), target: first, run: (ctx, id, decision) => {
@@ -387,10 +386,6 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
         const cto = company.settings.addAgent(hub.slug, lead, "cto", by);
         for (const w of workers) company.settings.addAgent(hub.slug, w, "builder", by, cto.companyId);
       });
-      if (stack) {
-        const specs = stackSkills(stack);
-        if (specs.length) void ensureSkillCache(hub.slug, specs).catch(() => {}); // retried on Start
-      }
       hub.snap.welcome = false;
       delete hub.snap.importable;
       delete hub.snap.importPreview;
@@ -493,11 +488,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     createGithubIdentity: { role: "owner", pin: true, localOnly: true, returns: true, target: first, run: (ctx, id) => {
       const agentId = str(id, 80);
       if (!hub.cfg(agentId)) throw new Error("unknown agent");
+      // A company-level agent never reaches GitHub, so it gets no App to reach it with (SR-D-06).
+      const role = company.agents.get(hub.slug, agentId)?.role;
+      if (role && COMPANY_ROLES.includes(role)) throw new Error(COMPANY_AGENT_NO_GITHUB);
       const repo = hub.repo.github;
       if (!repo) throw new Error("This project has no GitHub repo.");
       if (!ctx.origin) throw new Error("no origin");
       return company.githubApps.start(cid(agentId), repo, ctx.actor.id, ctx.sessionId, ctx.origin);
-    }, explain: (err) => (err instanceof Error && /no GitHub repo/.test(err.message) ? err.message : null) },
+    }, explain: (err) => (err instanceof Error && (/no GitHub repo/.test(err.message) || err.message === COMPANY_AGENT_NO_GITHUB) ? err.message : null) },
 
     /** GitHub sent the browser back with a code: finish the App, then the page opens its install page. */
     completeGithubIdentity: { role: "owner", localOnly: true, returns: true, run: async (ctx, state, code) => {
@@ -539,5 +537,52 @@ export function makeCompanyCommands(projects: Projects): Record<string, CommandS
       // HQ's own refusal texts only; any other failure stays a bare "failed".
       explain: (err) => (err instanceof ProjectRefusedError || err instanceof AuthorityError ? err.message : null),
     },
+
+    // The company's skills (M0-F). The owner previews a commit of the skills repo, then confirms it with the PIN.
+    /** What pinning this commit would install, change and remove; changes nothing. */
+    previewSkillsPin: {
+      role: "owner",
+      target: () => null,
+      returns: true,
+      run: (ctx, repo, commit) => projects.company.skills.preview(skillsRepoArg(repo), str(commit, 80).trim(), authorityOf(ctx)),
+      explain: skillsExplain,
+    },
+    /** The confirm of a preview: it carries back the preview's lock hash, so only what the owner saw is pinned (PIN). */
+    pinSkills: {
+      role: "owner",
+      pin: true,
+      target: () => null,
+      run: async (ctx, repo, commit, lockHash) =>
+        void (await projects.company.skills.pin(skillsRepoArg(repo), str(commit, 80).trim(), str(lockHash, 100).trim(), authorityOf(ctx))),
+      explain: skillsExplain,
+    },
+    /** Makes a role's skill set equal `names` (PIN). */
+    setRoleSkills: {
+      role: "owner",
+      pin: true,
+      target: () => null,
+      returns: true,
+      run: (ctx, role, names) => {
+        const id = str(role, 40);
+        if (!(ROLE_IDS as readonly string[]).includes(id)) throw new SkillsInputError(`"${id}" is not a role.`);
+        if (!Array.isArray(names) || names.length > 200) throw new SkillsInputError("A role's skills are a list of skill names.");
+        const list = names.map((n) => str(n, 100));
+        for (const n of list) if (!SKILL_NAME.test(n)) throw new SkillsInputError(`"${n}" is not a skill name (lower-case letters, digits and -, up to 63 characters).`);
+        return projects.company.skills.setRoleSkills(id as RoleId, list, authorityOf(ctx));
+      },
+      explain: skillsExplain,
+    },
   };
 }
+
+/** HQ's own refusal text for a skills command's bad input. */
+class SkillsInputError extends Error {}
+
+function skillsRepoArg(repo: unknown): string {
+  const r = str(repo, 200).trim();
+  if (!SKILLS_REPO.test(r)) throw new SkillsInputError(`"${r}" is not a GitHub repo name. Write it as owner/name.`);
+  return r;
+}
+
+const skillsExplain = (err: unknown): string | null =>
+  err instanceof SkillPinRefused || err instanceof SkillsInputError || err instanceof AuthorityError ? err.message : null;

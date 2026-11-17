@@ -24,7 +24,7 @@ import { companyAgentId } from "./company/agents";
 import { AgentTokens, revokeOnStatus } from "./github/tokens";
 import { ghCliApi } from "./github/api";
 import { guardCommands, spendingConfirmed } from "./github/guardCommands";
-import { applyRepoGuard, RepoWatch, type GuardAgent } from "./github/repoGuard";
+import { applyRepoGuard, readGuardAgents, RepoWatch, type GuardAgent } from "./github/repoGuard";
 import { run } from "./lib/exec";
 import { runSetupChecks } from "./setup";
 
@@ -84,6 +84,9 @@ export class ProjectRuntime {
     for (const c of setup.checks) log.info(`  ${c.status === "ok" ? "✓" : c.status === "warning" ? "!" : "✗"} ${c.label}: ${c.detail}`);
 
     const hub = new Hub(repo, slug, configSource, company.plans.load(slug), setup);
+    // The skills repo's last check (company-wide), so a project opened later still shows it.
+    hub.snap.skillsGuard = company.skillsWatch.state();
+    hub.snap.skills = company.skills.view();
     // Until the owner completes the welcome or confirms an import, nothing is read from the repo.
     offerImport(hub, company);
     refreshProjectNotes(hub, company);
@@ -95,7 +98,16 @@ export class ProjectRuntime {
     const sbx = new Sbx(hub, company);
     sessions.envFileFor = (id) => (existsSync(sbx.envFile(id)) ? sbx.envFile(id) : null);
     // Each agent's own one-hour GitHub token (M0-E, SR-E-04, SR-E-07).
-    const tokens = new AgentTokens({ apps: company.githubApps, api: company.githubApi, sbx, clock: company.clock, audit: company.audit });
+    const tokens = new AgentTokens({
+      apps: company.githubApps,
+      api: company.githubApi,
+      sbx,
+      clock: company.clock,
+      audit: company.audit,
+      activity: (id, text) => hub.activity("config", id, text),
+      companyIdOf: (id) => companyAgentId(slug, id),
+      nameOf: (id) => hub.cfg(id)?.name ?? id,
+    });
     sessions.github = {
       deliver: (id) => tokens.deliver(id, companyAgentId(slug, id), repo.github),
       revoke: (id, reason, by) => tokens.revoke(id, reason, by),
@@ -110,6 +122,8 @@ export class ProjectRuntime {
       await sbx.refresh();
       return sbx.githubKeyFor(id);
     };
+    // Read fresh at the start of an older sandbox: a skill added a moment ago must count (M0-F).
+    sessions.sharedSkills = () => sbx.sharedSkills();
     const mcp = new SbxMcp(hub, (id, file, args, onExit) => sessions.runTerminal(id, file, args, onExit), undefined, company);
     sessions.onSandboxReady = (id) => {
       void sbx.syncRules(id);
@@ -134,16 +148,8 @@ export class ProjectRuntime {
     planner.actions = new ActionItems(hub, planner);
     // The repo's GitHub protection, read with the owner's own gh login (M0-E Task 4).
     const ownerGh = ghCliApi(run);
-    const guardAgents = async (): Promise<GuardAgent[]> => {
-      const out: GuardAgent[] = [];
-      for (const a of company.agents.list(slug).filter((x) => x.status !== "retired")) {
-        const appId = company.githubApps.appId(a.companyId);
-        if (appId === null || !repo.github) continue;
-        const inst = await company.githubApps.installation(a.companyId, repo.github).catch(() => null);
-        out.push({ id: a.agentId, appId, installed: !!inst, selection: inst?.selection ?? null });
-      }
-      return out;
-    };
+    const guardAgents = (): Promise<GuardAgent[]> =>
+      repo.github ? readGuardAgents({ agents: company.agents.list(slug).filter((x) => x.status !== "retired"), repo: repo.github, apps: company.githubApps }) : Promise.resolve([]);
     const watch = repo.github
       ? new RepoWatch({
           api: ownerGh,
@@ -151,8 +157,8 @@ export class ProjectRuntime {
           agents: guardAgents,
           spendingConfirmed: () => spendingConfirmed(company, slug),
           audit: company.audit,
-          report: (findings) => {
-            hub.snap.githubGuard = { repo: repo.github!, checkedAt: company.clock.now().toISOString(), findings, private: findings.some((f) => f.name === "spending-limit-unconfirmed") || spendingConfirmed(company, slug) };
+          report: (findings, info) => {
+            hub.snap.githubGuard = { repo: repo.github!, checkedAt: company.clock.now().toISOString(), findings, private: info.private };
             hub.emit({ type: "github.guard", guard: structuredClone(hub.snap.githubGuard) });
           },
           notify: (text) => hub.activity("config", null, text),

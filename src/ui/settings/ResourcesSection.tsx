@@ -4,6 +4,12 @@ import { officeActions } from "../../store/office";
 import { SectionTitle } from "../kit";
 import { effective, fmtGb, maxMemory, sbxDefault, sizeMismatch, teamBudget } from "../resources";
 
+/** The confirm before "Recreate sandbox". It names a size only when recreating changes it. */
+export function recreateConfirmText(name: string, eff: { cpus: number; memoryGb: number }, resized: boolean): string {
+  const size = resized ? ` with ${eff.cpus} CPUs and ${fmtGb(eff.memoryGb)}` : "";
+  return `Recreate ${name}'s sandbox${size}?\n\nThe agent's folder and code are kept. Anything installed inside the VM is lost, and the current session restarts.`;
+}
+
 /** CPU + memory for one agent's sandbox, plus the whole team's budget. */
 export function ResourcesSection({ agent, status, team, machine }: { agent: AgentConfig; status: AgentStatus | undefined; team: AgentConfig[]; machine: MachineInfo }) {
   const r = agent.sandbox.resources;
@@ -84,18 +90,13 @@ export function ResourcesSection({ agent, status, team, machine }: { agent: Agen
             The sandbox now has {session.sandbox.cpus} CPUs · {fmtGb(session.sandbox.memoryGb)}.
             {mismatch && " Size is fixed when a sandbox is created, so recreate it to apply the new size."}
           </span>
-          {mismatch && (
-            <button
-              className="btn px-2 text-[12px]"
-              onClick={() =>
-                window.confirm(
-                  `Recreate ${agent.name}'s sandbox with ${eff.cpus} CPUs and ${fmtGb(eff.memoryGb)}?\n\nThe agent's folder and code are kept. Anything installed inside the VM is lost, and the current session restarts.`,
-                ) && officeActions.recreateSandbox(agent.id)
-              }
-            >
-              Recreate sandbox
-            </button>
-          )}
+          {/* Offered for every existing sandbox: a start refused for sbx's shared skills points here (M0-F). */}
+          <button
+            className="btn px-2 text-[12px]"
+            onClick={() => window.confirm(recreateConfirmText(agent.name, eff, mismatch)) && officeActions.recreateSandbox(agent.id)}
+          >
+            Recreate sandbox
+          </button>
         </div>
       )}
       {agent.mode === "sandbox" && !session?.sandbox && <p className="mt-2 text-[12px] text-muted">Applied when {agent.name}'s sandbox is created on first Start.</p>}

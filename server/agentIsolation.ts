@@ -39,13 +39,41 @@ export function isAgentConfigPath(rel: string): boolean {
   return CONFIG_FILES.has(parts[parts.length - 1]) || parts.slice(0, -1).some((p) => CONFIG_DIRS.has(p));
 }
 
-/** Applies the sparse patterns to a clone. Needs git 2.35 or later. */
-export async function isolateClone(dir: string): Promise<void> {
-  const r = await run("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], { cwd: dir, input: AGENT_CONFIG_PATTERNS.join("\n") + "\n", timeoutMs: 120_000 });
-  if (!r.ok) {
+const NEEDS_GIT = "HQ needs git 2.37 or later to keep the repo's agent settings out of agent folders";
+
+/** The version `git version` prints ("git version 2.51.0.windows.1" → [2, 51]), or null when it names none. */
+export function parseGitVersion(out: string): [number, number] | null {
+  const m = /^git version (\d+)\.(\d+)(?:\.|\s|$)/.exec(out.trim());
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+type GitVersionRead = () => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+
+/**
+ * Applies the sparse patterns to a clone. Needs git 2.37 or later:
+ * `sparse.expectFilesOutsideOfPatterns` keeps a path skip-worktree when HQ
+ * writes its own skill copy where the repo tracks one (M0-F), so git status
+ * stays clean and a commit leaves the repo's file unchanged. Git 2.35 and 2.36
+ * accept that setting and ignore it, so the version is read first; a version
+ * HQ cannot read is refused too.
+ */
+export async function isolateClone(dir: string, o: { gitVersion?: GitVersionRead } = {}): Promise<void> {
+  const failed = (r: { stderr: string; stdout: string }) => {
     const first = (r.stderr || r.stdout).trim().split("\n")[0] ?? "";
-    throw new Error(`HQ needs git 2.35 or later to keep the repo's agent settings out of agent folders: ${first}`);
+    return new Error(`${NEEDS_GIT}: ${first}`);
+  };
+  const v = await (o.gitVersion ?? (() => run("git", ["version"], { cwd: dir })))();
+  const version = v.ok ? parseGitVersion(v.stdout) : null;
+  if (!version) {
+    const said = (v.stdout || v.stderr).trim().split("\n")[0] ?? "";
+    throw new Error(`${NEEDS_GIT}, and it couldn't read this machine's git version${said ? ` (${said})` : ""}. Check that git runs, then start again.`);
   }
+  const [major, minor] = version;
+  if (major < 2 || (major === 2 && minor < 37)) throw new Error(`${NEEDS_GIT}: this machine has git ${major}.${minor}. Update git, then start again.`);
+  const c = await run("git", ["config", "sparse.expectFilesOutsideOfPatterns", "true"], { cwd: dir });
+  if (!c.ok) throw failed(c);
+  const r = await run("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], { cwd: dir, input: AGENT_CONFIG_PATTERNS.join("\n") + "\n", timeoutMs: 120_000 });
+  if (!r.ok) throw failed(r);
 }
 
 /**
@@ -65,11 +93,20 @@ async function tracked(dir: string): Promise<{ top: string; prefix: string; file
   return { top, prefix, files: r.stdout.split("\0").filter(Boolean) };
 }
 
-/** Tracked agent-configuration paths that exist on disk in `dir` (a link counts). */
-export async function agentConfigOnDisk(dir: string): Promise<string[]> {
+/** A path in one of the folders HQ installs skills into (M0-F), at the clone's top level. Exact case: a case variant is still refused. */
+const HQ_SKILLS_PATH = /^\.(claude|agents)\/skills\//;
+
+/**
+ * Tracked agent-configuration paths that exist on disk in `dir` (a link counts).
+ * `hqSkills`: in HQ's own clone, .claude/skills/ and .agents/skills/ hold HQ's
+ * copies, written at every start over any path the repo tracks (it stays
+ * skip-worktree), so a tracked path there is not the repo's file on disk.
+ */
+export async function agentConfigOnDisk(dir: string, o: { hqSkills?: boolean } = {}): Promise<string[]> {
   const { top, files } = await tracked(dir);
   return files.filter((rel) => {
     if (!isAgentConfigPath(rel)) return false;
+    if (o.hqSkills && HQ_SKILLS_PATH.test(rel)) return false;
     try {
       lstatSync(join(top, rel));
       return true;

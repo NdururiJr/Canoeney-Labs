@@ -82,7 +82,7 @@ HQ still reads the old files in exactly one place: a one-time import, built in M
 - HQ clones with `--no-checkout`, then runs `git sparse-checkout set --no-cone` with these patterns: `/*`, `!CLAUDE.md`, `!CLAUDE.local.md`, `!AGENTS.md`, `!AGENTS.override.md`, `!ROLE.md`, `!.mcp.json`, `!.claude/`, `!.agents/`, `!.codex/`. Only then does it check the files out.
 - The excluded files never reach the agent's disk, at any depth, and files the repo gains later never appear. So neither Claude Code nor Codex can load them.
 - An existing clone is isolated again on every start. Unmodified files leave the disk.
-- This needs git 2.35 or later. HQ says so if git refuses.
+- This needs git 2.37 or later (M0-F sets `sparse.expectFilesOutsideOfPatterns`). Git 2.35 and 2.36 accept that setting and ignore it, so HQ reads `git version` first and refuses an older git, or a version it cannot read, with a message that says so.
 
 **Why not command-line flags:** Claude Code's `--setting-sources` could add a second layer. It has not been checked whether HQ's own hooks still run with project settings turned off, so that check is carried to M0-G, on the Linux host. Sparse checkout works for both CLIs, and CI tests it with real git.
 

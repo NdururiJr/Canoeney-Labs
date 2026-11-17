@@ -44,7 +44,7 @@ test("a sequence that never ends is dropped, not passed through", () => {
 });
 
 test("SR-C-15 [T-S10.6] a company agent's launch does not point BROWSER at the sandbox opener", () => {
-  const args = sbxRunArgs({ name: "hq-p-ana", size: [], envFile: "/tmp/env", sbxAgent: "claude", dir: "/w", launchArgs: ["--x"] });
+  const args = sbxRunArgs({ name: "hq-p-ana", size: [], envFile: "/tmp/env", sbxAgent: "claude", dir: "/w", launchArgs: ["--x"], skillsOff: true });
   assert.ok(!args.some((a) => a.includes("BROWSER")), args.join(" "));
   assert.deepEqual(args.slice(0, 3), ["run", "--name", "hq-p-ana"]);
   assert.ok(args.includes("--env-file"));

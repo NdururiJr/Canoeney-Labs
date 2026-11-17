@@ -216,10 +216,10 @@ function api(over: (path: string) => { status: number; json: unknown } | undefin
 }
 
 test("a read the guard cannot make is a named finding, never a false all-clear or a crash", async () => {
-  const offline = await checkRepo(api(() => ({ status: 0, json: null })), "acme/site", { agents: AGENTS, spendingConfirmed: false });
+  const offline = (await checkRepo(api(() => ({ status: 0, json: null })), "acme/site", { agents: AGENTS, spendingConfirmed: false })).findings;
   assert.ok(offline.length > 0);
   assert.ok(offline.every((f) => f.name.startsWith("read-failed:") && !f.fixable), offline.map((f) => f.name).join(","));
-  const forbidden = await checkRepo(api((p) => (p === "/rulesets" ? { status: 403, json: { message: "Upgrade to GitHub Pro" } } : undefined)), "acme/site", { agents: AGENTS, spendingConfirmed: false });
+  const forbidden = (await checkRepo(api((p) => (p === "/rulesets" ? { status: 403, json: { message: "Upgrade to GitHub Pro" } } : undefined)), "acme/site", { agents: AGENTS, spendingConfirmed: false })).findings;
   assert.deepEqual(forbidden.map((f) => f.name), ["read-failed:rulesets"]);
 });
 
@@ -235,7 +235,7 @@ test("applying protection keeps the owner's own required checks and restrictions
 test("actions limited to the repo's own (local_only) are kept, not loosened", async () => {
   const writes: { method: string; path: string; body?: unknown }[] = [];
   const local = (p: string) => (p === "/actions/permissions" ? { status: 200, json: { enabled: true, allowed_actions: "local_only" } } : undefined);
-  assert.deepEqual((await checkRepo(api(local), "acme/site", { agents: AGENTS, spendingConfirmed: false })).map((f) => f.name), []);
+  assert.deepEqual((await checkRepo(api(local), "acme/site", { agents: AGENTS, spendingConfirmed: false })).findings.map((f) => f.name), []);
   await applyRepoGuard(api(local, writes), "acme/site", { agents: AGENTS, spendingConfirmed: false });
   assert.equal(writes.some((w) => w.path.startsWith("/actions/permissions") && w.path !== "/actions/permissions/workflow"), false);
 });
@@ -247,6 +247,6 @@ test("tags are guarded: only the owner creates, moves or deletes them", async ()
   assert.deepEqual(tags.conditions.ref_name.include, ["~ALL"]);
   assert.deepEqual(tags.rules.map((r) => r.type).sort(), ["creation", "deletion", "update"]);
   assert.deepEqual(tags.bypass_actors.map((b) => b.actor_type), ["RepositoryRole"]);
-  const missing = await checkRepo(api((p) => (p === "/rulesets" ? { status: 200, json: desiredRulesets(AGENTS).map((r, i) => ({ id: i + 1, name: r.name })).filter((r) => r.name !== "hq-tags") } : undefined)), "acme/site", { agents: AGENTS, spendingConfirmed: false });
+  const missing = (await checkRepo(api((p) => (p === "/rulesets" ? { status: 200, json: desiredRulesets(AGENTS).map((r, i) => ({ id: i + 1, name: r.name })).filter((r) => r.name !== "hq-tags") } : undefined)), "acme/site", { agents: AGENTS, spendingConfirmed: false })).findings;
   assert.deepEqual(missing.map((f) => f.name), ["tags-ruleset-missing"]);
 });

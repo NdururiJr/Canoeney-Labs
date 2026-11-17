@@ -25,6 +25,14 @@ export class GitHubAppRefusedError extends Error {
   }
 }
 
+/** GitHub's answer to "is this App installed here?" was neither yes (200) nor no (404). */
+export class InstallationLookupError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub did not say whether the App is installed (${status ? `HTTP ${status}` : "no answer"}).`);
+    this.name = "InstallationLookupError";
+  }
+}
+
 interface Pending {
   companyAgentId: string;
   humanId: string;
@@ -55,6 +63,8 @@ export class GitHubApps {
   start(companyAgentId: string, repo: string, humanId: string, sessionId: string, origin: string): { url: string; manifest: Record<string, unknown>; state: string } {
     const [project, agentId] = companyAgentId.split("/");
     const state = randomBytes(24).toString("base64url");
+    // A state nobody came back with is dropped once it is older than its lifetime (PR #12 review).
+    for (const [k, p] of this.pending) if (this.now() - p.at > STATE_TTL_MS) this.pending.delete(k);
     this.pending.set(state, { companyAgentId, humanId, sessionId, at: this.now(), used: false });
     const manifest = manifestFor({ project, agentId, repo, origin, rand: randomBytes(2).toString("hex") });
     return { url: `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`, manifest, state };
@@ -113,10 +123,15 @@ export class GitHubApps {
     return `${head}.${createSign("RSA-SHA256").update(head).sign(pem.toString()).toString("base64url")}`;
   }
 
-  /** The App's installation on `repo` (owner/name), or null. Recorded once. */
+  /**
+   * The App's installation on `repo` (owner/name), or null when GitHub says there is none
+   * (404). Any other answer, or none, throws InstallationLookupError: "could not tell" is
+   * never "not installed" (SR-F-08). Recorded once.
+   */
   async installation(companyAgentId: string, repo: string): Promise<{ id: number; selection: "selected" | "all" } | null> {
     const r = await this.o.api.request<{ id: number; repository_selection: "selected" | "all" }>("GET", `/repos/${repo}/installation`, { jwt: this.jwtFor(companyAgentId) });
-    if (r.status !== 200 || !r.json) return null;
+    if (r.status === 404) return null;
+    if (r.status !== 200 || !r.json) throw new InstallationLookupError(r.status);
     const { id, repository_selection } = r.json;
     const row = this.row(companyAgentId)!;
     if (row.installation_id !== id) {

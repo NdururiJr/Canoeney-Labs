@@ -215,8 +215,15 @@ export function removeFromExclude(dir: string, paths: string[]) {
   if (next !== current) agentWrite(dir, file, next);
 }
 
-/** Adds paths to .git/info/exclude (a per-clone .gitignore that is never committed). */
+/** The temporary file `agentWrite` makes before it renames it over a secret file; a crash between the two leaves it behind. */
+export const HQ_TMP_PATTERN = ".*.hq-tmp-*";
+
+/**
+ * Adds paths to .git/info/exclude (a per-clone .gitignore that is never committed). Every
+ * call also adds HQ's temporary-file pattern, so each agent folder HQ writes into has it.
+ */
 export function excludeFromGit(dir: string, paths: string[]) {
+  paths = [...paths, HQ_TMP_PATTERN];
   // Only a real .git folder (a worktree's .git is a file; a symlink isn't followed).
   try {
     if (!lstatSync(join(dir, ".git")).isDirectory()) return;

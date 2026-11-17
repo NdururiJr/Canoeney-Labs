@@ -46,7 +46,7 @@ async function ceo(t: TestContext, keys: { scope: string; name: string }[] = [])
   // No real sbx here: the policy is taken as set, and no sandbox exists yet.
   Object.assign(s.sessions as unknown as Record<string, unknown>, {
     policyOk: true,
-    sandboxExists: async () => false,
+    sandboxState: async () => "no",
     whenSandboxExists: async () => false,
     refreshSandboxSizes: async () => {},
   });

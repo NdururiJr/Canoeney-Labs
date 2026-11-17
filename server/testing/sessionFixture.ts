@@ -19,12 +19,15 @@ export class FakeBackend implements SessionBackend {
   goneOnce = new Set<string>();
   createThrows = false;
   attachThrows = false;
+  /** Every session created, with what it would run (for checking the launch arguments). */
+  created: { name: string; spec: LaunchSpec }[] = [];
   async exists(name: string) {
     if (this.goneOnce.delete(name)) return false;
     return this.live.has(name);
   }
-  async create(name: string, _cwd: string, _spec: LaunchSpec, _size: TermSize) {
+  async create(name: string, _cwd: string, spec: LaunchSpec, _size: TermSize) {
     if (this.createThrows) throw new Error("create failed");
+    this.created.push({ name, spec });
     this.live.add(name);
   }
   async kill(name: string) {
@@ -77,7 +80,7 @@ export function withSessions(t: { after(fn: () => void): void }, hq: Hq, cli: Pa
   const backend = new FakeBackend();
   (sessions as unknown as { backend: SessionBackend }).backend = backend;
   // No real sbx here: the policy is taken as set, and no sandbox exists yet.
-  Object.assign(sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
+  Object.assign(sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxState: async () => "no", whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   t.after(() => sessions.shutdown());
   const name = (id: string) => `hq-${hq.slug}-${id}`;
   const fileSecret = (id: string) => {

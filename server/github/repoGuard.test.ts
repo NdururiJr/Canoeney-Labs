@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { GitHubApi } from "./api";
-import { applyRepoGuard, checkRepo, desiredRulesets, mainProtection, RepoWatch, type GuardAgent } from "./repoGuard";
+import { InstallationLookupError } from "./apps";
+import { applyRepoGuard, checkRepo, desiredRulesets, mainProtection, readGuardAgents, RepoWatch, type GuardAgent } from "./repoGuard";
 import { scanWorkflow } from "./workflowScan";
 
 const REPO = "acme/site";
@@ -63,7 +64,7 @@ function fake(r: Repo, refuse: (method: string, path: string) => number | undefi
 }
 
 const names = async (r: Repo, o: Partial<Parameters<typeof checkRepo>[2]> = {}) =>
-  (await checkRepo(fake(r).api, REPO, { agents: AGENTS, spendingConfirmed: false, ...o })).map((f) => f.name);
+  (await checkRepo(fake(r).api, REPO, { agents: AGENTS, spendingConfirmed: false, ...o })).findings.map((f) => f.name);
 
 test("a repo set up as HQ wants it has no findings", async () => {
   assert.deepEqual(await names(goodRepo()), []);
@@ -274,4 +275,68 @@ test("a change GitHub refuses while applying is a named finding, never silence",
   const failed = findings.find((f) => f.name === "apply-failed:main-protection");
   assert.ok(failed, findings.map((f) => f.name).join(", "));
   assert.match(failed.detail, /HTTP 422/);
+});
+
+// ---------------------------------------------------------------- M0-F Task 9: M0-E review leftovers
+
+test("hq-unclaimed restricts deletion too, so an agent cannot delete a branch that is nobody's", async () => {
+  const types = (name: string) => desiredRulesets(AGENTS).find((x) => x.name === name)!.rules.map((x) => x.type);
+  assert.deepEqual(types("hq-unclaimed"), ["creation", "update", "deletion"]);
+  // Applying writes it.
+  const r = goodRepo();
+  r.rulesets = [];
+  const f = fake(r);
+  await applyRepoGuard(f.api, REPO, { agents: AGENTS, spendingConfirmed: false });
+  const body = f.calls.find((c) => c.method === "POST" && (c.body as { name?: string }).name === "hq-unclaimed")?.body as { rules: { type: string }[] };
+  assert.ok(body.rules.some((x) => x.type === "deletion"), "the ruleset body lists deletion");
+  // A repo protected before this change is reported until the owner applies it.
+  const old = goodRepo();
+  old.rulesets.find((x) => x.name === "hq-unclaimed")!.rules = [{ type: "creation" }, { type: "update" }];
+  assert.deepEqual(await names(old), ["ruleset-changed:hq-unclaimed"]);
+});
+
+test("an App lookup that fails is a read-failed finding, and Apply writes no ruleset", async () => {
+  const unknown: GuardAgent[] = [{ id: "ana", appId: 101, installed: "unknown", selection: null }];
+  // Whatever rulesets the repo holds, nothing is compared: HQ cannot say which ones it wants.
+  for (const rulesets of [goodRepo().rulesets, []]) {
+    const r = goodRepo();
+    r.rulesets = rulesets;
+    assert.deepEqual(await names(r, { agents: unknown }), ["read-failed:app:ana"]);
+  }
+  const r = goodRepo();
+  r.rulesets = [];
+  const f = fake(r);
+  const findings = await applyRepoGuard(f.api, REPO, { agents: unknown, spendingConfirmed: false });
+  assert.deepEqual(findings.map((x) => x.name), ["read-failed:app:ana"]);
+  assert.equal(f.calls.some((c) => c.method !== "GET" && c.path.includes("/rulesets")), false, "no ruleset is written while the answer is unknown");
+  assert.ok(f.calls.some((c) => c.method === "PUT" && c.path.endsWith("/branches/main/protection")), "the settings that do not depend on it still apply");
+  // The agents HQ passes in: a lookup GitHub could not answer is "unknown", never "not installed".
+  const apps = {
+    appId: (id: string) => (id === "site/ben" ? null : 101),
+    installation: async (id: string) => {
+      if (id === "site/cy") return null;
+      throw new InstallationLookupError(500);
+    },
+  };
+  const list = await readGuardAgents({ apps, repo: REPO, agents: ["ana", "ben", "cy"].map((a) => ({ agentId: a, companyId: `site/${a}` })) });
+  assert.deepEqual(list, [
+    { id: "ana", appId: 101, installed: "unknown", selection: null },
+    { id: "cy", appId: 101, installed: false, selection: null },
+  ]);
+});
+
+test("a public repo with a confirmed spending limit is not shown as private", async () => {
+  const seen: (boolean | null)[] = [];
+  const watchOf = (r: Repo, confirmed: boolean) =>
+    new RepoWatch({ api: fake(r).api, repo: REPO, agents: async () => AGENTS, spendingConfirmed: () => confirmed, audit: { append() {} } as never, report: (_f, info) => void seen.push(info.private), notify: () => {} });
+  const pub = goodRepo();
+  await watchOf(pub, true).check();
+  const priv = goodRepo();
+  priv.repo.private = true;
+  await watchOf(priv, false).check();
+  await watchOf(priv, true).check();
+  assert.deepEqual(seen, [false, true, true]);
+  // A repo HQ could not read says nothing either way.
+  const down = await checkRepo({ request: async () => ({ status: 0, json: null }) }, REPO, { agents: AGENTS, spendingConfirmed: true });
+  assert.equal(down.private, null);
 });

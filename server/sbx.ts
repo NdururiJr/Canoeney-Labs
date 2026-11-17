@@ -434,6 +434,18 @@ export class Sbx {
 
   // ------------------------------------------------------------ apply
 
+  /**
+   * What sbx's machine-wide shared skills store holds, from `sbx skills ls` (M0-F). "unknown" when
+   * the run failed or timed out, or printed nothing: HQ cannot say the store is empty.
+   */
+  async sharedSkills(): Promise<"empty" | "some" | "unknown"> {
+    const r = await this.exec("sbx", ["skills", "ls"], { timeoutMs: 10_000 });
+    if (!r.ok) return "unknown";
+    const text = `${r.stdout}\n${r.stderr}`;
+    if (/no skills found/i.test(text)) return "empty";
+    return text.trim() ? "some" : "unknown";
+  }
+
   /** True if sbx knows a sandbox with this name. */
   async exists(agentId: string): Promise<boolean> {
     const r = await this.exec("sbx", ["ls", "--json"], { timeoutMs: 10_000 });

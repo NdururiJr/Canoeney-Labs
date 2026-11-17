@@ -28,6 +28,8 @@ import type {
   ProjectNotesState,
   ProjectSummary,
   GithubGuardState,
+  SkillsGuardState,
+  SkillsState,
 } from "./types";
 
 export type OfficeEvent =
@@ -53,6 +55,10 @@ export type OfficeEvent =
   | { type: "action.updated"; item: ActionItem }
   /** The project repo's GitHub protection was checked (M0-E, owner only). */
   | { type: "github.guard"; guard: GithubGuardState }
+  /** The company skills repo was checked (M0-F, SR-F-08, owner only). */
+  | { type: "skills.guard"; guard: SkillsGuardState | null }
+  /** The pinned skills or a role's set changed (M0-F, owner only). */
+  | { type: "skills.updated"; skills: SkillsState | null }
   /** The projects HQ manages changed: one was added, or its state changed (M0-D2). */
   | { type: "projects.updated"; projects: ProjectSummary[] }
   /** The answer to one command, sent only to the socket that sent it (M0-C). */
@@ -91,7 +97,7 @@ export interface OfficeDataSource {
   addProject(path: string): void;
 
   /** Hears each command's answer (real HQ only): the add-project dialog follows its own. */
-  onCommandResult?(fn: (cmd: string, e: { ok: boolean; error?: string; message?: string }) => void): void;
+  onCommandResult?(fn: (cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }, args: unknown[]) => void): void;
   /** The owner confirms a renamed or moved repo's new GitHub address for a project (PIN). */
   confirmProjectRepo(projectId: string): void;
   /** Sends a command again with the approval PIN (real HQ only, M0-C). */
@@ -170,6 +176,10 @@ export interface OfficeDataSource {
   previewRepoImport(): void;
   /** Imports exactly the previewed files (needs the PIN; refused if they changed since). */
   importRepoConfig(sha256: string): void;
+  /** The company's skills (M0-F): HQ answers a preview with what a pin would change; the confirm and a role's set need the PIN. */
+  previewSkillsPin(repo: string, commit: string): void;
+  pinSkills(repo: string, commit: string, lockHash: string): void;
+  setRoleSkills(role: string, names: string[]): void;
   /** Approves the pending CLAUDE.md the owner read (needs the PIN; refused if it changed since). */
   approveProjectNotes(sha256: string): void;
 

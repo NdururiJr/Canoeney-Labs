@@ -6,12 +6,13 @@ import { spawn as spawnPty, type IPty } from "@lydell/node-pty";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { stackSkills } from "../src/data/stack";
-import { hasHqSkills, prepareSkills, skillSkippedText } from "./skills";
+import { effectiveSkills, installSkills, skillMovesDir, skillsBlockedText, skillsMissingText, skillsMovedText } from "./skills";
 import { refreshProjectNotes } from "./projectNotesSync";
 import { resolve, sep } from "node:path";
 import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
 import { adapters, localBinary } from "./adapters";
 import type { Company } from "./company";
+import type { RoleId } from "./company/types";
 import { companyAgentId, type Actor } from "./company/agents";
 import type { Hub } from "./hub";
 import { sessionBackend, type LaunchSpec, type TermHandle } from "./backends";
@@ -52,10 +53,12 @@ const STALE_WORKING_MS = 15_000; // "working" with an idle screen this long = a 
  * not get the opener that sends URLs to the host browser (SR-C-15). The opener sbx
  * installs can still be run by name inside the sandbox; ADR 0007 records that.
  */
-export function sbxRunArgs(o: { name: string; size: string[]; envFile: string | null; sbxAgent: string; dir: string; launchArgs: string[] }): string[] {
+export function sbxRunArgs(o: { name: string; size: string[]; envFile: string | null; sbxAgent: string; dir: string; launchArgs: string[]; skillsOff: boolean }): string[] {
   const env = o.envFile ? ["--env-file", o.envFile] : [];
+  // sbx's machine-wide skills store would reach every agent with no pin (M0-F); only a new sandbox takes the flag.
+  const skills = o.skillsOff ? ["--skills", "off"] : [];
   const args = o.launchArgs.length ? ["--", ...o.launchArgs] : [];
-  return ["run", "--name", o.name, ...o.size, ...env, o.sbxAgent, o.dir, ...args];
+  return ["run", "--name", o.name, ...o.size, ...env, ...skills, o.sbxAgent, o.dir, ...args];
 }
 
 /** Starts bash (else sh) in a sandbox, with links and browser opening set up (see SHELL_ENV, SANDBOX_BROWSER). */
@@ -90,6 +93,10 @@ export class Sessions {
   globalGithubKey: () => Promise<boolean | "unknown"> = async () => false;
   /** Whether sbx's GitHub key reaches the agent's sandbox, read fresh (SR-D-06). The project runtime wires it to Sbx. */
   githubKeyFor: (agentId: string) => Promise<"global" | "sandbox" | "unknown" | null> = async () => "unknown"; // fails closed until wired
+  /** What sbx's shared skills store holds, read fresh (M0-F). The project runtime wires it to Sbx. */
+  sharedSkills: () => Promise<"empty" | "some" | "unknown"> = async () => "unknown"; // fails closed until wired
+  /** Runs sbx for the lifecycle calls that tests must be able to fake (remove, recreate). */
+  private sbxExec: typeof run = run;
   /** Called when HQ reattaches to a session that was already running (e.g. after an HQ restart). */
   onSessionReattached: (agentId: string) => void = () => {};
   /** When the agent's last hook arrived (from the inbox). */
@@ -250,6 +257,20 @@ export class Sessions {
         this.noteOldKey(id);
       }
       else {
+        // A sandbox HQ did not create with skills off starts only while sbx's shared store is empty (M0-F).
+        // Checked before a secret is issued or a file is written, so a refusal leaves nothing behind.
+        // Only a readable `sbx ls` decides new or existing: a record of an earlier sandbox does not say it is still there.
+        const found = agent.mode === "sandbox" ? await this.sandboxState(name) : "no";
+        if (found === "unknown")
+          throw new WorkspaceRefusedError("shared-skills", `HQ couldn't read sbx's sandbox list, so it can't tell whether ${agent.name}'s sandbox is new. Check that sbx is running, then start ${agent.name} again.`);
+        const isNew = agent.mode === "sandbox" && found === "no";
+        if (agent.mode === "sandbox" && !isNew && this.company.skills.skillsOffAt(reg.companyId) === null) {
+          const store = await this.sharedSkills();
+          if (store === "unknown")
+            throw new WorkspaceRefusedError("shared-skills", `HQ couldn't read sbx's shared skills store, so it can't tell whether skills would reach ${agent.name}'s sandbox. Check that sbx is running, then start ${agent.name} again.`);
+          if (store === "some")
+            throw new WorkspaceRefusedError("shared-skills", `${agent.name}'s sandbox was made before HQ turned sbx's shared skills off, and that store has skills in it. Press Recreate sandbox in Settings → Sandbox; its folder and code are kept.`);
+        }
         // No env file reaches any agent in M0 and M1 (D2, SR-E-13): no secret value goes into a sandbox.
         const hasEnvFile = false;
         if (this.envFileFor(id)) hub.activity("session", id, `${agent.name}'s app variables file was not passed: no secret values go into sandboxes until you approve each variable (M2).`);
@@ -260,15 +281,9 @@ export class Sessions {
         refreshProjectNotes(hub, this.company);
         const approved = company ? null : this.company.notes.current(hub.slug);
         const notes = approved ? { version: approved.version, content: approved.content } : null;
+        // Before HQ writes into .claude/: a link there refuses the start (M0-F).
+        this.installSkills(id, agent.name, agent.cli, agent.skills ?? [], reg.role, company, dir, by);
         await adapter.writeFiles(dir, agent, hub.snap.config, secret, { hasEnvFile, role: reg.role, ctoId, notes });
-        // A company-level agent gets no project notes and no stack skills.
-        const specs = company ? [] : stackSkills(hub.snap.config.stack);
-        if (!company && (specs.length || hasHqSkills(hub.slug, dir))) {
-          hub.setSession(id, { detail: "Installing agent skills…" });
-          const skills = await prepareSkills(hub.slug, dir, specs);
-          if (skills.error) hub.activity("session", id, `${agent.name}: some agent skills didn't install (${skills.error.slice(0, 120)}). Starting anyway.`);
-          for (const rel of skills.skipped) hub.activity("session", id, skillSkippedText(agent.name, rel));
-        }
         const launch = adapter.launch(agent, dir);
         const envFile = null; // D2: never passed
         let spec: LaunchSpec = { file: localBinary[agent.cli], args: launch.args, envFile };
@@ -279,11 +294,12 @@ export class Sessions {
           // sbx only accepts a size when it creates the sandbox; an existing (stopped) one keeps its size,
           // and passing --cpus/--memory again makes `sbx run` fail. "Recreate sandbox" applies a new size.
           const { cpus, memoryGb } = agent.sandbox.resources;
-          const isNew = !(await this.sandboxExists(name));
           const size = !isNew ? [] : [...(cpus ? ["--cpus", String(cpus)] : []), ...(memoryGb ? ["--memory", `${Math.round(memoryGb * 1024)}m`] : [])];
-          spec = { file: "sbx", args: sbxRunArgs({ name, size, envFile, sbxAgent: launch.sbxAgent, dir, launchArgs: launch.args }), envFile: null };
+          spec = { file: "sbx", args: sbxRunArgs({ name, size, envFile, sbxAgent: launch.sbxAgent, dir, launchArgs: launch.args, skillsOff: isNew }), envFile: null };
         }
         await this.backend.create(name, dir, spec, { cols: 200, rows: 50 });
+        // Only now is there a sandbox made with skills off to record.
+        if (isNew) this.company.skills.recordSkillsOff(reg.companyId);
       }
       this.attach(id);
       hub.setSession(id, { state: "running", detail: null, workspace: dir });
@@ -302,6 +318,41 @@ export class Sessions {
       if (err instanceof WorkspaceRefusedError) this.auditRefusal(id, err, by);
       fail(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /**
+   * Installs exactly the agent's pinned skills from HQ's store, at every start,
+   * company-level agents included (M0-F, SR-F-01, 02, 04, 05). Nothing is fetched.
+   * A refused or missing skill and any drift are audited with `by` as the actor,
+   * and the agent starts without that skill. A link where the skills go, or a
+   * folder too big to move aside, refuses the start.
+   */
+  private installSkills(id: string, name: string, cli: AgentCli, grants: string[], role: RoleId, companyLevel: boolean, dir: string, by: Actor) {
+    const hub = this.hub;
+    const skills = this.company.skills;
+    const cid = companyAgentId(hub.slug, id);
+    hub.setSession(id, { detail: "Installing agent skills…" });
+    const stack = companyLevel ? [] : stackSkills(hub.snap.config.stack).flatMap((s) => s.skills);
+    const { install, missing } = effectiveSkills({ roleSet: skills.roleSet(role), grants, stack, companyLevel, lock: skills.lock() });
+    // Drift goes to HQ's home: the project's, or the company's for a company-level agent.
+    const movedDir = skillMovesDir(companyLevel ? this.company.home : projectHome(hub.slug), companyLevel ? cid : id, this.company.clock.now());
+    const r = installSkills({ workspace: dir, cli, want: install, storeDir: skills.storeDir(), movedDir });
+    if ("blocked" in r) throw new WorkspaceRefusedError(r.blocked.reason, skillsBlockedText(name, dir, r.blocked), { path: r.blocked.path });
+    const audit = (action: string, data: Record<string, unknown>) => {
+      try {
+        this.company.audit.append({ actorKind: by.kind, actorId: by.id, action, target: cid, data });
+      } catch (err) {
+        log.warn(`could not record ${action} for ${id}: ${err instanceof Error ? err.message : err}`);
+      }
+    };
+    for (const x of [...r.refused, ...missing.map((skill) => ({ skill, reason: "missing" as const }))]) audit("skill.refused", x);
+    // A pinned skill the agent deleted is drift too, so a first install is recorded as all missing.
+    if (r.drift.changed.length || r.drift.extra.length || r.drift.missing.length) audit("skill.drift", { ...r.drift });
+    const line = skillsMissingText(name, r.refused, missing);
+    if (line) hub.activity("session", id, line);
+    // A folder moved out of the agent's folder (perhaps the owner's own, in a chosen folder) is said in the feed too.
+    const moved = skillsMovedText(name, r.drift);
+    if (moved) hub.activity("session", id, moved);
   }
 
   private async stopNow(id: string) {
@@ -359,8 +410,8 @@ export class Sessions {
     this.closeShell(id);
     await this.backend.kill(name);
     if (opts.deleteSandbox) {
-      const rm = await run("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
-      if (rm.ok) (done.push("sandbox"), this.onSandboxRemoved(id));
+      const rm = await this.sbxExec("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
+      if (rm.ok) (done.push("sandbox"), this.forgetSandbox(id));
       else if (!/not found|no such/i.test(rm.stderr)) log.warn(`sbx rm ${name}: ${rm.stderr.trim()}`);
     } else if (agent.mode === "sandbox") void run("sbx", ["stop", name], { timeoutMs: 30_000 });
     if (opts.deleteFolder && !agent.workspacePath) {
@@ -374,13 +425,30 @@ export class Sessions {
     return done;
   }
 
-  /** True if sbx lists a sandbox with this name (running or stopped). */
-  private async sandboxExists(name: string): Promise<boolean> {
-    const r = await run("sbx", ["ls", "--json"], { timeoutMs: 10_000 });
+  /** The agent's sandbox is gone: what was attached to it, and HQ's record that it was made with skills off. */
+  private forgetSandbox(id: string) {
     try {
-      return (sandboxList(r.stdout) ?? []).some((s) => s.name === name);
+      const reg = this.company.agents.get(this.hub.slug, id);
+      if (reg) this.company.skills.clearSkillsOff(reg.companyId);
+    } catch (err) {
+      log.warn(`could not clear ${id}'s sandbox record: ${err instanceof Error ? err.message : err}`);
+    }
+    this.onSandboxRemoved(id);
+  }
+
+  /**
+   * Whether sbx lists a sandbox with this name (running or stopped). "unknown" when `sbx ls` failed,
+   * timed out or printed nothing HQ can read: that is not the same as "no" (M0-F, shared skills).
+   */
+  private async sandboxState(name: string): Promise<"yes" | "no" | "unknown"> {
+    const r = await this.sbxExec("sbx", ["ls", "--json"], { timeoutMs: 10_000 });
+    if (!r.ok) return "unknown";
+    try {
+      const list = sandboxList(r.stdout);
+      if (list === null) return "unknown";
+      return list.some((s) => s.name === name) ? "yes" : "no";
     } catch {
-      return false;
+      return "unknown";
     }
   }
 
@@ -398,21 +466,21 @@ export class Sessions {
     return false;
   }
 
-  /** Removes the agent's sandbox and starts a fresh one (applies new CPU/memory). The folder is kept. */
+  /** Removes the agent's sandbox and starts a fresh one (new CPU/memory, sbx's shared skills off). The folder is kept. */
   private async recreateNow(id: string) {
     const agent = this.hub.cfg(id);
     if (!agent || agent.mode !== "sandbox") return;
     const name = this.name(id);
     if (this.hub.status(id)?.session.state === "running") await this.stopNow(id);
     this.hub.setSession(id, { state: "starting", detail: "Removing the old sandbox…", sandbox: null });
-    const rm = await run("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
+    const rm = await this.sbxExec("sbx", ["rm", "-f", name], { timeoutMs: 60_000 });
     if (!rm.ok && !/not found|no such/i.test(rm.stderr)) {
       this.hub.setSession(id, { state: "failed", detail: `sbx rm failed: ${rm.stderr.trim()}` });
       return;
     }
-    this.onSandboxRemoved(id);
+    this.forgetSandbox(id);
     this.hub.setSession(id, { state: "stopped", detail: null });
-    this.hub.activity("session", id, `Recreating ${agent.name}'s sandbox with new resources`);
+    this.hub.activity("session", id, `Recreating ${agent.name}'s sandbox`);
     await this.startNow(id);
   }
 

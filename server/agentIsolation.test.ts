@@ -6,13 +6,12 @@ import { dirname, join, relative } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { HqConfig } from "../src/data/types";
 import { adapters, CODEX_CONFIG } from "./adapters";
-import { AGENT_CONFIG_PATTERNS, isAgentConfigPath } from "./agentIsolation";
+import { AGENT_CONFIG_PATTERNS, isAgentConfigPath, isolateClone } from "./agentIsolation";
 import { MCP_CONFIG, ROLE_FILE } from "./agentFiles";
-import { managedWorkspace, projectHome } from "./paths";
+import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
-import { skillSkippedText, syncSkillsInto } from "./skills";
 import { newAgent } from "./store";
-import { ensureWorkspace } from "./workspace";
+import { ensureWorkspace, WorkspaceRefusedError } from "./workspace";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" });
 
@@ -32,7 +31,7 @@ const REPO_FILES: Record<string, string> = {
 };
 
 /** An upstream repo with REPO_FILES (plus `extra`), and HQ's homes in a temporary folder. */
-function setup(t: TestContext, extra: Record<string, string> = {}) {
+function setup(t: TestContext, extra: Record<string, string> = {}, base: Record<string, string> = REPO_FILES) {
   const root = mkdtempSync(join(tmpdir(), "hq isolation "));
   const saved = { HQ_HOME: process.env.HQ_HOME, HQ_COMPANY_HOME: process.env.HQ_COMPANY_HOME };
   process.env.HQ_HOME = join(root, "hq home");
@@ -44,7 +43,7 @@ function setup(t: TestContext, extra: Record<string, string> = {}) {
   const upstream = join(root, "upstream");
   mkdirSync(upstream);
   git(upstream, "init", "-q", "-b", "main");
-  for (const [rel, text] of Object.entries({ ...REPO_FILES, ...extra })) {
+  for (const [rel, text] of Object.entries({ ...base, ...extra })) {
     mkdirSync(dirname(join(upstream, rel)), { recursive: true });
     writeFileSync(join(upstream, rel), text);
   }
@@ -136,6 +135,45 @@ test("a chosen folder holding the repo's agent configuration is refused and left
   assert.equal(existsSync(join(chosen, ".git", "info", "sparse-checkout")), false, "HQ does not make the owner's checkout sparse");
 });
 
+test("a CLAUDE.md written back into HQ's sparse clone is refused with the one fix that works: delete it", async (t) => {
+  const { repo } = setup(t);
+  const dir = await ensureWorkspace(builder(), "demo", repo);
+  writeFileSync(join(dir, "CLAUDE.md"), "notes an agent wrote (/init)");
+  // The path stays skip-worktree: git neither sees it nor can restore it.
+  assert.equal(git(dir, "status", "--porcelain"), "");
+  assert.throws(() => execFileSync("git", ["restore", "CLAUDE.md"], { cwd: dir, stdio: "pipe" }));
+  const abs = join(dir, "CLAUDE.md");
+  await assert.rejects(ensureWorkspace(builder(), "demo", repo), (err: Error) => {
+    assert.match(err.message, /agent settings on disk \(CLAUDE\.md\)/);
+    assert.ok(err.message.endsWith(`Delete ${abs}, then start again.`), err.message);
+    assert.equal(err.message.includes("Commit or discard"), false);
+    return true;
+  });
+  assert.equal(readFileSync(abs, "utf8"), "notes an agent wrote (/init)", "HQ deletes nothing itself");
+  // The fix named works.
+  rmSync(abs);
+  await ensureWorkspace(builder(), "demo", repo);
+});
+
+// The exemption for HQ's skill folders (M0-F) has two bounds: HQ's own clone only, and the exact case.
+const SKILL_ONLY = { "src/a.ts": "export const a = 1;\n", ".claude/skills/x/SKILL.md": "a skill the repo commits" };
+
+test("a chosen folder whose repo tracks only .claude/skills/x/SKILL.md is still refused", async (t) => {
+  const { root, repo } = setup(t, {}, SKILL_ONLY);
+  const chosen = join(root, "my checkout");
+  git(root, "clone", "-q", repo.root, chosen);
+  assert.ok(existsSync(join(chosen, ".claude", "skills", "x", "SKILL.md")));
+  await assert.rejects(ensureWorkspace(builder(chosen), "demo", repo), (err: unknown) => err instanceof WorkspaceRefusedError && err.reason === "agent-config");
+});
+
+test("a case variant of a skills folder in HQ's clone is not exempted", async (t) => {
+  const { repo } = setup(t, {}, { "src/a.ts": "export const a = 1;\n", ".Claude/skills/x/SKILL.md": "a skill the repo commits" });
+  const dir = await ensureWorkspace(builder(), "demo", repo);
+  mkdirSync(join(dir, ".Claude", "skills", "x"), { recursive: true });
+  writeFileSync(join(dir, ".Claude", "skills", "x", "SKILL.md"), "put back on disk");
+  await assert.rejects(ensureWorkspace(builder(), "demo", repo), (err: unknown) => err instanceof WorkspaceRefusedError && err.reason === "agent-config");
+});
+
 for (const hqFile of [".claude/settings.local.json", ".jsmhq-role.md"]) {
   test(`a repo that commits one of HQ's own files is refused (${hqFile})`, async (t) => {
     const { repo } = setup(t, { [hqFile]: "committed" });
@@ -153,22 +191,6 @@ test("the sparse patterns and isAgentConfigPath agree", async (t) => {
     const [tag, path] = [line.slice(0, 1), line.slice(2)];
     assert.equal(tag === "S", isAgentConfigPath(path), path);
   }
-});
-
-test("a stack skill whose name the repo commits is skipped, and the activity says so", async (t) => {
-  const { repo } = setup(t); // the repo commits .claude/skills/x/SKILL.md
-  const dir = await ensureWorkspace(builder(), "demo", repo);
-  // HQ's cache holds the stack's skills x and z.
-  for (const name of ["x", "z"]) {
-    mkdirSync(join(projectHome("demo"), "skills-cache", ".claude", "skills", name), { recursive: true });
-    writeFileSync(join(projectHome("demo"), "skills-cache", ".claude", "skills", name, "SKILL.md"), `stack ${name}`);
-  }
-  const r = await syncSkillsInto("demo", dir);
-  assert.deepEqual(r.skipped, [".claude/skills/x"]);
-  assert.deepEqual(r.installed, [".claude/skills/z"]);
-  // Neither copy of x is on disk: the repo's is outside the sparse set, and HQ's was not installed.
-  assert.equal(existsSync(join(dir, ".claude", "skills", "x")), false);
-  assert.equal(skillSkippedText("Ana", ".claude/skills/x"), "The repo commits .claude/skills/x, so Ana starts without the stack's x skill.");
 });
 
 test("a clone whose first checkout never finished is checked out at its next start, not left empty", async (t) => {
@@ -196,4 +218,48 @@ test("agent configuration is matched whatever its letter case, on every platform
 test("a repo that commits a case variant of one of HQ's own files is refused", async (t) => {
   const { repo } = setup(t, { ".JSMHQ-ROLE.md": "committed" });
   await assert.rejects(ensureWorkspace(builder(), "demo", repo), /commits \.JSMHQ-ROLE\.md/);
+});
+
+// M0-F final review: on git 2.35 and 2.36 `git config sparse.expectFilesOutsideOfPatterns true`
+// succeeds and does nothing, so HQ's copy of a tracked skill would show as a change and be committed.
+// HQ reads git's version first and refuses anything older than 2.37, or a version it cannot read.
+test("HQ refuses a git older than 2.37, and a git version it cannot read", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "hq git version "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fresh = (name: string) => {
+    const dir = join(root, name);
+    mkdirSync(dir);
+    git(dir, "init", "-q");
+    return dir;
+  };
+  const sparse = (dir: string) => {
+    try {
+      return git(dir, "config", "--get", "core.sparseCheckout").trim();
+    } catch {
+      return "";
+    }
+  };
+  const version = (stdout: string, ok = true) => async () => ({ ok, code: ok ? 0 : 1, stdout, stderr: ok ? "" : "git: not found" });
+  for (const v of ["git version 2.36.1", "git version 2.36.0.windows.1", "git version 2.35.8", "git version 1.99.0"]) {
+    const dir = fresh(`old ${v.replace(/[^0-9]/g, "")}`);
+    await assert.rejects(isolateClone(dir, { gitVersion: version(v) }), (err: Error) => {
+      assert.match(err.message, /^HQ needs git 2\.37 or later to keep the repo's agent settings out of agent folders: this machine has git \d+\.\d+/, v);
+      return true;
+    });
+    assert.equal(sparse(dir), "", `${v}: nothing was set`);
+  }
+  for (const [v, ok] of [["git version", true], ["", true], ["not git at all", true], ["git version 2.51.0", false]] as const) {
+    const dir = fresh(`unread ${Math.random().toString(36).slice(2)}`);
+    await assert.rejects(isolateClone(dir, { gitVersion: version(v, ok) }), (err: Error) => {
+      assert.match(err.message, /^HQ needs git 2\.37 or later to keep the repo's agent settings out of agent folders, and it couldn't read this machine's git version/, JSON.stringify(v));
+      return true;
+    });
+    assert.equal(sparse(dir), "", `${JSON.stringify(v)}: nothing was set`);
+  }
+  for (const v of ["git version 2.37.0", "git version 2.51.0.windows.1", "git version 3.0.0"]) {
+    const dir = fresh(`new ${v.replace(/[^0-9]/g, "")}`);
+    await isolateClone(dir, { gitVersion: version(v) });
+    assert.equal(sparse(dir), "true", v);
+    assert.equal(git(dir, "config", "--get", "sparse.expectFilesOutsideOfPatterns").trim(), "true", v);
+  }
 });

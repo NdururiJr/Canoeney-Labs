@@ -10,7 +10,7 @@ import { makeCommands } from "../commands";
 import type { CommandCtx } from "../dashboard";
 import { makeHq, OWNER_PIN } from "../testing/hqFixture";
 import type { GitHubApi } from "./api";
-import { GitHubAppRefusedError, GitHubApps } from "./apps";
+import { GitHubAppRefusedError, GitHubApps, InstallationLookupError } from "./apps";
 import { APP_PERMISSIONS, manifestFor } from "./appManifest";
 
 const NOW = "2026-11-14T10:00:00.000Z";
@@ -133,6 +133,24 @@ test("an installation is recorded once", async (t) => {
   assert.equal(company.db.prepare("SELECT installation_id FROM agent_github_apps").get<{ installation_id: number }>()?.installation_id, 77);
 });
 
+test("installation: 404 is no installation; any other failed answer throws, naming the status", async (t) => {
+  let status = 404;
+  const gh = fakeGitHub();
+  const api: GitHubApi = { request: (m, p, o) => (p === "/repos/acme/site/installation" ? Promise.resolve({ status, json: null }) : gh.api.request(m, p, o)) };
+  const { a, company } = apps(t, { api, calls: gh.calls });
+  const s = a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420");
+  await a.complete(s.state, "code1", "owner", "s1");
+  assert.equal(await a.installation("site/ana", "acme/site"), null, "404: not installed");
+  for (const bad of [401, 403, 500, 502, 0]) {
+    status = bad;
+    await assert.rejects(() => a.installation("site/ana", "acme/site"), (e: unknown) => e instanceof InstallationLookupError && e.message.includes(bad ? `HTTP ${bad}` : "no answer"), `HTTP ${bad}`);
+  }
+  assert.equal(company.audit.query({ action: "github.app-installed" }).length, 0, "a failed lookup records nothing");
+  status = 200;
+  api.request = (m, p, o) => (p === "/repos/acme/site/installation" ? Promise.resolve({ status: 200, json: { id: 77, repository_selection: "selected" } as never }) : gh.api.request(m, p, o));
+  assert.deepEqual(await a.installation("site/ana", "acme/site"), { id: 77, selection: "selected" });
+});
+
 test("creating a GitHub identity needs the owner's PIN and a local session", async (t) => {
   const stub = new Proxy({} as Record<string, unknown>, { get: () => async () => {} }) as never;
   const hq = await makeHq(t, { commands: ({ hub, planner, inbox, company }) => makeCommands(hub, stub, planner, inbox, stub, stub, company) });
@@ -143,4 +161,39 @@ test("creating a GitHub identity needs the owner's PIN and a local session", asy
   assert.deepEqual(await hq.dashboard.dispatch({ ...base, remote: true }, { cmd: "createGithubIdentity", args: ["ana"], pin: OWNER_PIN }), { ok: false, error: "remote" });
   assert.deepEqual(await hq.dashboard.dispatch(base, { cmd: "createGithubIdentity", args: ["ana"] }), { ok: false, error: "pin-required" });
   assert.equal(hq.company.db.prepare("SELECT count(*) AS n FROM agent_github_apps").get<{ n: number }>()?.n, 0);
+});
+
+test("old manifest states are pruned", async (t) => {
+  const { a, clock, company } = apps(t);
+  const old = a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420");
+  clock.advance(10 * 60_000);
+  const edge = a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420"); // `old` is exactly 10 minutes old: not older, so kept
+  clock.advance(1);
+  a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420"); // `old` is now older than 10 minutes: dropped
+  const reason = (state: string) => a.complete(state, "c", "owner", "s1").then(() => null, (e: unknown) => (e instanceof GitHubAppRefusedError ? e.reason : "other"));
+  assert.equal(await reason(old.state), "unknown-state", "HQ no longer knows a state older than 10 minutes");
+  assert.deepEqual(company.audit.query({ action: "github.app-refused" }).map((r) => r.data.reason), ["unknown-state"]);
+  assert.equal(await reason(edge.state), null, "a state inside its 10 minutes still completes");
+});
+
+test("SR-D-06 a company-level agent gets no GitHub identity", async (t) => {
+  const stub = new Proxy({} as Record<string, unknown>, { get: () => async () => {} }) as never;
+  const hq = await makeHq(t, { commands: ({ hub, planner, inbox, company }) => makeCommands(hub, stub, planner, inbox, stub, stub, company) });
+  await hq.enroll();
+  (hq.hub.repo as { github: string | null }).github = "acme/site";
+  const ctx: CommandCtx = { actor: { kind: "human", id: "owner" }, role: "owner", remote: false, sessionId: "s1", projectId: hq.slug, origin: "http://127.0.0.1:7420" };
+  const call = () => hq.dashboard.dispatch(ctx, { cmd: "createGithubIdentity", args: ["ana"], pin: OWNER_PIN });
+  // Control: a builder gets the manifest.
+  assert.equal((await call()).ok, true);
+  const before = hq.company.audit.query({}).length;
+  for (const role of ["ceo", "cio", "security-audit"] as const) {
+    hq.company.agents.setRole(hq.slug, "ana", role, { kind: "human", id: "owner" });
+    assert.deepEqual(await call(), { ok: false, error: "failed", message: "Company-level agents don't reach GitHub (SR-D-06)." }, role);
+  }
+  // The refusal is audited with the owner as the actor, and nothing was started or stored.
+  const rows = hq.company.audit.query({ action: "dashboard.command-failed" });
+  assert.deepEqual([rows.length, rows[0]?.actorId, rows[0]?.data.cmd], [3, "owner", "createGithubIdentity"]);
+  assert.equal(hq.company.db.prepare("SELECT count(*) AS n FROM agent_github_apps").get<{ n: number }>()?.n, 0);
+  assert.equal(hq.company.agents.get(hq.slug, "ana")?.role, "security-audit", "the role is unchanged");
+  assert.ok(hq.company.audit.query({}).length > before);
 });

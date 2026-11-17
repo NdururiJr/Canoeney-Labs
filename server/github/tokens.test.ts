@@ -5,6 +5,7 @@ import { makeHq } from "../testing/hqFixture";
 import { withSessions } from "../testing/sessionFixture";
 import type { GitHubApi } from "./api";
 import { APP_PERMISSIONS } from "./appManifest";
+import { InstallationLookupError } from "./apps";
 import { AgentTokens, revokeOnStatus } from "./tokens";
 
 const NOW = "2026-11-14T10:00:00.000Z";
@@ -12,16 +13,18 @@ const HOUR = 3_600_000;
 const OWNER = { kind: "human", id: "owner" } as const;
 
 /** A fake GitHub that issues numbered tokens for an hour, and a timer queue the test drives. */
-function harness(o: { identity?: boolean } = {}) {
+function harness(o: { identity?: boolean; lookup?: () => Promise<never>; expiresAt?: (now: number) => string } = {}) {
   const clock = new FakeClock(NOW);
+  const state = { failIssue: false, lookup: null as null | "fail" | "404" };
   const calls: { method: string; path: string; body?: unknown; token?: string; jwt?: string }[] = [];
   let n = 0;
   const api: GitHubApi = {
     async request(method, path, opts = {}) {
       calls.push({ method, path, body: opts.body, token: opts.token, jwt: opts.jwt });
       if (method === "POST" && path === "/app/installations/77/access_tokens") {
+        if (state.failIssue) return { status: 500, json: null };
         n++;
-        return { status: 201, json: { token: `ghs_${"t".repeat(30)}${n}`, expires_at: new Date(clock.now().getTime() + HOUR).toISOString() } as never };
+        return { status: 201, json: { token: `ghs_${"t".repeat(30)}${n}`, expires_at: o.expiresAt ? o.expiresAt(clock.now().getTime()) : new Date(clock.now().getTime() + HOUR).toISOString() } as never };
       }
       if (method === "DELETE" && path === "/installation/token") return { status: 204, json: null };
       return { status: 404, json: null };
@@ -29,7 +32,7 @@ function harness(o: { identity?: boolean } = {}) {
   };
   const apps = {
     has: () => o.identity !== false,
-    installation: async () => (o.identity === false ? null : { id: 77, selection: "selected" as const }),
+    installation: async () => (state.lookup === "fail" ? Promise.reject(new InstallationLookupError(500)) : state.lookup === "404" ? null : o.lookup ? o.lookup() : o.identity === false ? null : { id: 77, selection: "selected" as const }),
     jwtFor: () => "jwt-for-the-app",
   };
   const keys: string[] = [];
@@ -54,9 +57,11 @@ function harness(o: { identity?: boolean } = {}) {
   };
   const rows: { action: string; actorId: string; data: Record<string, unknown> }[] = [];
   const audit = { append: (r: { action: string; actorId: string; data?: Record<string, unknown> }) => void rows.push({ action: r.action, actorId: r.actorId, data: r.data ?? {} }) } as never;
-  const tokens = new AgentTokens({ apps, api, sbx, clock, audit, schedule });
-  const issued = () => calls.filter((c) => c.method === "POST").length;
-  return { tokens, calls, keys, rows, advance, issued, clock };
+  const said: string[] = [];
+  const tokens = new AgentTokens({ apps, api, sbx, clock, audit, schedule, activity: (id, text) => void said.push(`${id}: ${text}`), companyIdOf: (id) => `site/${id}`, nameOf: (id) => (id === "ana" ? "Ana" : id) });
+  const issued = () => n;
+  const attempts = () => calls.filter((c) => c.method === "POST").length;
+  return { tokens, calls, keys, rows, advance, issued, attempts, clock, said, state, timers };
 }
 
 test("SR-E-04 [T-S3.10] a sandboxed agent gets a one-repo token as its own github key", async () => {
@@ -107,11 +112,111 @@ test("stopping, retiring and HQ stopping each revoke", async () => {
   }
 });
 
-test("revoking an agent that holds no token calls nothing", async () => {
+// PR #12 review: a sandbox can hold a github key HQ has no record of (HQ restarted, or a key from before).
+test("SR-E-07 [T-S3.9] revoking an agent that holds no token still clears its sandbox key", async () => {
   const h = harness();
   await h.tokens.revoke("ana", "stopped", OWNER);
-  assert.equal(h.calls.length, 0);
-  assert.equal(h.rows.length, 0);
+  assert.equal(h.calls.length, 0, "no token, so nothing to revoke on GitHub");
+  assert.deepEqual(h.keys, ["rm ana github"], "the sandbox's github key is removed anyway");
+  assert.deepEqual(h.rows.map((r) => [r.action, r.actorId, r.data]), [["github.token-revoked", "owner", { reason: "stopped", held: false }]]);
+  // Nothing was held before and nothing is after: a later revoke does the same, and issues nothing.
+  await h.tokens.revoke("ana", "paused", OWNER);
+  assert.equal(h.issued(), 0);
+  assert.deepEqual(h.keys, ["rm ana github", "rm ana github"]);
+});
+
+test("a refresh due in the past waits 60 s", async () => {
+  // A token that is already within ten minutes of expiring, one already expired, and a date HQ cannot read.
+  for (const [what, expiresAt] of [
+    ["inside the refresh window", (now: number) => new Date(now + 5 * 60_000).toISOString()],
+    ["already expired", (now: number) => new Date(now - HOUR).toISOString()],
+    ["unreadable", () => "not a date"],
+  ] as const) {
+    const h = harness({ expiresAt });
+    await h.tokens.deliver("ana", "site/ana", "acme/site");
+    await h.advance(59_999);
+    assert.equal(h.issued(), 1, `${what}: nothing before 60 s`);
+    await h.advance(1);
+    assert.equal(h.issued(), 2, `${what}: the refresh runs at 60 s`);
+  }
+});
+
+test("a failed refresh retries once, then says so", async () => {
+  const h = harness();
+  await h.tokens.deliver("ana", "site/ana", "acme/site");
+  h.state.failIssue = true;
+  await h.advance(HOUR - 10 * 60_000); // the refresh is due and fails
+  assert.equal(h.attempts(), 2);
+  assert.deepEqual(h.said, [], "one failure is not reported yet");
+  await h.advance(59_999);
+  assert.equal(h.attempts(), 2, "the retry waits 60 s");
+  await h.advance(1); // the retry fails too
+  assert.equal(h.attempts(), 3);
+  const at = new Date(Date.parse(NOW) + HOUR);
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  assert.deepEqual(h.said, [`ana: Ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
+  await h.advance(2 * HOUR);
+  assert.equal(h.attempts(), 3, "no third try");
+  // A retry that works says nothing, and the new token is scheduled as usual.
+  const ok = harness();
+  await ok.tokens.deliver("ana", "site/ana", "acme/site");
+  ok.state.failIssue = true;
+  await ok.advance(HOUR - 10 * 60_000);
+  ok.state.failIssue = false;
+  await ok.advance(60_000);
+  assert.equal(ok.issued(), 2);
+  assert.deepEqual(ok.said, []);
+});
+
+test("revoking while a refresh retry is waiting cancels it", async () => {
+  const h = harness();
+  await h.tokens.deliver("ana", "site/ana", "acme/site");
+  h.state.failIssue = true;
+  await h.advance(HOUR - 10 * 60_000);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 1, "the retry is waiting");
+  await h.tokens.revoke("ana", "stopped", OWNER);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 0, "the revoke cleared the retry timer itself");
+  h.state.failIssue = false;
+  await h.advance(HOUR);
+  assert.equal(h.issued(), 1, "no token after the revoke");
+  assert.deepEqual(h.said, []);
+});
+
+test("a refresh whose App lookup fails keeps the key, retries after 60 s, then says so", async () => {
+  const h = harness();
+  await h.tokens.deliver("ana", "site/ana", "acme/site");
+  h.state.lookup = "fail"; // GitHub answers 500 at refresh time
+  await h.advance(HOUR - 10 * 60_000); // the refresh is due
+  assert.equal(h.keys.some((k) => k.startsWith("rm ")), false, "the working key is not removed on a lookup that could not tell");
+  assert.deepEqual(h.said, []);
+  await h.advance(59_999);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 1, "a retry is scheduled, not lost");
+  await h.advance(1); // the retry fails too
+  assert.equal(h.keys.some((k) => k.startsWith("rm ")), false);
+  const at = new Date(Date.parse(NOW) + HOUR);
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  assert.deepEqual(h.said, [`ana: Ana's GitHub token could not be refreshed; it stops working at ${hhmm}.`]);
+  assert.equal(h.timers.filter((t) => !t.cancelled).length, 0, "no third try");
+  // A lookup that recovers at the retry refreshes the token and says nothing.
+  const ok = harness();
+  await ok.tokens.deliver("ana", "site/ana", "acme/site");
+  ok.state.lookup = "fail";
+  await ok.advance(HOUR - 10 * 60_000);
+  ok.state.lookup = null;
+  await ok.advance(60_000);
+  assert.equal(ok.issued(), 2);
+  assert.deepEqual(ok.said, []);
+  assert.equal(ok.keys.some((k) => k.startsWith("rm ")), false);
+});
+
+test("a refresh that finds the App really uninstalled (404) still removes the key", async () => {
+  const h = harness();
+  await h.tokens.deliver("ana", "site/ana", "acme/site");
+  h.state.lookup = "404";
+  await h.advance(HOUR - 10 * 60_000);
+  assert.equal(h.keys.at(-1), "rm ana github");
+  assert.equal(h.issued(), 1, "no new token");
+  assert.deepEqual(h.said, []);
 });
 
 test("an agent with no GitHub identity gets no token", async () => {
@@ -120,6 +225,25 @@ test("an agent with no GitHub identity gets no token", async () => {
   assert.equal(h.issued(), 0);
   // Any github key in its sandbox is removed: HQ's is the only one an agent may hold (final review).
   assert.deepEqual(h.keys, ["rm ana github"]);
+});
+
+test("an installation lookup GitHub failed (HTTP 500) mints no token and leaves the agent without an identity", async () => {
+  const h = harness({
+    lookup: async () => {
+      throw new InstallationLookupError(500);
+    },
+  });
+  assert.equal(await h.tokens.deliver("ana", "site/ana", "acme/site"), "no-identity");
+  assert.equal(h.issued(), 0);
+  assert.deepEqual(h.keys, ["rm ana github"]);
+  // Any other failure still reaches the caller, as before.
+  const other = harness({
+    lookup: async () => {
+      throw new Error("the App key does not open");
+    },
+  });
+  await assert.rejects(() => other.tokens.deliver("ana", "site/ana", "acme/site"), /does not open/);
+  assert.equal(other.issued(), 0);
 });
 
 // ---------------------------------------------------------------- through Sessions
@@ -131,7 +255,7 @@ async function sandboxed(t: TestContext) {
   hq.hub.snap.setup = { ...hq.hub.snap.setup, sandboxReady: true };
   const ana = hq.hub.cfg("ana")!;
   ana.mode = "sandbox";
-  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxExists: async () => false, whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
+  Object.assign(s.sessions as unknown as Record<string, unknown>, { policyOk: true, sandboxState: async () => "no", whenSandboxExists: async () => false, refreshSandboxSizes: async () => {} });
   const asked: string[] = [];
   let identity = true;
   s.sessions.github = {
@@ -182,7 +306,7 @@ test("an agent that has no sandbox gets no token", async (t) => {
 });
 
 // PR #12 review, round 1: Pause and Retire reach the revoke (SR-E-07), through the registry.
-test("SR-E-07 [T-S3.11] pausing or retiring an agent revokes its token; another project's agent is not touched", async (t) => {
+test("SR-E-07 [T-S3.9] pausing or retiring an agent revokes its token; another project's agent is not touched", async (t) => {
   const hq = await makeHq(t);
   const h = harness();
   const unwatch = revokeOnStatus(hq.company.agents, h.tokens, hq.slug);

@@ -48,7 +48,8 @@ export function createWsSource(): OfficeDataSource {
   let seq = 0;
   /** The project this tab views; sent again after a reconnect, which starts on HQ's default. */
   let viewing: string | null = null;
-  const githubReturn = takeGithubReturn();
+  /** The one-time code GitHub sent back with: sent on the first open socket, then forgotten (it works once). */
+  let githubReturn = takeGithubReturn();
 
   const transmit = (cmd: string, args: unknown[], pin?: string) => {
     const id = `c${++seq}`;
@@ -61,11 +62,11 @@ export function createWsSource(): OfficeDataSource {
   };
   const send = (cmd: string, ...args: unknown[]) => transmit(cmd, args);
   /** HQ's answer to one command: ask for the PIN when it needs one. */
-  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string }) => void) | null = null;
+  let resultListener: ((cmd: string, e: { ok: boolean; error?: string; message?: string; data?: unknown }, args: unknown[]) => void) | null = null;
   const onResult = (e: { id: string; ok: boolean; error?: string; message?: string; data?: unknown }) => {
     const sent = pending.get(e.id);
     pending.delete(e.id);
-    if (sent) resultListener?.(sent.cmd, e);
+    if (sent) resultListener?.(sent.cmd, e, sent.args);
     if (sent && !e.ok && e.error && PIN_ERRORS.has(e.error)) askPin({ ...sent, reason: e.error as "pin-required" });
     if (sent?.cmd === "createGithubIdentity" && e.ok) postManifest(e.data);
     if (sent?.cmd === "completeGithubIdentity" && e.ok) {
@@ -96,7 +97,11 @@ export function createWsSource(): OfficeDataSource {
           ws = sock;
           onStatus?.("open");
           if (viewing) sock.send(JSON.stringify({ type: "select", projectId: viewing }));
-          if (githubReturn) transmit("completeGithubIdentity", [githubReturn.state, githubReturn.code]);
+          if (githubReturn) {
+            const back = githubReturn;
+            githubReturn = null;
+            transmit("completeGithubIdentity", [back.state, back.code]);
+          }
           while (queue.length) sock.send(queue.shift() as string);
         };
         sock.onmessage = (m) => {
@@ -175,6 +180,9 @@ export function createWsSource(): OfficeDataSource {
     previewRepoImport: () => send("previewRepoImport"),
     importRepoConfig: (sha256) => send("importRepoConfig", { sha256 }),
     approveProjectNotes: (sha256) => send("approveProjectNotes", sha256),
+    previewSkillsPin: (repo, commit) => send("previewSkillsPin", repo, commit),
+    pinSkills: (repo, commit, lockHash) => send("pinSkills", repo, commit, lockHash),
+    setRoleSkills: (role, names) => send("setRoleSkills", role, names),
     openShell: (id) => send("openShell", id),
     closeShell: (id) => send("closeShell", id),
     openHostShell: (dir, fresh) => send("openHostShell", dir, fresh === true),

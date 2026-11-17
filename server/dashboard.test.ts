@@ -360,3 +360,20 @@ test("a remote socket receives no terminal output, and a supervisor no host path
   const inJson = JSON.stringify(d.hq.repoRoot).slice(1, -1);
   assert.ok(!supText.includes(inJson) && !supText.includes("hqPort"), "a supervisor received the repo path or HQ port");
 });
+
+// PR #12 review: task text is agent-written and never checked for a secret on the way in, so the owner has no way to write it.
+test("no owner command sets task text unchecked", async (t) => {
+  const d = await makeDashboardHq(t);
+  const table = makeCommands(d.hq.hub, {} as never, d.hq.planner, d.hq.inbox, {} as never, {} as never, d.hq.company);
+  /** Every command but `assignTask` whose name mentions a task. */
+  const taskCommands = (commands: Record<string, unknown>) => Object.keys(commands).filter((n) => /task/i.test(n) && n !== "assignTask");
+  assert.deepEqual(taskCommands(table), [], "a command that sets task text needs the secret-shape check (sendMessage and resolveActionItem have it) and a new row in this test");
+  assert.equal(typeof table.assignTask, "object", "the owner can still assign");
+  // The guard itself: it fails when such a command appears.
+  assert.deepEqual(taskCommands({ ...table, setTaskText: {} }), ["setTaskText"]);
+  assert.deepEqual(taskCommands({ ...table, updateTask: {} }), ["updateTask"]);
+  // The behaviour the docs describe.
+  const { readFileSync } = await import("node:fs");
+  const docs = readFileSync(new URL("../docs/how-it-works.md", import.meta.url), "utf8");
+  assert.match(docs, /dashboard has no command that sets task text/);
+});

@@ -6,6 +6,7 @@ import { agentPalette } from "../../theme/tokens";
 import { Field, Portrait, SectionTitle } from "../kit";
 import { CommitInput } from "./controls";
 import { LocalModeNotice } from "./LocalModeNotice";
+import { SkillCheckboxes } from "./SkillsSettings";
 import { RemoveAgentDialog } from "./RemoveAgentDialog";
 
 export function CliSelect({ value, onChange }: { value: AgentCli; onChange: (v: AgentCli) => void }) {
@@ -47,6 +48,8 @@ export function TeamSettings() {
 
 function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig; expanded: boolean; onToggle: () => void; onRemove: () => void }) {
   const set = (patch: Parameters<typeof officeActions.updateAgent>[1]) => officeActions.updateAgent(agent.id, patch);
+  const lock = useOffice((s) => s.snap?.skills?.lock);
+  const pinned = (lock ?? []).map((k) => k.name);
   return (
     <div className="border-[3px] border-ink bg-white">
       <div className="grid grid-cols-[40px_1fr_1fr_150px_130px_auto] items-end gap-2.5 p-2.5">
@@ -122,13 +125,12 @@ function AgentRow({ agent, expanded, onToggle, onRemove }: { agent: AgentConfig;
               onCommit={(v) => set({ model: v.trim() })}
             />
           </Field>
-          <Field label="Skills" hint="Comma separated. Copied into the agent's .claude/skills.">
-            <CommitInput
-              className="field"
-              value={agent.skills.join(", ")}
-              onCommit={(v) => set({ skills: v.split(",").map((s) => s.trim()).filter(Boolean) })}
-            />
-          </Field>
+          {/* Not a Field: a <label> around checkboxes would toggle the first one when its text is clicked. */}
+          <div className="flex flex-col gap-1" role="group" aria-label="Skills">
+            <span className="text-[14px] font-semibold">Skills</span>
+            <SkillCheckboxes pinned={pinned} selected={agent.skills} onChange={(skills) => set({ skills })} />
+            <span className="text-[12px] text-muted">From the pinned set, on top of what the agent's role gets. Installed at the agent's next start.</span>
+          </div>
           <div className="col-span-2">
             <Field label="Folder" hint="Leave empty and HQ keeps its own clone of the repo for this agent. Or enter an existing git folder.">
               <CommitInput
