@@ -216,6 +216,26 @@ test("a start with nothing changed writes no drift row", async (t) => {
   assert.equal(driftRows(hq).length, before);
 });
 
+// The audit row is the record; the owner also gets one line in the feed, without a host path (supervisors see activity).
+test("a start that moves skill folders aside writes one activity line, and a start without drift writes none", async (t) => {
+  const { hq, sessions, work } = await pinnedHq(t);
+  const moved = /moved \d+ skill folders? aside/;
+  await sessions.start("ana", OWNER);
+  assert.deepEqual(lastActivity(hq, moved), [], "a first install moves nothing");
+  await sessions.stop("ana");
+  await sessions.start("ana", OWNER);
+  assert.deepEqual(lastActivity(hq, moved), [], "nothing changed");
+  await sessions.stop("ana");
+
+  writeFileSync(join(work, CLAUDE, TDD, "SKILL.md"), "# tdd, edited\n");
+  put(work, `${CLAUDE}/stray/SKILL.md`, "# a skill the agent added\n");
+  await sessions.start("ana", OWNER);
+  const lines = lastActivity(hq, moved);
+  assert.deepEqual(lines, ["Ana: moved 2 skill folders aside (see the audit log)"]);
+  const movedTo = driftRows(hq).at(-1)!.data.movedTo as string;
+  assert.ok(!lines[0].includes(movedTo) && !lines[0].includes(work), "no host path in the feed");
+});
+
 test("SR-F-04 [T-S12.3] an extra skill in a chosen folder is moved to HQ's home, not deleted", async (t) => {
   const { hq, sessions, work, moves } = await pinnedHq(t);
   put(work, `${CLAUDE}/owner-notes/notes.md`, "the owner's own notes\n");

@@ -6,7 +6,7 @@ import { spawn as spawnPty, type IPty } from "@lydell/node-pty";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { stackSkills } from "../src/data/stack";
-import { effectiveSkills, installSkills, skillMovesDir, skillsBlockedText, skillsMissingText } from "./skills";
+import { effectiveSkills, installSkills, skillMovesDir, skillsBlockedText, skillsMissingText, skillsMovedText } from "./skills";
 import { refreshProjectNotes } from "./projectNotesSync";
 import { resolve, sep } from "node:path";
 import { HOST_TERMINAL, type AgentCli, type AgentConfig, type SetupCheckId, type WorkspaceInfo } from "../src/data/types";
@@ -269,7 +269,7 @@ export class Sessions {
           if (store === "unknown")
             throw new WorkspaceRefusedError("shared-skills", `HQ couldn't read sbx's shared skills store, so it can't tell whether skills would reach ${agent.name}'s sandbox. Check that sbx is running, then start ${agent.name} again.`);
           if (store === "some")
-            throw new WorkspaceRefusedError("shared-skills", "Recreate sandbox: it was made before HQ turned sbx's shared skills off, and that store has skills in it.");
+            throw new WorkspaceRefusedError("shared-skills", `${agent.name}'s sandbox was made before HQ turned sbx's shared skills off, and that store has skills in it. Press Recreate sandbox in Settings → Sandbox; its folder and code are kept.`);
         }
         // No env file reaches any agent in M0 and M1 (D2, SR-E-13): no secret value goes into a sandbox.
         const hasEnvFile = false;
@@ -350,6 +350,9 @@ export class Sessions {
     if (r.drift.changed.length || r.drift.extra.length || r.drift.missing.length) audit("skill.drift", { ...r.drift });
     const line = skillsMissingText(name, r.refused, missing);
     if (line) hub.activity("session", id, line);
+    // A folder moved out of the agent's folder (perhaps the owner's own, in a chosen folder) is said in the feed too.
+    const moved = skillsMovedText(name, r.drift);
+    if (moved) hub.activity("session", id, moved);
   }
 
   private async stopNow(id: string) {
@@ -463,7 +466,7 @@ export class Sessions {
     return false;
   }
 
-  /** Removes the agent's sandbox and starts a fresh one (applies new CPU/memory). The folder is kept. */
+  /** Removes the agent's sandbox and starts a fresh one (new CPU/memory, sbx's shared skills off). The folder is kept. */
   private async recreateNow(id: string) {
     const agent = this.hub.cfg(id);
     if (!agent || agent.mode !== "sandbox") return;
@@ -477,7 +480,7 @@ export class Sessions {
     }
     this.forgetSandbox(id);
     this.hub.setSession(id, { state: "stopped", detail: null });
-    this.hub.activity("session", id, `Recreating ${agent.name}'s sandbox with new resources`);
+    this.hub.activity("session", id, `Recreating ${agent.name}'s sandbox`);
     await this.startNow(id);
   }
 

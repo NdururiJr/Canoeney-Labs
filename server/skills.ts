@@ -99,6 +99,15 @@ export function skillsMissingText(agentName: string, refused: { skill: string; r
 }
 
 /**
+ * The start's activity line for skill folders it moved aside, or null. No host path:
+ * supervisors see the feed. The audit row names where they went.
+ */
+export function skillsMovedText(agentName: string, drift: Pick<SkillDrift, "changed" | "extra">): string | null {
+  const n = drift.changed.length + drift.extra.length;
+  return n ? `${agentName}: moved ${n} skill folder${n === 1 ? "" : "s"} aside (see the audit log)` : null;
+}
+
+/**
  * Measures a changed or extra entry with lstat, links not followed, and stops as
  * soon as it passes the cap: an agent could fill its folder with millions of
  * files, and this runs on the host at every start. Counts regular files and

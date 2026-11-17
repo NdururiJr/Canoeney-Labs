@@ -97,7 +97,7 @@ test("an old sandbox starts only while sbx's shared skills store is empty", asyn
   const refused: [Answer, RegExp][] = [
     [
       "some",
-      /^Recreate sandbox: it was made before HQ turned sbx's shared skills off, and that store has skills in it\./,
+      /^.+'s sandbox was made before HQ turned sbx's shared skills off, and that store has skills in it\. Press Recreate sandbox in Settings → Sandbox; its folder and code are kept\.$/,
     ],
     ["unknown", /^HQ couldn't read sbx's shared skills store, so it can't tell whether skills would reach .+'s sandbox\. Check that sbx is running, then start .+ again\.$/],
   ];
@@ -195,6 +195,21 @@ test("recreating a sandbox records skills off", async (t) => {
   const now = hq.company.skills.skillsOffAt(cid);
   assert.equal(now, hq.clock.now().toISOString());
   assert.notEqual(now, first, "the record is of the new sandbox");
+  // No size changed, so the line says only that the sandbox is recreated.
+  const name = hq.hub.cfg("ana")!.name;
+  assert.ok(hq.hub.snap.activity.some((e) => e.text === `Recreating ${name}'s sandbox`), JSON.stringify(hq.hub.snap.activity.map((e) => e.text)));
+});
+
+test("a start refused for sbx's shared skills recovers with Recreate sandbox", async (t) => {
+  const { hq, sessions, backend, state, cid } = await setup(t, "some");
+  state.exists = true;
+  await sessions.start("ana", OWNER);
+  assert.equal(hq.hub.status("ana")?.session.state, "failed");
+  assert.match(hq.hub.status("ana")?.session.detail ?? "", /Settings → Sandbox/);
+  await sessions.recreate("ana");
+  assert.equal(hq.hub.status("ana")?.session.state, "running", hq.hub.status("ana")?.session.detail ?? "");
+  assert.equal(backend.created[0].spec.args[backend.created[0].spec.args.indexOf("--skills") + 1], "off");
+  assert.equal(hq.company.skills.skillsOffAt(cid), hq.clock.now().toISOString());
 });
 
 test("a removed sandbox's record is cleared", async (t) => {
