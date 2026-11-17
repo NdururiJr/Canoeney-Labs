@@ -39,17 +39,37 @@ export function isAgentConfigPath(rel: string): boolean {
   return CONFIG_FILES.has(parts[parts.length - 1]) || parts.slice(0, -1).some((p) => CONFIG_DIRS.has(p));
 }
 
+const NEEDS_GIT = "HQ needs git 2.37 or later to keep the repo's agent settings out of agent folders";
+
+/** The version `git version` prints ("git version 2.51.0.windows.1" → [2, 51]), or null when it names none. */
+export function parseGitVersion(out: string): [number, number] | null {
+  const m = /^git version (\d+)\.(\d+)(?:\.|\s|$)/.exec(out.trim());
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+type GitVersionRead = () => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+
 /**
  * Applies the sparse patterns to a clone. Needs git 2.37 or later:
  * `sparse.expectFilesOutsideOfPatterns` keeps a path skip-worktree when HQ
  * writes its own skill copy where the repo tracks one (M0-F), so git status
- * stays clean and a commit leaves the repo's file unchanged.
+ * stays clean and a commit leaves the repo's file unchanged. Git 2.35 and 2.36
+ * accept that setting and ignore it, so the version is read first; a version
+ * HQ cannot read is refused too.
  */
-export async function isolateClone(dir: string): Promise<void> {
+export async function isolateClone(dir: string, o: { gitVersion?: GitVersionRead } = {}): Promise<void> {
   const failed = (r: { stderr: string; stdout: string }) => {
     const first = (r.stderr || r.stdout).trim().split("\n")[0] ?? "";
-    return new Error(`HQ needs git 2.37 or later to keep the repo's agent settings out of agent folders: ${first}`);
+    return new Error(`${NEEDS_GIT}: ${first}`);
   };
+  const v = await (o.gitVersion ?? (() => run("git", ["version"], { cwd: dir })))();
+  const version = v.ok ? parseGitVersion(v.stdout) : null;
+  if (!version) {
+    const said = (v.stdout || v.stderr).trim().split("\n")[0] ?? "";
+    throw new Error(`${NEEDS_GIT}, and it couldn't read this machine's git version${said ? ` (${said})` : ""}. Check that git runs, then start again.`);
+  }
+  const [major, minor] = version;
+  if (major < 2 || (major === 2 && minor < 37)) throw new Error(`${NEEDS_GIT}: this machine has git ${major}.${minor}. Update git, then start again.`);
   const c = await run("git", ["config", "sparse.expectFilesOutsideOfPatterns", "true"], { cwd: dir });
   if (!c.ok) throw failed(c);
   const r = await run("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], { cwd: dir, input: AGENT_CONFIG_PATTERNS.join("\n") + "\n", timeoutMs: 120_000 });

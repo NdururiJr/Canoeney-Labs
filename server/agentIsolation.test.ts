@@ -6,7 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { HqConfig } from "../src/data/types";
 import { adapters, CODEX_CONFIG } from "./adapters";
-import { AGENT_CONFIG_PATTERNS, isAgentConfigPath } from "./agentIsolation";
+import { AGENT_CONFIG_PATTERNS, isAgentConfigPath, isolateClone } from "./agentIsolation";
 import { MCP_CONFIG, ROLE_FILE } from "./agentFiles";
 import { managedWorkspace } from "./paths";
 import type { RepoInfo } from "./repo";
@@ -218,4 +218,48 @@ test("agent configuration is matched whatever its letter case, on every platform
 test("a repo that commits a case variant of one of HQ's own files is refused", async (t) => {
   const { repo } = setup(t, { ".JSMHQ-ROLE.md": "committed" });
   await assert.rejects(ensureWorkspace(builder(), "demo", repo), /commits \.JSMHQ-ROLE\.md/);
+});
+
+// M0-F final review: on git 2.35 and 2.36 `git config sparse.expectFilesOutsideOfPatterns true`
+// succeeds and does nothing, so HQ's copy of a tracked skill would show as a change and be committed.
+// HQ reads git's version first and refuses anything older than 2.37, or a version it cannot read.
+test("HQ refuses a git older than 2.37, and a git version it cannot read", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "hq git version "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fresh = (name: string) => {
+    const dir = join(root, name);
+    mkdirSync(dir);
+    git(dir, "init", "-q");
+    return dir;
+  };
+  const sparse = (dir: string) => {
+    try {
+      return git(dir, "config", "--get", "core.sparseCheckout").trim();
+    } catch {
+      return "";
+    }
+  };
+  const version = (stdout: string, ok = true) => async () => ({ ok, code: ok ? 0 : 1, stdout, stderr: ok ? "" : "git: not found" });
+  for (const v of ["git version 2.36.1", "git version 2.36.0.windows.1", "git version 2.35.8", "git version 1.99.0"]) {
+    const dir = fresh(`old ${v.replace(/[^0-9]/g, "")}`);
+    await assert.rejects(isolateClone(dir, { gitVersion: version(v) }), (err: Error) => {
+      assert.match(err.message, /^HQ needs git 2\.37 or later to keep the repo's agent settings out of agent folders: this machine has git \d+\.\d+/, v);
+      return true;
+    });
+    assert.equal(sparse(dir), "", `${v}: nothing was set`);
+  }
+  for (const [v, ok] of [["git version", true], ["", true], ["not git at all", true], ["git version 2.51.0", false]] as const) {
+    const dir = fresh(`unread ${Math.random().toString(36).slice(2)}`);
+    await assert.rejects(isolateClone(dir, { gitVersion: version(v, ok) }), (err: Error) => {
+      assert.match(err.message, /^HQ needs git 2\.37 or later to keep the repo's agent settings out of agent folders, and it couldn't read this machine's git version/, JSON.stringify(v));
+      return true;
+    });
+    assert.equal(sparse(dir), "", `${JSON.stringify(v)}: nothing was set`);
+  }
+  for (const v of ["git version 2.37.0", "git version 2.51.0.windows.1", "git version 3.0.0"]) {
+    const dir = fresh(`new ${v.replace(/[^0-9]/g, "")}`);
+    await isolateClone(dir, { gitVersion: version(v) });
+    assert.equal(sparse(dir), "true", v);
+    assert.equal(git(dir, "config", "--get", "sparse.expectFilesOutsideOfPatterns").trim(), "true", v);
+  }
 });
