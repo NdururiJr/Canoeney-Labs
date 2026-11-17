@@ -11,6 +11,7 @@ What HQ does behind the office: where agents work, how they talk, what reaches G
 - [Terminals, links and ports](#terminals-links-and-ports)
 - [Action items](#action-items)
 - [Your stack](#your-stack)
+- [Skills](#skills)
 - [MCP servers](#mcp-servers)
 - [App variables and keys](#app-variables-and-keys)
 - [Settings you can change any time](#settings-you-can-change-any-time)
@@ -53,7 +54,7 @@ Agents never load the repo's own agent settings. The clone leaves out `CLAUDE.md
 - **Agents read `CLAUDE.md` only as the copy you approved.** When the repo's `CLAUDE.md` is new or has changed, **Action items** shows its text (as text an agent may have written, not rendered) with **Approve with PIN**. Approved copies are numbered and kept. Agents get the latest one in their role at their next start, for Claude Code and Codex alike. Until you approve, they keep the previous version, or have no project notes.
 - **What HQ offers:** only a regular file at the repo's root, of at most 20,000 characters. A link is not offered. If the file changes between your reading it and your PIN, the approval is refused: read it again.
 - **Agents can't see or change these files.** They are outside the agent's checkout, and `git add` refuses them there. So a task such as "update CLAUDE.md" can't go to an agent: edit the file yourself, then approve the new version.
-- **A skill the repo commits under `.claude/skills/` or `.agents/skills/`** isn't installed. If the stack has a skill with the same name, the agent starts without it, and the activity feed says so.
+- **A skill the repo commits under `.claude/skills/` or `.agents/skills/`** isn't loaded. Agents get only the [skills you pinned](#skills). If the repo has a skill with the same name as one of theirs, the agent gets HQ's copy, and `git status` in its folder stays clean.
 
 ## Messages between agents
 
@@ -90,6 +91,7 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 **Each agent works on GitHub as its own App** (Settings → Team → Create GitHub identity). You create it from a link HQ prepares and install it on the project's repo only, about a minute per agent, once.
 - **Its token lasts an hour and works on one repo.** It can push the agent's own branches (`<agent>/…`) and open pull requests, nothing else.
 - **HQ cancels it** when the agent stops, is paused or retired, or HQ stops.
+- **If GitHub can't be reached when HQ renews a token,** HQ keeps the working one and tries once more after a minute. If that fails too, the agent's activity says when its token stops working.
 - **No GitHub key is shared by every sandbox.** HQ starts no agent while one exists.
 
 **GitHub itself enforces the limits.** Settings → Project → GitHub protection shows the repo's settings, checked when the project opens and daily, and **Apply protection** sets them with your PIN:
@@ -101,6 +103,8 @@ Agents talk to each other and to HQ through an MCP server called `hq`, which HQ 
 - the repo holds no repository secrets.
 
 CODEOWNERS and workflow files are yours: HQ reads them, never writes them.
+
+The **Settings** button shows a mark while the GitHub protection check, or the [skills repo check](#skills), has something to report.
 
 HQ reads your PRs, checks and review comments with your `gh` login, about every 20 seconds.
 
@@ -122,7 +126,7 @@ Each agent in Sandbox mode runs in its own [Docker Sandbox](https://docs.docker.
 - **When an agent needs a website** (a tool's docs or an API), it asks with the `request_access` tool instead of working around the block. Its card turns red and its drawer shows **Allow for this agent / Allow for everyone / Deny**.
 - **Blocked requests** the agent didn't ask about are listed too: the agent's card shows "N blocked", and its drawer lists them with **Allow / Dismiss**.
 - **Allowing a website** adds a rule for that sandbox only. Your base policy is never touched, and HQ only removes rules it added.
-- **CPU and memory** are set in Settings → Sandbox. A sandbox gets its size when it's created, so after changing it press **Recreate sandbox**. Stop and Start keeps the old size. Recreating keeps the agent's folder and code but clears anything installed inside the sandbox.
+- **CPU and memory** are set in Settings → Sandbox. A sandbox gets its size when it's created, so after changing it press **Recreate sandbox**. Stop and Start keeps the old size. Recreating keeps the agent's folder and code but clears anything installed inside the sandbox. A start about skills can ask for it too (see [Skills](#skills)).
 
 ## Terminals, links and ports
 
@@ -149,10 +153,47 @@ Mark a request **Done** (with an optional note) or **Dismiss** it, and HQ tells 
 Optional. In Settings → Stack (or during the welcome), pick what the project uses: frameworks, plus tools for auth, payments, database, analytics and security. You can also add your own under "Other".
 
 - Agents see the stack in their instructions.
-- Each tool's official agent skills are installed into the agents' folders (`.claude/skills`, `.agents/skills`), kept out of git.
+- Each tool's agent skills are installed into the agents' folders, kept out of git, but only once you have pinned them in the company's skills repo (see [Skills](#skills)). Until then an agent's start says which ones are missing.
 - One click allows every tool's docs and API websites for all sandboxes.
 
 Skip it and nothing changes.
+
+## Skills
+
+A skill is a folder of instructions an agent can load, such as "write the test first" or "check before you say it's done". Skills change how agents behave, so HQ lets them come from one place only, and only the ones you have approved.
+
+**Where they come from.** The company's skills repo, `NdururiJr/canoeney-skills` on GitHub. Each skill in it is a copy of a public skill that you reviewed, with its source and licence kept beside it. HQ installs nothing from anywhere else.
+
+**Pinning a commit.** A commit is one saved version of the repo. You approve one version at a time, in **Settings → Skills**:
+1. Paste the 40-character commit code and press **Preview**. HQ reads that version without running anything in it. It lists the skills added, changed and removed, the files that are scripts, and the roles that would lose a skill. It links to the commit and to the comparison with your current pin, so you can read what you are approving.
+2. Press **Confirm with PIN**. HQ saves its own copy of every skill in that version, with a fingerprint of each.
+
+Only a commit on the repo's main branch can be pinned. A commit someone proposed in a pull request is refused. So is a version holding a link, a file path that leaves its folder, a name Windows can't hold, or a skill over 256 files or 2 MiB. One refusal refuses the whole pin.
+
+**The repo itself is checked.** When you pin, and once a day, HQ reads the repo's settings. Its main branch can't be deleted or overwritten, you are the only person who can write to it, it has no write key, and none of your agents' GitHub Apps is installed on it. If something is off, the **Settings** button shows a mark and Settings → Skills lists what. HQ can't see other people's GitHub Apps, so look yourself now and then: on the repo's page on GitHub, open **Settings → GitHub Apps**. The list should be empty.
+
+**Role sets.** Each role starts with a set of skills, shown under **What each role gets**:
+
+| Role | Skills |
+| --- | --- |
+| Builder | test-driven-development, systematic-debugging, verification-before-completion, executing-plans |
+| CTO | writing-plans, requesting-code-review, brainstorming |
+| CEO and CIO | verification-before-completion |
+
+Other roles have none. You can change a role's set, or grant one agent an extra skill in **Settings → Team**. Both ask for your PIN and apply at the agent's next start. Only pinned skills are on offer.
+
+**What happens at every start.** HQ puts the agent's skills into its folder (`.claude/skills` for Claude Code, `.agents/skills` for Codex) from its own saved copies, and checks each one against its fingerprint first. The skills are the agent's role set, anything you granted it, and the pinned skills of your stack. **A start fetches nothing from the internet and runs nothing a skill contains.** A stack skill that isn't pinned yet is named as missing, and the agent starts without it.
+
+**A changed or extra skill.** An agent may edit an installed skill or add one of its own. At its next start HQ puts the pinned set back. It does not delete the other folder: it moves it to `<project folder>/_skills-removed/<agent>/<date and time>/` and keeps the newest 5 moves per agent. The audit trail records what moved and where. It also records a first start, when the pinned skills are new to that agent.
+
+**When a start is refused.** The message names the exact path and the one thing to do:
+- `.claude`, `.agents` or a skills folder in the agent's folder is a link. Delete that link. HQ won't install through it.
+- A skill folder the agent changed or added holds more than 256 files or 2 MiB. HQ won't move something that big, because it may be your own work. Move that folder out of the agent's folder.
+- In one of HQ's own clones, an agent-settings file the repo tracks (such as `CLAUDE.md`) was written back into the agent's folder. Git can't see it, so HQ names it. Delete that file.
+
+**In a sandbox.** Docker Sandboxes can give every sandbox skills from its own shared store. HQ creates new sandboxes with that store off. An older sandbox starts only while the store is empty. If it isn't, the start says so: press **Recreate sandbox**. Use the same button if you removed or recreated a sandbox outside HQ, because HQ's record of it may be out of date. HQ also refuses a start when it can't read sbx's sandbox list or its skills store.
+
+**A known limit.** A skill an agent writes into its own sandbox home (`~/.claude/skills` inside the sandbox) stays until you press **Recreate sandbox**. It reaches that agent only. M1 closes this gap.
 
 ## MCP servers
 
@@ -181,6 +222,7 @@ HQ never stores key values and never reads your env files.
 | Font: Pixel, Clean or Mono | Settings → Project | Right away, in this browser only. The office itself stays pixel. |
 | Review tool | Settings → Workflow | Right away |
 | Agents, roles, CLI, mode | Settings → Team | Next time the agent starts |
+| Pinned skills, role sets, an agent's extra skills | Settings → Skills, Settings → Team | Next time each agent starts (asks for your PIN) |
 | CPU and memory | Settings → Sandbox | After **Recreate sandbox** |
 | MCP servers per agent | Settings → MCP | Right away for new servers |
 
@@ -196,11 +238,13 @@ HQ never stores key values and never reads your env files.
 
 **Upgrading from an older HQ:** an older HQ kept the team in `.jsmhq/config.json` and the tasks in `.jsmhq/plan.json`. HQ no longer reads them by itself. The welcome screen offers **Review import from .jsmhq/config.json**: it lists everything the import would loosen, with the file's values shown as text an agent may have written. Import it with your PIN, or set up a new team instead. If the file changes after you review it, the import is refused, so review it again. The import runs once. Afterwards you can delete the two files.
 
+**Skills after an upgrade:** HQ no longer installs skills with `npx skills add`. See [Skills](#skills) and the [release notes](../CONTRIBUTING.md#release-notes).
+
 **Remove a project:** delete each agent in Settings → Team (this removes its sandbox and, if you choose, its folder), then delete `~/.jsmhq/<project>`.
 
 ## Company store
 
-HQ keeps a company record, separate from the per-project folders above, in `~/.jsmhq/_company/company.db`. Set `HQ_COMPANY_HOME` to put it somewhere else.
+HQ keeps a company record, separate from the per-project folders above, in `~/.jsmhq/_company/company.db`. Set `HQ_COMPANY_HOME` to put it somewhere else. Next to it, `skills/` holds HQ's saved copy of every pinned skill.
 
 It holds the company data model, a tamper-evident audit chain of what happened and who did it, agent and client memory, company knowledge, and the alert outbox the dashboard reads.
 
