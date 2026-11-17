@@ -163,7 +163,7 @@ When an agent needs a website its sandbox blocks (a tool's docs, an API), it ask
 | Agents can't push or open PRs | Give the agent its GitHub identity (Settings → Team → Create GitHub identity) and install it on the project's repo; check the repo has a GitHub `origin` (step 5). |
 | A Codex agent waits on "Do you trust this folder?" | Answer it once in the agent's terminal. HQ never answers trust prompts for you. |
 | A start says a skill is missing | The skill isn't pinned yet. Pin the commit that holds it (step 7). |
-| A start says "Recreate sandbox" because of skills | That sandbox was made before HQ turned sbx's shared skills store off, and the store now holds skills. Recreate that agent's sandbox (the **Recreate sandbox** button). Its folder and code are kept. |
+| A start says "Press Recreate sandbox" because of skills | That sandbox was made before HQ turned sbx's shared skills store off, and the store now holds skills. Open **Settings → Sandbox**, pick the agent and press **Recreate sandbox**. Its folder and code are kept. |
 | A start says a skills folder or file is a link, or too big | Follow the message: delete the link, or move the named folder out of the agent's folder. |
 | "Port 7420 is in use" | Another HQ is running. Stop it or use `--port 7421`. |
 | Windows: `listen EACCES` | Windows reserved that port. Use `--port 8420`. |

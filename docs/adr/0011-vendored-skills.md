@@ -120,6 +120,7 @@ The D1 agent-config check refuses a start when a tracked agent-configuration pat
 ## Known limits
 
 - **A skill an agent writes to its sandbox home stays until "Recreate sandbox".** An agent can write a skill to its own sandbox home (`~/.claude/skills` inside the sandbox). Its CLI loads it, and it stays until the sandbox is recreated. HQ's re-sync covers the two workspace folders only. The skill reaches only that agent, as T-S6.10 does. The overview carries it to Security & Audit (M1.8).
+- **A skill an agent writes in a nested folder of its own workspace stays, even after "Recreate sandbox".** Claude Code also finds skills in nested folders such as `src/.claude/skills/x/SKILL.md`. HQ re-syncs only the two top-level folders (`.claude/skills`, `.agents/skills`), and "Recreate sandbox" keeps the workspace, so such a skill survives both. It reaches only that agent. Carried to Security & Audit (M1.8) with the sandbox-home limit.
 - **A sandbox removed or recreated outside HQ leaves HQ's skills-off record stale.** The record says HQ made that agent's sandbox with skills off. If the owner removes or recreates the sandbox with sbx directly, the record is not updated. HQ decides "new or existing" only from a readable `sbx ls`, and refuses the start whenever it cannot read the list. The remaining risk is a sandbox recreated outside HQ without `--skills off`, which the stale record would then let start.
 - **Third-party Apps on the skills repo** cannot be listed with the owner's `gh`. The M0 exit check covers them by hand.
 

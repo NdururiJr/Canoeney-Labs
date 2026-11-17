@@ -18,7 +18,7 @@ Agents run **Claude Code** or **Codex**. Everything runs on your machine.
 - **Safe by default.** Each agent works in its own Docker Sandbox, a small VM that can't touch the rest of your computer. Websites are blocked until you allow them.
 - **You stay in charge.** Anything an agent needs from you (a decision, an API key, a blocked website) shows up in **Action items**. HQ never merges for you.
 - **Your workflow.** Pull requests on GitHub, reviewed by CodeRabbit, Greptile, Copilot or you.
-- **Knows your stack.** Pick your tools (Next.js, Clerk, Stripe, Supabase…) and agents get their official agent skills and docs access.
+- **Knows your stack.** Pick your tools (Next.js, Clerk, Stripe, Supabase…) and agents get docs access, plus each tool's agent skills once they are vendored into the company's skills repo and pinned.
 
 ## Quick start
 

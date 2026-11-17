@@ -126,7 +126,7 @@ Each agent in Sandbox mode runs in its own [Docker Sandbox](https://docs.docker.
 - **When an agent needs a website** (a tool's docs or an API), it asks with the `request_access` tool instead of working around the block. Its card turns red and its drawer shows **Allow for this agent / Allow for everyone / Deny**.
 - **Blocked requests** the agent didn't ask about are listed too: the agent's card shows "N blocked", and its drawer lists them with **Allow / Dismiss**.
 - **Allowing a website** adds a rule for that sandbox only. Your base policy is never touched, and HQ only removes rules it added.
-- **CPU and memory** are set in Settings → Sandbox. A sandbox gets its size when it's created, so after changing it press **Recreate sandbox**. Stop and Start keeps the old size. Recreating keeps the agent's folder and code but clears anything installed inside the sandbox. A start about skills can ask for it too (see [Skills](#skills)).
+- **CPU and memory** are set in Settings → Sandbox. A sandbox gets its size when it's created, so after changing it press **Recreate sandbox** there. Stop and Start keeps the old size. Recreating keeps the agent's folder and code but clears anything installed inside the sandbox. The button is there whenever the agent has a sandbox, because a start about skills can ask for it too (see [Skills](#skills)).
 
 ## Terminals, links and ports
 
@@ -184,7 +184,7 @@ Other roles have none. You can change a role's set, or grant one agent an extra 
 
 **What happens at every start.** HQ puts the agent's skills into its folder (`.claude/skills` for Claude Code, `.agents/skills` for Codex) from its own saved copies, and checks each one against its fingerprint first. The skills are the agent's role set, anything you granted it, and the pinned skills of your stack. **A start fetches nothing from the internet and runs nothing a skill contains.** A stack skill that isn't pinned yet is named as missing, and the agent starts without it.
 
-**A changed or extra skill.** An agent may edit an installed skill or add one of its own. At its next start HQ puts the pinned set back. It does not delete the other folder: it moves it to `~/.jsmhq/<project>/_skills-removed/<agent>/<date and time>/` (for a company-level agent, the same under the company home) and keeps the newest 5 moves per agent. The audit trail records what moved and where. It also records a first start, when the pinned skills are new to that agent.
+**A changed or extra skill.** An agent may edit an installed skill or add one of its own. At its next start HQ puts the pinned set back. It does not delete the other folder: it moves it to `~/.jsmhq/<project>/_skills-removed/<agent>/<date and time>/` (for a company-level agent, the same under the company home) and keeps the newest 5 moves per agent. The audit trail records what moved and where, and the activity feed says how many folders were moved aside. The audit trail also records a first start, when the pinned skills are new to that agent.
 
 **When a start is refused.** The message names the exact path and the one thing to do:
 - `.claude`, `.agents` or a skills folder in the agent's folder is a link. Delete that link. HQ won't install through it.
@@ -192,9 +192,11 @@ Other roles have none. You can change a role's set, or grant one agent an extra 
 - The skills folder itself (`.claude/skills` or `.agents/skills`) holds more than 256 entries. HQ won't sort it. Move the extra folders out of it.
 - In one of HQ's own clones, an agent-settings file the repo tracks (such as `CLAUDE.md`) was written back into the agent's folder. Git can't see it, so HQ names it. Delete that file.
 
-**In a sandbox.** Docker Sandboxes can give every sandbox skills from its own shared store. HQ creates new sandboxes with that store off. An older sandbox starts only while the store is empty. If it isn't, the start says so: press **Recreate sandbox**. Use the same button if you removed or recreated a sandbox outside HQ, because HQ's record of it may be out of date. HQ also refuses a start when it can't read sbx's sandbox list or its skills store.
+**In a sandbox.** Docker Sandboxes can give every sandbox skills from its own shared store. HQ creates new sandboxes with that store off. An older sandbox starts only while the store is empty. If it isn't, the start says so: press **Recreate sandbox** in Settings → Sandbox. Use the same button if you removed or recreated a sandbox outside HQ, because HQ's record of it may be out of date. HQ also refuses a start when it can't read sbx's sandbox list or its skills store.
 
-**A known limit.** A skill an agent writes into its own sandbox home (`~/.claude/skills` inside the sandbox) stays until you press **Recreate sandbox**. It reaches that agent only. M1 closes this gap.
+**Known limits.** Each reaches only that agent, and both are carried to M1 (Security & Audit, M1.8).
+- A skill an agent writes into its own sandbox home (`~/.claude/skills` inside the sandbox) stays until you press **Recreate sandbox** in Settings → Sandbox.
+- A skill an agent writes into a nested folder of its own workspace (for example `src/.claude/skills/x/SKILL.md`) is found by Claude Code too. HQ re-syncs only the two top-level skills folders, so it stays, and **Recreate sandbox** keeps it too, because the agent's folder is kept. Delete it from the agent's folder by hand.
 
 ## MCP servers
 
