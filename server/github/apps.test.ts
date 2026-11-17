@@ -162,3 +162,38 @@ test("creating a GitHub identity needs the owner's PIN and a local session", asy
   assert.deepEqual(await hq.dashboard.dispatch(base, { cmd: "createGithubIdentity", args: ["ana"] }), { ok: false, error: "pin-required" });
   assert.equal(hq.company.db.prepare("SELECT count(*) AS n FROM agent_github_apps").get<{ n: number }>()?.n, 0);
 });
+
+test("old manifest states are pruned", async (t) => {
+  const { a, clock, company } = apps(t);
+  const old = a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420");
+  clock.advance(10 * 60_000);
+  const edge = a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420"); // `old` is exactly 10 minutes old: not older, so kept
+  clock.advance(1);
+  a.start("site/ana", "acme/site", "owner", "s1", "http://127.0.0.1:7420"); // `old` is now older than 10 minutes: dropped
+  const reason = (state: string) => a.complete(state, "c", "owner", "s1").then(() => null, (e: unknown) => (e instanceof GitHubAppRefusedError ? e.reason : "other"));
+  assert.equal(await reason(old.state), "unknown-state", "HQ no longer knows a state older than 10 minutes");
+  assert.deepEqual(company.audit.query({ action: "github.app-refused" }).map((r) => r.data.reason), ["unknown-state"]);
+  assert.equal(await reason(edge.state), null, "a state inside its 10 minutes still completes");
+});
+
+test("SR-D-06 a company-level agent gets no GitHub identity", async (t) => {
+  const stub = new Proxy({} as Record<string, unknown>, { get: () => async () => {} }) as never;
+  const hq = await makeHq(t, { commands: ({ hub, planner, inbox, company }) => makeCommands(hub, stub, planner, inbox, stub, stub, company) });
+  await hq.enroll();
+  (hq.hub.repo as { github: string | null }).github = "acme/site";
+  const ctx: CommandCtx = { actor: { kind: "human", id: "owner" }, role: "owner", remote: false, sessionId: "s1", projectId: hq.slug, origin: "http://127.0.0.1:7420" };
+  const call = () => hq.dashboard.dispatch(ctx, { cmd: "createGithubIdentity", args: ["ana"], pin: OWNER_PIN });
+  // Control: a builder gets the manifest.
+  assert.equal((await call()).ok, true);
+  const before = hq.company.audit.query({}).length;
+  for (const role of ["ceo", "cio", "security-audit"] as const) {
+    hq.company.agents.setRole(hq.slug, "ana", role, { kind: "human", id: "owner" });
+    assert.deepEqual(await call(), { ok: false, error: "failed", message: "Company-level agents don't reach GitHub (SR-D-06)." }, role);
+  }
+  // The refusal is audited with the owner as the actor, and nothing was started or stored.
+  const rows = hq.company.audit.query({ action: "dashboard.command-failed" });
+  assert.deepEqual([rows.length, rows[0]?.actorId, rows[0]?.data.cmd], [3, "owner", "createGithubIdentity"]);
+  assert.equal(hq.company.db.prepare("SELECT count(*) AS n FROM agent_github_apps").get<{ n: number }>()?.n, 0);
+  assert.equal(hq.company.agents.get(hq.slug, "ana")?.role, "security-audit", "the role is unchanged");
+  assert.ok(hq.company.audit.query({}).length > before);
+});

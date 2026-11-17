@@ -63,6 +63,8 @@ export class GitHubApps {
   start(companyAgentId: string, repo: string, humanId: string, sessionId: string, origin: string): { url: string; manifest: Record<string, unknown>; state: string } {
     const [project, agentId] = companyAgentId.split("/");
     const state = randomBytes(24).toString("base64url");
+    // A state nobody came back with is dropped once it is older than its lifetime (PR #12 review).
+    for (const [k, p] of this.pending) if (this.now() - p.at > STATE_TTL_MS) this.pending.delete(k);
     this.pending.set(state, { companyAgentId, humanId, sessionId, at: this.now(), used: false });
     const manifest = manifestFor({ project, agentId, repo, origin, rand: randomBytes(2).toString("hex") });
     return { url: `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`, manifest, state };

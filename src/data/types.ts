@@ -355,8 +355,8 @@ export interface GithubGuardState {
   repo: string;
   checkedAt: string;
   findings: { name: string; detail: string; fixable: boolean }[];
-  /** A private repo's Actions spending limit, as the owner confirmed it (SR-E-14). */
-  private: boolean;
+  /** GitHub's own `private` field for the repo; null when HQ could not read it. */
+  private: boolean | null;
 }
 
 /** What HQ last found wrong with the company skills repo's own settings (M0-F, SR-F-08). Owner only; null until a skills repo is pinned and checked. */

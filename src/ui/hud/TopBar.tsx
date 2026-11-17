@@ -6,6 +6,7 @@ import { ui, useUi } from "../../store/ui";
 import { LogoutButton } from "../auth/AuthScreens";
 import { AddProjectDialog } from "../setup/AddProjectDialog";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { SettingsButton } from "./SettingsButton";
 
 const SPEEDS: SimSpeed[] = [1, 2, 4];
 
@@ -141,9 +142,7 @@ export function TopBar() {
           Terminal
         </button>
       </div>
-      <button className="btn text-[14px]" onClick={() => ui.openSettings("team")}>
-        Settings
-      </button>
+      <SettingsButton snap={snap} onOpen={(tab) => ui.openSettings(tab)} />
       <LogoutButton />
       <button className="btn text-[14px]" aria-pressed={debugOpen} onClick={() => ui.toggleDebug()} title="Debug panel (D)">
         Debug

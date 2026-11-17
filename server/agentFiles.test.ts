@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { codexConfig } from "./adapters";
+import { adapters, codexConfig } from "./adapters";
 import { HOOK_AUTH, hookCommand, writeClaudeFiles } from "./agentFiles";
 import { HQ_OWN_FILES } from "./agentIsolation";
 import { agentWrite } from "./lib/agentFs";
@@ -86,4 +86,23 @@ test("a write with a mode goes through a fresh file and a rename", (t) => {
     [],
     "no temporary file is left behind",
   );
+});
+
+// PR #12 review: a crash between agentWrite's temporary file and its rename leaves `.<name>.hq-tmp-<hex>`; it must never be committed.
+test("a leftover temporary file of HQ is git-excluded in every agent folder", async (t) => {
+  const agent = newAgent("ana", "Ana", "Developer", "#000000", false);
+  const leftovers = [`.${HOOK_AUTH.split("/").at(-1)}.hq-tmp-0a1b2c3d4e5f`, ".settings.local.json.hq-tmp-0a1b2c3d4e5f"];
+  for (const cli of ["claude", "codex"] as const) {
+    const dir = folder(t);
+    if (cli === "claude") writeClaudeFiles(dir, agent, cfg, SECRET, extras);
+    else await adapters.codex.writeFiles(dir, { ...agent, cli: "codex" }, cfg, SECRET, extras);
+    assert.ok(readFileSync(join(dir, ".git", "info", "exclude"), "utf8").split(String.fromCharCode(10)).includes(".*.hq-tmp-*"), `${cli}: the exclude file holds the pattern`);
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    for (const name of leftovers) {
+      writeFileSync(join(dir, name), "half a secret");
+      writeFileSync(join(dir, ".claude", name), "half a secret");
+    }
+    const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: dir, encoding: "utf8" });
+    assert.equal(/hq-tmp/.test(status), false, `${cli}: git does not see the leftovers: ${status}`);
+  }
 });

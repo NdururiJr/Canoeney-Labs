@@ -48,7 +48,8 @@ export function createWsSource(): OfficeDataSource {
   let seq = 0;
   /** The project this tab views; sent again after a reconnect, which starts on HQ's default. */
   let viewing: string | null = null;
-  const githubReturn = takeGithubReturn();
+  /** The one-time code GitHub sent back with: sent on the first open socket, then forgotten (it works once). */
+  let githubReturn = takeGithubReturn();
 
   const transmit = (cmd: string, args: unknown[], pin?: string) => {
     const id = `c${++seq}`;
@@ -96,7 +97,11 @@ export function createWsSource(): OfficeDataSource {
           ws = sock;
           onStatus?.("open");
           if (viewing) sock.send(JSON.stringify({ type: "select", projectId: viewing }));
-          if (githubReturn) transmit("completeGithubIdentity", [githubReturn.state, githubReturn.code]);
+          if (githubReturn) {
+            const back = githubReturn;
+            githubReturn = null;
+            transmit("completeGithubIdentity", [back.state, back.code]);
+          }
           while (queue.length) sock.send(queue.shift() as string);
         };
         sock.onmessage = (m) => {

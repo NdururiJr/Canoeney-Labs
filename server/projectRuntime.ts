@@ -24,7 +24,7 @@ import { companyAgentId } from "./company/agents";
 import { AgentTokens, revokeOnStatus } from "./github/tokens";
 import { ghCliApi } from "./github/api";
 import { guardCommands, spendingConfirmed } from "./github/guardCommands";
-import { applyRepoGuard, RepoWatch, type GuardAgent } from "./github/repoGuard";
+import { applyRepoGuard, readGuardAgents, RepoWatch, type GuardAgent } from "./github/repoGuard";
 import { run } from "./lib/exec";
 import { runSetupChecks } from "./setup";
 
@@ -98,7 +98,15 @@ export class ProjectRuntime {
     const sbx = new Sbx(hub, company);
     sessions.envFileFor = (id) => (existsSync(sbx.envFile(id)) ? sbx.envFile(id) : null);
     // Each agent's own one-hour GitHub token (M0-E, SR-E-04, SR-E-07).
-    const tokens = new AgentTokens({ apps: company.githubApps, api: company.githubApi, sbx, clock: company.clock, audit: company.audit });
+    const tokens = new AgentTokens({
+      apps: company.githubApps,
+      api: company.githubApi,
+      sbx,
+      clock: company.clock,
+      audit: company.audit,
+      activity: (id, text) => hub.activity("config", id, text),
+      companyIdOf: (id) => companyAgentId(slug, id),
+    });
     sessions.github = {
       deliver: (id) => tokens.deliver(id, companyAgentId(slug, id), repo.github),
       revoke: (id, reason, by) => tokens.revoke(id, reason, by),
@@ -139,16 +147,8 @@ export class ProjectRuntime {
     planner.actions = new ActionItems(hub, planner);
     // The repo's GitHub protection, read with the owner's own gh login (M0-E Task 4).
     const ownerGh = ghCliApi(run);
-    const guardAgents = async (): Promise<GuardAgent[]> => {
-      const out: GuardAgent[] = [];
-      for (const a of company.agents.list(slug).filter((x) => x.status !== "retired")) {
-        const appId = company.githubApps.appId(a.companyId);
-        if (appId === null || !repo.github) continue;
-        const inst = await company.githubApps.installation(a.companyId, repo.github).catch(() => null);
-        out.push({ id: a.agentId, appId, installed: !!inst, selection: inst?.selection ?? null });
-      }
-      return out;
-    };
+    const guardAgents = (): Promise<GuardAgent[]> =>
+      repo.github ? readGuardAgents({ agents: company.agents.list(slug).filter((x) => x.status !== "retired"), repo: repo.github, apps: company.githubApps }) : Promise.resolve([]);
     const watch = repo.github
       ? new RepoWatch({
           api: ownerGh,
@@ -156,8 +156,8 @@ export class ProjectRuntime {
           agents: guardAgents,
           spendingConfirmed: () => spendingConfirmed(company, slug),
           audit: company.audit,
-          report: (findings) => {
-            hub.snap.githubGuard = { repo: repo.github!, checkedAt: company.clock.now().toISOString(), findings, private: findings.some((f) => f.name === "spending-limit-unconfirmed") || spendingConfirmed(company, slug) };
+          report: (findings, info) => {
+            hub.snap.githubGuard = { repo: repo.github!, checkedAt: company.clock.now().toISOString(), findings, private: info.private };
             hub.emit({ type: "github.guard", guard: structuredClone(hub.snap.githubGuard) });
           },
           notify: (text) => hub.activity("config", null, text),

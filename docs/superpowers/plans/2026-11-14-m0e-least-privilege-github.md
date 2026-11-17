@@ -447,6 +447,7 @@ On `NdururiJr/CanoeneyLabsWebste`, with HQ on Windows and a throwaway HQ home.
    - `GET /repos/{repo}/actions/secrets`;
    - pushing `.github/workflows/x.yml`.
 4. **SR-E-03.** With `ana`'s token, pushing to `lead/y` and creating a branch `other/z` are refused. Force-pushing `ana`'s own `ana/x` works (agents may rebase their own branches).
+   - Deleting an unclaimed branch (one the owner made, outside `main` and the agent patterns) with `ana`'s token is refused (M0-F Task 9).
 5. **SR-E-04.** With `ana`'s token, reading the named private repo is refused.
 6. **SR-E-07.** Pause `ana`; its token is refused by the next API call.
 7. **SR-E-10.** Covered by step 3's refused workflow push. The settings check confirms the read-only workflow token as the second layer.

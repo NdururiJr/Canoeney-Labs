@@ -60,6 +60,7 @@ Agents never load the repo's own agent settings. The clone leaves out `CLAUDE.md
 Agents talk to each other and to HQ through an MCP server called `hq`, which HQ runs for them.
 
 - The lead uses it to create boards and tasks and to assign them. Any agent can send a message.
+- **Task text is the lead's, not yours.** The dashboard has no command that sets task text: you can assign a task, send a message, and answer an action item, and HQ refuses a message or an answer that carries a key. A task's words are always the lead's, shown as text the lead wrote.
 - A message is delivered right away if the agent is idle, or when it finishes its current step if it's busy.
 - You can message any agent from the **Messages** tab in its drawer.
 

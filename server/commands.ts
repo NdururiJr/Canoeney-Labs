@@ -13,6 +13,7 @@ import { companyAgentId } from "./company/agents";
 import { AuthorityError, relaxes, type AgentField, type Authority, type ConfigChange } from "./company/authority";
 import { SKILL_NAME, SKILLS_REPO, SkillPinRefused } from "./company/companySkills";
 import { ROLE_IDS, type RoleId } from "./company/types";
+import { COMPANY_ROLES } from "./companyWorkspace";
 import { hasCredentialShape } from "./company/audit";
 import { ProjectRefusedError } from "./hqSource";
 import { GitHubAppRefusedError } from "./github/apps";
@@ -57,6 +58,7 @@ export const authorityOf = (ctx: CommandCtx): Authority => ({ via: ctx.pin === t
 /** A PIN rule from the store's own classifier, so the dashboard and the store cannot disagree (SR-D-03). */
 const pinIf = (changes: (args: unknown[]) => ConfigChange[]) => (args: unknown[]) => changes(args).some(relaxes);
 /** The first argument as an agent id or name, for the audit row. */
+const COMPANY_AGENT_NO_GITHUB = "Company-level agents don't reach GitHub (SR-D-06).";
 const first = (a: unknown[]) => (typeof a[0] === "string" ? a[0] : null);
 /** A proxy as host:port only: the user-info part can hold a password (SR-C-17). */
 const proxyHost = (u: string) => {
@@ -486,11 +488,14 @@ export function makeCommands(hub: Hub, sessions: Sessions, planner: Planner, inb
     createGithubIdentity: { role: "owner", pin: true, localOnly: true, returns: true, target: first, run: (ctx, id) => {
       const agentId = str(id, 80);
       if (!hub.cfg(agentId)) throw new Error("unknown agent");
+      // A company-level agent never reaches GitHub, so it gets no App to reach it with (SR-D-06).
+      const role = company.agents.get(hub.slug, agentId)?.role;
+      if (role && COMPANY_ROLES.includes(role)) throw new Error(COMPANY_AGENT_NO_GITHUB);
       const repo = hub.repo.github;
       if (!repo) throw new Error("This project has no GitHub repo.");
       if (!ctx.origin) throw new Error("no origin");
       return company.githubApps.start(cid(agentId), repo, ctx.actor.id, ctx.sessionId, ctx.origin);
-    }, explain: (err) => (err instanceof Error && /no GitHub repo/.test(err.message) ? err.message : null) },
+    }, explain: (err) => (err instanceof Error && (/no GitHub repo/.test(err.message) || err.message === COMPANY_AGENT_NO_GITHUB) ? err.message : null) },
 
     /** GitHub sent the browser back with a code: finish the App, then the page opens its install page. */
     completeGithubIdentity: { role: "owner", localOnly: true, returns: true, run: async (ctx, state, code) => {
