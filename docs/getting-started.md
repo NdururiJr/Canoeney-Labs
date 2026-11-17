@@ -129,7 +129,7 @@ Leave the terminal running while you work. On macOS and Linux, agents keep runni
 
 Skills are instructions that shape how agents work, such as "write the test first". HQ installs only skills you have approved from the company's skills repo, `NdururiJr/canoeney-skills`. Until you pin them, agents start with no skills. You do this once, then again whenever the repo changes and you want agents to have the change.
 
-1. Open **Settings → Skills**. Under **Skills repo**, HQ shows whether its checks of the repo found anything. If they list a problem, fix it on GitHub first. A pin can be refused while a problem is listed (an agent's GitHub App installed on the repo, for one).
+1. Open **Settings → Skills**. Before the first pin, **Skills repo** only says that nothing is pinned yet. Go on to the next steps. After you press **Preview**, any problem with the repo is listed in the preview. A pin is refused, and **Confirm with PIN** will not go through, while any problem is listed (an agent's GitHub App installed on the repo, for one). Fix it on GitHub, then preview again.
 2. On GitHub, open the repo's **Commits** page and copy the code (the 40-character SHA) of the newest commit on the main branch.
 3. Paste it into **Pin a commit** and press **Preview**. HQ lists the skills, which files are scripts, and links to the commit. Read them.
 4. Press **Confirm with PIN**.
@@ -163,7 +163,7 @@ When an agent needs a website its sandbox blocks (a tool's docs, an API), it ask
 | Agents can't push or open PRs | Give the agent its GitHub identity (Settings → Team → Create GitHub identity) and install it on the project's repo; check the repo has a GitHub `origin` (step 5). |
 | A Codex agent waits on "Do you trust this folder?" | Answer it once in the agent's terminal. HQ never answers trust prompts for you. |
 | A start says a skill is missing | The skill isn't pinned yet. Pin the commit that holds it (step 7). |
-| A start says "Recreate sandbox" because of skills | That sandbox is older than HQ's skills rules, or was changed outside HQ. Recreate that agent's sandbox (the **Recreate sandbox** button). Its folder and code are kept. |
+| A start says "Recreate sandbox" because of skills | That sandbox was made before HQ turned sbx's shared skills store off, and the store now holds skills. Recreate that agent's sandbox (the **Recreate sandbox** button). Its folder and code are kept. |
 | A start says a skills folder or file is a link, or too big | Follow the message: delete the link, or move the named folder out of the agent's folder. |
 | "Port 7420 is in use" | Another HQ is running. Stop it or use `--port 7421`. |
 | Windows: `listen EACCES` | Windows reserved that port. Use `--port 8420`. |

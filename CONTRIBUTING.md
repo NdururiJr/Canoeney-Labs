@@ -53,7 +53,7 @@ Upgrading:
 - **Pin the company's skills.** Until a commit is pinned, agents start with no skills. See [step 7 of the getting-started guide](docs/getting-started.md#7-pin-the-companys-skills).
 - **git 2.37 or newer is required** (it was 2.35). HQ says so at an agent's start if git is older.
 - **Old sandboxes may need "Recreate sandbox".** New sandboxes are created with sbx's shared skills store off. An older sandbox starts only while that store is empty. Its folder and code are kept.
-- **A skill installed by the old `npx` path that is over 256 files or 2 MiB will stop that agent's first start** after the upgrade, with a "move that folder out" message naming the folder. Move it out of the agent's folder and start the agent again. Smaller ones are moved aside for you into `<project folder>/_skills-removed/`.
+- **A skill installed by the old `npx` path that is over 256 files or 2 MiB will stop that agent's first start** after the upgrade, with a "move that folder out" message naming the folder. Move it out of the agent's folder and start the agent again. Smaller ones are moved aside for you into `~/.jsmhq/<project>/_skills-removed/`.
 - **Leftover `skills-cache` and `skills-owned` folders** in project homes (`~/.jsmhq/<project>/`) are no longer used. Delete them by hand if you want the space back.
 
 Also in this release (M0-E follow-ups): a GitHub token refresh that can't reach GitHub keeps the working token and retries once after a minute, and the Settings button shows a mark while the GitHub protection check or the skills repo check has findings.

@@ -170,7 +170,7 @@ A skill is a folder of instructions an agent can load, such as "write the test f
 
 Only a commit on the repo's main branch can be pinned. A commit someone proposed in a pull request is refused. So is a version holding a link, a file path that leaves its folder, a name Windows can't hold, or a skill over 256 files or 2 MiB. One refusal refuses the whole pin.
 
-**The repo itself is checked.** When you pin, and once a day, HQ reads the repo's settings. Its main branch can't be deleted or overwritten, you are the only person who can write to it, it has no write key, and none of your agents' GitHub Apps is installed on it. If something is off, the **Settings** button shows a mark and Settings → Skills lists what. HQ can't see other people's GitHub Apps, so look yourself now and then: on the repo's page on GitHub, open **Settings → GitHub Apps**. The list should be empty.
+**The repo itself is checked.** When you preview or pin, and once a day once something is pinned, HQ reads the repo's settings. Its main branch can't be deleted or overwritten, you are the only person who can write to it, it has no write key, and none of your agents' GitHub Apps is installed on it. If something is off, the preview lists it and **Confirm with PIN** will not go through until it is fixed. Once something is pinned, the **Settings** button also shows a mark and Settings → Skills lists what. HQ can't see other people's GitHub Apps, so look yourself now and then: on the repo's page on GitHub, open **Settings → GitHub Apps**. The list should be empty.
 
 **Role sets.** Each role starts with a set of skills, shown under **What each role gets**:
 
@@ -184,11 +184,12 @@ Other roles have none. You can change a role's set, or grant one agent an extra 
 
 **What happens at every start.** HQ puts the agent's skills into its folder (`.claude/skills` for Claude Code, `.agents/skills` for Codex) from its own saved copies, and checks each one against its fingerprint first. The skills are the agent's role set, anything you granted it, and the pinned skills of your stack. **A start fetches nothing from the internet and runs nothing a skill contains.** A stack skill that isn't pinned yet is named as missing, and the agent starts without it.
 
-**A changed or extra skill.** An agent may edit an installed skill or add one of its own. At its next start HQ puts the pinned set back. It does not delete the other folder: it moves it to `<project folder>/_skills-removed/<agent>/<date and time>/` and keeps the newest 5 moves per agent. The audit trail records what moved and where. It also records a first start, when the pinned skills are new to that agent.
+**A changed or extra skill.** An agent may edit an installed skill or add one of its own. At its next start HQ puts the pinned set back. It does not delete the other folder: it moves it to `~/.jsmhq/<project>/_skills-removed/<agent>/<date and time>/` (for a company-level agent, the same under the company home) and keeps the newest 5 moves per agent. The audit trail records what moved and where. It also records a first start, when the pinned skills are new to that agent.
 
 **When a start is refused.** The message names the exact path and the one thing to do:
 - `.claude`, `.agents` or a skills folder in the agent's folder is a link. Delete that link. HQ won't install through it.
 - A skill folder the agent changed or added holds more than 256 files or 2 MiB. HQ won't move something that big, because it may be your own work. Move that folder out of the agent's folder.
+- The skills folder itself (`.claude/skills` or `.agents/skills`) holds more than 256 entries. HQ won't sort it. Move the extra folders out of it.
 - In one of HQ's own clones, an agent-settings file the repo tracks (such as `CLAUDE.md`) was written back into the agent's folder. Git can't see it, so HQ names it. Delete that file.
 
 **In a sandbox.** Docker Sandboxes can give every sandbox skills from its own shared store. HQ creates new sandboxes with that store off. An older sandbox starts only while the store is empty. If it isn't, the start says so: press **Recreate sandbox**. Use the same button if you removed or recreated a sandbox outside HQ, because HQ's record of it may be out of date. HQ also refuses a start when it can't read sbx's sandbox list or its skills store.
